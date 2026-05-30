@@ -1,15 +1,18 @@
 {
+  "_comment": "DayZ News Monitor — Discord (один канал) + VK + публикация в Telegram",
+
   "telegram_bot_token": "YOUR_BOT_TOKEN_HERE",
   "telegram_channel_id": "@your_channel",
-  "telegram_api_id": 0,
-  "telegram_api_hash": "YOUR_API_HASH_HERE",
-  "telegram_session_name": "dayz_monitor",
+
   "openai_api_key": "YOUR_OPENAI_API_KEY_HERE",
   "openai_base_url": "https://api.openai.com/v1",
   "openai_model": "gpt-4o-mini",
+
   "discord_token": "YOUR_DISCORD_TOKEN_HERE",
+
   "vk_access_token": "YOUR_VK_ACCESS_TOKEN_HERE",
   "vk_api_version": "5.199",
+
   "check_interval_minutes": 5,
   "daily_summary_hour": 10,
   "daily_summary_minute": 0,
@@ -25,40 +28,18 @@
   "publish_medium_priority": true,
   "publish_low_priority": false,
   "max_images_per_post": 10,
+
   "sources": {
-    "discord": [
-      {
-        "server": "Example DayZ Server",
-        "guild_id": "000000000000000000",
-        "channels": [
-          "announcements",
-          "news",
-          "updates",
-          "server-news",
-          "wipe-info",
-          "events",
-          "changelog"
-        ]
-      }
-    ],
-    "telegram": [
-      {
-        "server": "Example DayZ Server",
-        "channel": "@exampledayz"
-      }
-    ],
+    "discord": {
+      "guild_id": "000000000000000000",
+      "channel_id": "000000000000000000",
+      "channel_name": "dayz-news"
+    },
+
     "vk": [
       {
         "server": "Example DayZ Server",
         "group_id": "-00000000"
-      }
-    ],
-    "websites": [
-      {
-        "server": "Example DayZ Server",
-        "url": "https://example.com/news",
-        "rss_url": "https://example.com/news/rss",
-        "check_interval_minutes": 30
       }
     ]
   }

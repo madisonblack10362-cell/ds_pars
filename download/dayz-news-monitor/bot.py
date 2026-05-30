@@ -1,6 +1,7 @@
 """
 Главная точка входа проекта DayZ News Monitor.
-Оркестрирует все модули: мониторинг, анализ, дедупликацию и публикацию.
+Оркестрирует мониторинг Discord (один канал), VK-групп,
+AI-анализ, дедупликацию и публикацию в Telegram-канал.
 """
 
 import asyncio
@@ -17,15 +18,18 @@ from ai_analyzer import AIAnalyzer
 from deduplicator import Deduplicator
 from publisher import Publisher
 from scheduler import Scheduler
-from telegram_monitor import TelegramMonitor
 from vk_monitor import VKMonitor
-from website_monitor import WebsiteMonitor
 
 
 class DayZNewsMonitor:
     """
     Главный класс приложения. Инициализирует все компоненты,
     настраивает планировщик и управляет жизненным циклом.
+
+    Текущая конфигурация источников:
+      - Discord: один канал, куда приходят новости всех проектов
+      - VK: группы DayZ-серверов
+      - Telegram: только публикация (отправка в канал через bot API)
     """
 
     def __init__(self, config_path: str = "config.json"):
@@ -36,15 +40,10 @@ class DayZNewsMonitor:
         self.deduplicator: Optional[Deduplicator] = None
         self.publisher: Optional[Publisher] = None
         self.scheduler: Optional[Scheduler] = None
-        self.tg_monitor: Optional[TelegramMonitor] = None
         self.vk_monitor: Optional[VKMonitor] = None
-        self.website_monitor: Optional[WebsiteMonitor] = None
 
-        # Флаг для graceful shutdown
         self._shutdown_event = asyncio.Event()
-        # Флаги активности мониторов (зависят от наличия токенов в конфиге)
         self._discord_enabled = False
-        self._telegram_monitor_enabled = False
 
     def load_config(self) -> None:
         """Загружает конфигурацию из JSON-файла."""
@@ -61,7 +60,6 @@ class DayZNewsMonitor:
     async def initialize(self) -> None:
         """Инициализирует все компоненты системы."""
         self.load_config()
-
         cfg = self.config
 
         # -----------------------------------------------------------------
@@ -85,7 +83,10 @@ class DayZNewsMonitor:
                 max_retries=cfg.get("max_retries", 3),
                 timeout=cfg.get("request_timeout_seconds", 30),
             )
-            logger.info("AI-анализатор инициализирован (модель: %s)", cfg.get("openai_model", "gpt-4o-mini"))
+            logger.info(
+                "AI-анализатор инициализирован (модель: %s)",
+                cfg.get("openai_model", "gpt-4o-mini"),
+            )
         else:
             logger.warning("AI-анализатор отключён: не указан API-ключ")
 
@@ -100,7 +101,7 @@ class DayZNewsMonitor:
         await self.deduplicator.warm_cache()
 
         # -----------------------------------------------------------------
-        # Publisher (публикация в Telegram)
+        # Publisher (публикация в Telegram через bot API)
         # -----------------------------------------------------------------
         bot_token = cfg.get("telegram_bot_token", "")
         channel_id = cfg.get("telegram_channel_id", "")
@@ -116,44 +117,7 @@ class DayZNewsMonitor:
             logger.warning("Publisher отключён: не указан токен Telegram-бота")
 
         # -----------------------------------------------------------------
-        # Мониторинг Telegram-каналов (через Telethon userbot)
-        # -----------------------------------------------------------------
-        tg_api_id = cfg.get("telegram_api_id", 0)
-        tg_api_hash = cfg.get("telegram_api_hash", "")
-        tg_session = cfg.get("telegram_session_name", "dayz_monitor")
-        tg_sources = cfg.get("sources", {}).get("telegram", [])
-
-        if (
-            tg_api_id
-            and tg_api_hash
-            and tg_api_hash != "YOUR_API_HASH_HERE"
-            and tg_sources
-        ):
-            self.tg_monitor = TelegramMonitor(
-                db=self.db,
-                api_id=tg_api_id,
-                api_hash=tg_api_hash,
-                channel_configs=tg_sources,
-                session_name=tg_session,
-                min_message_length=cfg.get("min_message_length", 20),
-            )
-            try:
-                await self.tg_monitor.start()
-                if self.tg_monitor.client and await self.tg_monitor.client.get_me():
-                    self._telegram_monitor_enabled = True
-                    logger.info("Telegram-монитор запущен")
-                else:
-                    logger.warning(
-                        "Telegram-монитор: не удалось авторизоваться. "
-                        "Запустите интерактивную авторизацию при первом использовании."
-                    )
-            except Exception as exc:
-                logger.warning("Telegram-монитор не запущен: %s", exc)
-        else:
-            logger.info("Telegram-монитор отключён: не указаны API-данные")
-
-        # -----------------------------------------------------------------
-        # Мониторинг VK
+        # VK мониторинг
         # -----------------------------------------------------------------
         vk_token = cfg.get("vk_access_token", "")
         vk_sources = cfg.get("sources", {}).get("vk", [])
@@ -169,52 +133,36 @@ class DayZNewsMonitor:
                 max_retries=cfg.get("max_retries", 3),
             )
             await self.vk_monitor.load_initial_state()
-            logger.info("VK-монитор инициализирован")
+            logger.info("VK-монитор инициализирован (%d групп)", len(vk_sources))
         else:
-            logger.info("VK-монитор отключён: не указан access token")
+            logger.info("VK-монитор отключён: не указан access token или нет групп")
 
         # -----------------------------------------------------------------
-        # Мониторинг веб-сайтов
-        # -----------------------------------------------------------------
-        web_sources = cfg.get("sources", {}).get("websites", [])
-        if web_sources:
-            self.website_monitor = WebsiteMonitor(
-                db=self.db,
-                site_configs=web_sources,
-                min_message_length=cfg.get("min_message_length", 20),
-                request_timeout=cfg.get("request_timeout_seconds", 30),
-                max_retries=cfg.get("max_retries", 3),
-            )
-            await self.website_monitor.load_initial_state()
-            logger.info("Website-монитор инициализирован")
-        else:
-            logger.info("Website-монитор отключён: нет источников")
-
-        # -----------------------------------------------------------------
-        # Discord мониторинг (запускается как отдельная задача)
+        # Discord мониторинг (запускается как отдельная фоновая задача)
         # -----------------------------------------------------------------
         discord_token = cfg.get("discord_token", "")
-        discord_sources = cfg.get("sources", {}).get("discord", [])
-        if discord_token and discord_token != "YOUR_DISCORD_TOKEN_HERE" and discord_sources:
+        discord_cfg = cfg.get("sources", {}).get("discord", {})
+
+        if (
+            discord_token
+            and discord_token != "YOUR_DISCORD_TOKEN_HERE"
+            and discord_cfg.get("guild_id")
+            and discord_cfg.get("channel_id")
+        ):
             self._discord_enabled = True
-            logger.info("Discord-монитор будет запущен как фоновая задача")
+            logger.info(
+                "Discord-монитор: гильдия=%s, канал=%s — будет запущен",
+                discord_cfg.get("guild_id"),
+                discord_cfg.get("channel_id"),
+            )
         else:
-            logger.info("Discord-монитор отключён: не указан токен")
+            logger.info("Discord-монитор отключён: не указан токен или нет guild/channel")
 
         # -----------------------------------------------------------------
         # Планировщик
         # -----------------------------------------------------------------
         self.scheduler = Scheduler()
-
         check_interval = cfg.get("check_interval_minutes", 5)
-
-        # Периодическая проверка Telegram-каналов
-        if self._telegram_monitor_enabled:
-            self.scheduler.add_interval_job(
-                func=self._task_check_telegram,
-                job_id="check_telegram",
-                minutes=check_interval,
-            )
 
         # Периодическая проверка VK-групп
         if self.vk_monitor:
@@ -222,15 +170,6 @@ class DayZNewsMonitor:
                 func=self._task_check_vk,
                 job_id="check_vk",
                 minutes=check_interval,
-            )
-
-        # Периодическая проверка веб-сайтов
-        if self.website_monitor:
-            web_interval = check_interval
-            self.scheduler.add_interval_job(
-                func=self._task_check_websites,
-                job_id="check_websites",
-                minutes=web_interval,
             )
 
         # AI-анализ необработанных сообщений
@@ -274,17 +213,6 @@ class DayZNewsMonitor:
     # Задачи планировщика
     # =====================================================================
 
-    async def _task_check_telegram(self) -> None:
-        """Периодическая проверка Telegram-каналов."""
-        if not self.tg_monitor or not self._telegram_monitor_enabled:
-            return
-        try:
-            count = await self.tg_monitor.check_all_channels()
-            if count > 0:
-                logger.info("Telegram: обработано %d новых сообщений", count)
-        except Exception as exc:
-            logger.error("Ошибка проверки Telegram-каналов: %s", exc)
-
     async def _task_check_vk(self) -> None:
         """Периодическая проверка VK-групп."""
         if not self.vk_monitor:
@@ -295,17 +223,6 @@ class DayZNewsMonitor:
                 logger.info("VK: обработано %d новых записей", count)
         except Exception as exc:
             logger.error("Ошибка проверки VK-групп: %s", exc)
-
-    async def _task_check_websites(self) -> None:
-        """Периодическая проверка веб-сайтов."""
-        if not self.website_monitor:
-            return
-        try:
-            count = await self.website_monitor.check_all_sites()
-            if count > 0:
-                logger.info("Websites: обработано %d новых записей", count)
-        except Exception as exc:
-            logger.error("Ошибка проверки веб-сайтов: %s", exc)
 
     async def _task_analyze_messages(self) -> None:
         """AI-анализ необработанных сообщений + дедупликация."""
@@ -331,7 +248,9 @@ class DayZNewsMonitor:
                         msg_id, text, images
                     )
                     if duplicate_of:
-                        await self.deduplicator.mark_as_duplicate(duplicate_of, msg_id)
+                        await self.deduplicator.mark_as_duplicate(
+                            duplicate_of, msg_id
+                        )
                         continue
 
                 # AI-анализ
@@ -346,7 +265,6 @@ class DayZNewsMonitor:
                         summary=result["summary"],
                     )
                 else:
-                    # Если анализ не удался — сохраняем как low priority
                     await self.db.save_processed(
                         message_id=msg_id,
                         news_type="other",
@@ -374,7 +292,7 @@ class DayZNewsMonitor:
             logger.error("Ошибка публикации: %s", exc)
 
     async def _publish_single(self, msg: dict) -> None:
-        """Публикует одно сообщение."""
+        """Публикует одно сообщение в Telegram-канал."""
         msg_id = msg["id"]
 
         # Форматируем пост
@@ -391,14 +309,11 @@ class DayZNewsMonitor:
 
         # Извлекаем изображения
         images = self._parse_json_field(msg.get("images", "[]"))
-        # Отделяем локальные пути (от Telegram-монитора) от URL
-        local_images = [img for img in images if os.path.exists(img)]
         url_images = [img for img in images if img.startswith("http")]
 
         # Публикуем
         tg_msg_id = await self.publisher.publish_message(
             text=text,
-            image_paths=local_images if local_images else None,
             image_urls=url_images if url_images else None,
         )
 
@@ -438,24 +353,21 @@ class DayZNewsMonitor:
             logger.error("Ошибка публикации ежедневной сводки: %s", exc)
 
     async def _task_cleanup(self) -> None:
-        """Очищает старые записи (старше 30 дней) из базы данных."""
+        """Очищает старые записи из базы данных."""
         if not self.db:
             return
 
         try:
-            # Удаляем обработанные сообщения старше 30 дней
             await self.db._connection.execute(
                 """DELETE FROM messages
                    WHERE collected_at < datetime('now', '-30 days')
                      AND id IN (SELECT message_id FROM processed_messages)"""
             )
-            # Удаляем необработанные сообщения старше 14 дней
             await self.db._connection.execute(
                 """DELETE FROM messages
                    WHERE collected_at < datetime('now', '-14 days')
                      AND id NOT IN (SELECT message_id FROM processed_messages)"""
             )
-            # Удаляем старые логи из БД
             await self.db._connection.execute(
                 """DELETE FROM logs WHERE created_at < datetime('now', '-14 days')"""
             )
@@ -476,10 +388,13 @@ class DayZNewsMonitor:
         try:
             from discord_monitor import DiscordMonitor
 
+            discord_cfg = self.config.get("sources", {}).get("discord", {})
+
             discord_monitor = DiscordMonitor(
                 db=self.db,
                 token=self.config["discord_token"],
-                server_configs=self.config.get("sources", {}).get("discord", []),
+                guild_id=int(discord_cfg["guild_id"]),
+                channel_id=int(discord_cfg["channel_id"]),
                 min_message_length=self.config.get("min_message_length", 20),
             )
             await discord_monitor.start_monitoring()
@@ -505,7 +420,7 @@ class DayZNewsMonitor:
         if self._discord_enabled:
             asyncio.create_task(self._run_discord_monitor())
 
-        # Настраиваем обработчики сигналов для graceful shutdown
+        # Graceful shutdown
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
@@ -514,7 +429,6 @@ class DayZNewsMonitor:
                     lambda s=sig: asyncio.create_task(self._shutdown(s)),
                 )
             except NotImplementedError:
-                # Windows не поддерживает add_signal_handler
                 pass
 
         logger.info("=" * 60)
@@ -522,14 +436,16 @@ class DayZNewsMonitor:
         logger.info("Нажмите Ctrl+C для остановки")
         logger.info("=" * 60)
 
-        # Ожидаем сигнал завершения
         await self._shutdown_event.wait()
-
         await self._cleanup()
 
     async def _shutdown(self, signal_received) -> None:
         """Обрабатывает сигнал завершения."""
-        sig_name = signal_received.name if hasattr(signal_received, "name") else str(signal_received)
+        sig_name = (
+            signal_received.name
+            if hasattr(signal_received, "name")
+            else str(signal_received)
+        )
         logger.info("Получен сигнал %s. Завершение работы...", sig_name)
         self._shutdown_event.set()
 
@@ -537,23 +453,23 @@ class DayZNewsMonitor:
         """Освобождает ресурсы при завершении."""
         logger.info("Очистка ресурсов...")
 
-        # Останавливаем планировщик
         if self.scheduler:
             await self.scheduler.stop()
-
-        # Закрываем Publisher
         if self.publisher:
             await self.publisher.close()
-
-        # Останавливаем Telegram-монитор
-        if self.tg_monitor:
-            await self.tg_monitor.stop()
-
-        # Закрываем базу данных
         if self.db:
             await self.db.close()
 
         logger.info("DayZ News Monitor остановлен")
+
+    @staticmethod
+    def _parse_json_field(raw: str) -> list:
+        """Безопасно парсит JSON-поле из БД."""
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, list) else []
+        except (json.JSONDecodeError, TypeError):
+            return []
 
 
 # =============================================================================
@@ -563,7 +479,6 @@ class DayZNewsMonitor:
 
 def main():
     """Главная функция."""
-    # Определяем путь к конфигу (по умолчанию рядом со скриптом)
     config_path = os.environ.get("DAYZ_CONFIG", "config.json")
 
     monitor = DayZNewsMonitor(config_path=config_path)
