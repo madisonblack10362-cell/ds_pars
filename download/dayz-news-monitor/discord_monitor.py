@@ -10,7 +10,6 @@ import re
 from typing import Optional
 
 from discord import Client, Message, Guild, TextChannel
-from discord.flags import Intents
 
 from database import Database
 from logger import logger
@@ -31,12 +30,7 @@ class DiscordMonitor(Client):
         channel_id: int,
         min_message_length: int = 20,
     ):
-        intents = Intents.default()
-        intents.message_content = True
-        intents.guild_messages = True
-        intents.guilds = True
-
-        super().__init__(intents=intents)
+        super().__init__()
         self.db = db
         self._token = token
         self.guild_id = guild_id
