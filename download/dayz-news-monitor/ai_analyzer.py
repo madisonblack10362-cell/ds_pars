@@ -4,6 +4,7 @@
 необходимости публикации и генерации краткого резюме.
 """
 
+import asyncio
 import json
 from typing import Optional
 
@@ -162,7 +163,7 @@ class AIAnalyzer:
                     exc,
                 )
                 if attempt < self.max_retries:
-                    await asyncio_sleep(2 ** attempt)
+                    await asyncio.sleep(2 ** attempt)
 
         logger.error("Не удалось проанализировать новость через LLM после %d попыток", self.max_retries)
         return None
@@ -182,7 +183,6 @@ class AIAnalyzer:
             ],
             "temperature": 0.3,
             "max_tokens": 1000,
-            "response_format": {"type": "json_object"},
         }
 
         async with aiohttp.ClientSession(timeout=self.timeout) as session:
@@ -263,7 +263,6 @@ class AIAnalyzer:
             ],
             "temperature": 0.1,
             "max_tokens": 200,
-            "response_format": {"type": "json_object"},
         }
 
         try:
@@ -279,7 +278,4 @@ class AIAnalyzer:
             return None
 
 
-async def asyncio_sleep(seconds: float) -> None:
-    """Импортируем asyncio.sleep вruntime-контексте."""
-    import asyncio
-    await asyncio.sleep(seconds)
+
