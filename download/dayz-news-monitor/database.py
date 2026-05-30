@@ -85,6 +85,8 @@ class Database:
                 priority            TEXT    DEFAULT 'low', -- high, medium, low
                 should_publish      INTEGER DEFAULT 0,    -- 1 = публиковать, 0 = нет
                 summary             TEXT    DEFAULT '',    -- краткое резюме от LLM
+                server_name         TEXT    DEFAULT '',    -- определённый AI сервер/проект
+                formatted_post      TEXT    DEFAULT '',    -- готовый пост от LLM
                 processed_at        TEXT    NOT NULL DEFAULT (datetime('now'))
             );
 
@@ -265,13 +267,17 @@ class Database:
         priority: str,
         should_publish: bool,
         summary: str,
+        server_name: str = "",
+        formatted_post: str = "",
     ) -> None:
         """Сохраняет результаты AI-анализа сообщения."""
         await self._connection.execute(
             """INSERT INTO processed_messages
-               (message_id, news_type, priority, should_publish, summary)
-               VALUES (?, ?, ?, ?, ?)""",
-            (message_id, news_type, priority, int(should_publish), summary),
+               (message_id, news_type, priority, should_publish, summary,
+                server_name, formatted_post)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (message_id, news_type, priority, int(should_publish), summary,
+             server_name, formatted_post),
         )
         await self._connection.commit()
         logger.debug(
@@ -285,7 +291,8 @@ class Database:
     async def get_pending_publish(self, limit: int = 20) -> list[dict]:
         """Возвращает сообщения, рекомендованные к публикации, но ещё не опубликованные."""
         cursor = await self._connection.execute(
-            """SELECT m.*, pm.news_type, pm.priority, pm.summary
+            """SELECT m.*, pm.news_type, pm.priority, pm.summary,
+                      pm.server_name as ai_server_name, pm.formatted_post
                FROM messages m
                INNER JOIN processed_messages pm ON m.id = pm.message_id
                LEFT JOIN published_posts pp ON m.id = pp.message_id

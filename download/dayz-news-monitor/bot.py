@@ -263,6 +263,8 @@ class DayZNewsMonitor:
                         priority=result["priority"],
                         should_publish=result["should_publish"],
                         summary=result["summary"],
+                        server_name=result.get("server_name", ""),
+                        formatted_post=result.get("formatted_post", ""),
                     )
                 else:
                     await self.db.save_processed(
@@ -295,17 +297,26 @@ class DayZNewsMonitor:
         """Публикует одно сообщение в Telegram-канал."""
         msg_id = msg["id"]
 
-        # Форматируем пост
-        text = self.publisher.format_post(
-            server_name=msg.get("server_name", "Unknown"),
-            news_type=msg.get("news_type", "other"),
-            priority=msg.get("priority", "low"),
-            summary=msg.get("summary", ""),
-            original_text=msg.get("text", ""),
-            published_at=msg.get("published_at_source"),
-            author=msg.get("author", ""),
-            links=self._parse_json_field(msg.get("links", "[]")),
-        )
+        # Приоритет: используем AI-отформатированный пост, если есть
+        formatted_post = msg.get("formatted_post", "")
+        ai_server = msg.get("ai_server_name", "")
+
+        if formatted_post:
+            # AI уже подготовила готовый пост — используем его
+            text = formatted_post
+        else:
+            # Fallback: форматируем через шаблон publisher
+            server = ai_server or msg.get("server_name", "Unknown")
+            text = self.publisher.format_post(
+                server_name=server,
+                news_type=msg.get("news_type", "other"),
+                priority=msg.get("priority", "low"),
+                summary=msg.get("summary", ""),
+                original_text=msg.get("text", ""),
+                published_at=msg.get("published_at_source"),
+                author=msg.get("author", ""),
+                links=self._parse_json_field(msg.get("links", "[]")),
+            )
 
         # Извлекаем изображения
         images = self._parse_json_field(msg.get("images", "[]"))
