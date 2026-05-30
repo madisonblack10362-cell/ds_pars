@@ -9,13 +9,8 @@ import json
 import re
 from typing import Optional
 
-from discord import (
-    Client,
-    Message,
-    Guild,
-    TextChannel,
-    Intents,
-)
+from discord import Client, Message, Guild, TextChannel
+from discord.flags import Intents
 
 from database import Database
 from logger import logger
