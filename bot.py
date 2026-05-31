@@ -9,6 +9,7 @@ import json
 import os
 import signal
 import sys
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -444,24 +445,12 @@ class DayZNewsMonitor:
 
         await self.initialize()
 
-        # -----------------------------------------------------------------
-        # Десктопный GUI
-        # -----------------------------------------------------------------
-        self._log_capture = LogCapture()
-        logger.addHandler(self._log_capture)
-
-        self._gui = DesktopGUI(
-            config_path=self.config_path,
-            log_capture=self._log_capture,
-        )
-        self._gui.run_in_thread()
-        logger.info("Десктопный GUI запущен")
-
-        # Обновляем статус для GUI
-        self._gui.update_status("db", self.db is not None)
-        self._gui.update_status("ai", self.ai_analyzer is not None)
-        self._gui.update_status("telegram", self.publisher is not None)
-        self._gui.update_status("vk", self.vk_monitor is not None)
+        # Обновляем статус для GUI (если GUI уже запущен)
+        if self._gui:
+            self._gui.update_status("db", self.db is not None)
+            self._gui.update_status("ai", self.ai_analyzer is not None)
+            self._gui.update_status("telegram", self.publisher is not None)
+            self._gui.update_status("vk", self.vk_monitor is not None)
 
         # Запускаем планировщик
         await self.scheduler.start()
@@ -527,19 +516,62 @@ class DayZNewsMonitor:
 # =============================================================================
 
 
+def run_bot_async(monitor: "DayZNewsMonitor"):
+    """Запускает asyncio-цикл бота в фоновом потоке."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(monitor.run())
+    except Exception as exc:
+        logger.critical("Критическая ошибка бота: %s", exc, exc_info=True)
+
+
 def main():
-    """Главная функция."""
+    """Главная функция — GUI в главном потоке, бот в фоне."""
     config_path = os.environ.get("DAYZ_CONFIG", "config.json")
 
     monitor = DayZNewsMonitor(config_path=config_path)
 
+    # 1. Инициализация компонентов (синхронная часть — загрузка конфига)
+    monitor.load_config()
+
+    # 2. Запускаем GUI на главном потоке (требование tkinter)
+    import customtkinter as ctk
     try:
-        asyncio.run(monitor.run())
-    except KeyboardInterrupt:
-        logger.info("Прервано пользователем")
-    except Exception as exc:
-        logger.critical("Критическая ошибка: %s", exc, exc_info=True)
-        sys.exit(1)
+        ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("blue")
+    except Exception:
+        pass
+
+    gui = DesktopGUI(
+        config_path=config_path,
+        log_capture=LogCapture(),
+    )
+
+    gui.root = ctk.CTk()
+    gui.root.title("DayZ News Monitor")
+    gui.root.geometry("900x650")
+    gui.root.minsize(750, 500)
+    gui.root.configure(fg_color=gui.BG)
+    gui.root.protocol("WM_DELETE_WINDOW", gui._on_close)
+
+    gui._build_ui()
+    logger.addHandler(gui.log_capture)
+
+    # 3. Запускаем бота в фоновом потоке
+    bot_thread = threading.Thread(
+        target=run_bot_async,
+        args=(monitor,),
+        daemon=True,
+        name="BotAsync",
+    )
+    monitor._gui = gui
+    bot_thread.start()
+
+    # 4. Запускаем цикл логов и главное окно
+    gui._loop_logs()
+    gui.root.mainloop()
+    gui._running = False
 
 
 if __name__ == "__main__":
