@@ -136,13 +136,13 @@ class Publisher:
         lines = []
         lines.append(f"{priority_icon} <b>{type_label}</b>")
         lines.append("")
-        lines.append(f"\U0001f3ae Сервер: <b>{server_name}</b>")
+        lines.append(f"\U0001f3ae <b>{server_name}</b>")
 
         if date_str:
-            lines.append(f"\U0001f4c5 Дата: {date_str}")
+            lines.append(f"\U0001f4c5 {date_str}")
 
         if author:
-            lines.append(f"\U0001f464 От: {author}")
+            lines.append(f"\U0001f464 Автор: <i>{author}</i>")
 
         lines.append("")
 
@@ -151,20 +151,28 @@ class Publisher:
             lines.append(f"<i>{summary}</i>")
             lines.append("")
 
-        # Основные изменения (из оригинального текста — берём первые 1000 символов)
+        # Основные изменения (из оригинального текста)
         if original_text and len(original_text) > len(summary):
             trimmed = original_text[:1000]
-            # Разбиваем на строки и форматируем
             paragraphs = [p.strip() for p in trimmed.split("\n") if p.strip()]
-            lines.append("Подробнее:")
+            lines.append("<b>Подробнее:</b>")
             for para in paragraphs[:10]:
-                lines.append(f"\u2022 {para}")
+                # Оборачиваем названия предметов/серверов в code
+                para_escaped = para.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                lines.append(f"\u2022 {para_escaped}")
 
-        # Ссылки
+        # Ссылки — кликабельные
         if links:
             lines.append("")
             for link in links[:3]:
-                lines.append(f"\U0001f517 {link}")
+                # Берём домен как текст ссылки
+                from urllib.parse import urlparse
+                try:
+                    domain = urlparse(link).netloc
+                    display = domain if domain else link
+                except Exception:
+                    display = link
+                lines.append(f"\U0001f517 <a href=\"{link}\">{display}</a>")
 
         # Хештеги
         hashtags = ["#dayz", "#новости"]
