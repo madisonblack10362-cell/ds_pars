@@ -196,6 +196,19 @@ class AIAnalyzer:
 
                 data = await response.json()
                 content = data["choices"][0]["message"]["content"]
+                # Вырезаем markdown-обёртки ```json ... ```
+                content = content.strip()
+                if content.startswith("```"):
+                    lines = content.split("\n")
+                    content = "\n".join(lines[1:])
+                    if content.endswith("```"):
+                        content = content[:-3]
+                    content = content.strip()
+                # Убираем управляющие символы (кроме \n и \t)
+                content = "".join(
+                    ch if ch in "\n\t\r" or ord(ch) >= 32 else " "
+                    for ch in content
+                )
                 return json.loads(content)
 
     @staticmethod
