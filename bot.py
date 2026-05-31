@@ -529,6 +529,15 @@ def main():
         log_capture = LogCapture()
         logger.addHandler(log_capture)
 
+        # Запускаем бот в фоновом потоке ПЕРЕД GUI
+        bot_thread = threading.Thread(
+            target=_run_bot_thread,
+            args=(monitor,),
+            daemon=True,
+        )
+        bot_thread.start()
+
+        # GUI в главном потоке
         gui = DesktopGUI(
             config_path=config_path,
             log_capture=log_capture,
@@ -536,7 +545,6 @@ def main():
         )
         gui.run()  # mainloop() — блокирует главный поток
 
-        # После закрытия GUI — бот тоже останавливается (daemon thread)
     except ImportError:
         print("[MAIN] gui_desktop.py не найден — работаем без GUI")
         try:
