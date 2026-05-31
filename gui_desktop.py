@@ -366,7 +366,7 @@ class DesktopGUI:
                     ("publish_medium_priority", "Публиковать Medium"),
                     ("publish_low_priority", "Публиковать Low"),
                 ]:
-                    var = ctk.BooleanVariable()
+                    var = tk.BooleanVar()
                     cb = ctk.CTkCheckBox(
                         toggle_frame,
                         text=label,
