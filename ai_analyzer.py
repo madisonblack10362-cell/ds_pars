@@ -6,6 +6,7 @@
 
 import asyncio
 import json
+import re
 from typing import Optional
 
 import aiohttp
@@ -196,16 +197,55 @@ class AIAnalyzer:
 
                 data = await response.json()
                 content = data["choices"][0]["message"]["content"]
-                # Вырезаем markdown-обёртки ```json ... ```
-                content = content.strip()
-                if content.startswith("```"):
-                    lines = content.split("\n")
-                    content = "\n".join(lines[1:])
-                    if content.endswith("```"):
-                        content = content[:-3]
-                    content = content.strip()
-                # strict=False разрешает control characters внутри JSON-строк
-                return json.loads(content, strict=False)
+                parsed = self._parse_llm_json(content)
+                if parsed is None:
+                    logger.warning("Не удалось распарсить JSON от LLM: %s", content[:300])
+                return parsed
+
+    @staticmethod
+    def _parse_llm_json(raw: str) -> Optional[dict]:
+        """Парсит JSON от LLM с несколькими стратегиями восстановления."""
+        text = raw.strip()
+
+        # 1. Вырезаем markdown-обёртки
+        if text.startswith("```"):
+            lines = text.split("\n")
+            text = "\n".join(lines[1:])
+            if text.rstrip().endswith("```"):
+                text = text.rstrip()[:-3]
+            text = text.strip()
+
+        # 2. Ищем JSON-объект {...} в тексте
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            text = match.group(0)
+
+        # 3. Пробуем парсить напрямую
+        try:
+            return json.loads(text, strict=False)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        # 4. Починка: убираем trailing commas перед } или ]
+        text = re.sub(r",\s*([\]}])", r"\1", text)
+
+        # 5. Починка: убираем переносы строк внутри строк
+        text = re.sub(r'(?<=":)\n(?=\s*")', " ", text)
+        text = re.sub(r"(?<=:)\n(?=\s*")", " ", text)
+
+        try:
+            return json.loads(text, strict=False)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        # 6. Агрессивная починка: убираем все control chars
+        text = re.sub(r"[\x00-\x1f]", " ", text)
+        text = re.sub(r"\s{2,}", " ", text)
+
+        try:
+            return json.loads(text, strict=False)
+        except (json.JSONDecodeError, ValueError):
+            return None
 
     @staticmethod
     def _validate_result(result: dict) -> dict:
