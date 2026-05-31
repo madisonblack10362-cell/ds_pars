@@ -48,7 +48,7 @@ class DesktopGUI:
         self.root.title("DayZ News Monitor")
         self.root.geometry("960x680")
         self.root.minsize(860, 600)
-        self.root.configure(fg_color=BG_DARK)
+        self.root.configure(bg=BG_DARK)
 
         # Load config
         self._load_config()
@@ -225,7 +225,7 @@ class DesktopGUI:
     # ----------------------------------------------------------------
 
     def _build_dashboard(self, parent):
-        parent.configure(fg_color=BG_DARK)
+        parent.configure(bg=BG_DARK)
 
         # Status section
         sec = tk.LabelFrame(
@@ -297,7 +297,7 @@ class DesktopGUI:
     # ----------------------------------------------------------------
 
     def _build_settings(self, parent):
-        parent.configure(fg_color=BG_DARK)
+        parent.configure(bg=BG_DARK)
 
         self.vars = {}
 
@@ -450,7 +450,7 @@ class DesktopGUI:
     # ----------------------------------------------------------------
 
     def _build_logs(self, parent):
-        parent.configure(fg_color=BG_DARK)
+        parent.configure(bg=BG_DARK)
 
         # Filter bar
         bar = tk.Frame(parent, bg=BG_PRIMARY, height=38)
