@@ -487,12 +487,26 @@ class DesktopGUI:
         if not card:
             return
         try:
-            if connected:
-                card["value"].configure(text="Подключён", text_color=self.GREEN)
-            else:
-                card["value"].configure(text="Отключён", text_color=self.TEXT3)
-            if info:
-                card["info"].configure(text=info)
+            def _apply():
+                try:
+                    if connected:
+                        card["value"].configure(text="Подключён", text_color=self.GREEN)
+                    else:
+                        card["value"].configure(text="Отключён", text_color=self.TEXT3)
+                    if info:
+                        card["info"].configure(text=info)
+                    # Обновляем нижнюю строку Discord на дашборде
+                    if component == "discord":
+                        if connected:
+                            detail = f"Discord: подключён — {info}" if info else "Discord: подключён"
+                        elif info:
+                            detail = f"Discord: {info}"
+                        else:
+                            detail = "Discord: отключён"
+                        self._discord_detail.configure(text=detail)
+                except Exception:
+                    pass
+            self.root.after(0, _apply)
         except Exception:
             pass
 

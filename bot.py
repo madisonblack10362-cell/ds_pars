@@ -413,6 +413,7 @@ class DayZNewsMonitor:
                 guild_id=int(discord_cfg["guild_id"]),
                 channel_id=int(discord_cfg["channel_id"]),
                 min_message_length=self.config.get("min_message_length", 20),
+                gui=self.gui,
             )
             await discord_monitor.start_monitoring()
         except Exception as exc:
@@ -518,10 +519,12 @@ def _run_bot_thread(monitor, gui=None):
                 if monitor.vk_monitor:
                     gui.update_status("vk", True)
                 if monitor._discord_enabled:
-                    gui.update_status("discord", True,
-                                      f"{monitor.config.get('sources', {}).get('discord', {}).get('guild_id', '')}")
+                    gui.update_status("discord", False, "Подключение...")
                 else:
                     gui.update_status("discord", False, "Токен/канал не указан")
+
+            # Сохраняем ссылку на GUI для DiscordMonitor
+            monitor.gui = gui
 
             await monitor.scheduler.start()
 

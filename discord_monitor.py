@@ -29,6 +29,7 @@ class DiscordMonitor(Client):
         guild_id: int,
         channel_id: int,
         min_message_length: int = 20,
+        gui=None,
     ):
         super().__init__()
         self.db = db
@@ -37,6 +38,7 @@ class DiscordMonitor(Client):
         self.channel_id = channel_id
         self.min_message_length = min_message_length
         self._ready = False
+        self.gui = gui
 
         logger.info(
             "DiscordMonitor: настроен канал %d в гильдии %d",
@@ -92,6 +94,16 @@ class DiscordMonitor(Client):
                 channel.id,
             )
             self._ready = True
+
+            # Обновляем GUI статус — реально подключён
+            if self.gui:
+                try:
+                    self.gui.update_status(
+                        "discord", True,
+                        f"#{channel.name} в '{guild.name}'"
+                    )
+                except Exception:
+                    pass
 
             # Регистрируем источник в БД
             await self.db.register_source(
