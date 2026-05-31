@@ -231,7 +231,7 @@ class AIAnalyzer:
 
         # 5. Починка: убираем переносы строк внутри строк
         text = re.sub(r'(?<=":)\n(?=\s*")', " ", text)
-        text = re.sub(r"(?<=:)\n(?=\s*")", " ", text)
+        text = re.sub(r'(?<=:)\n(?=\s*")', " ", text)
 
         try:
             return json.loads(text, strict=False)
