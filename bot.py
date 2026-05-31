@@ -517,32 +517,32 @@ def main():
     """
     config_path = os.environ.get("DAYZ_CONFIG", "config.json")
 
-    # Создаём экземпляр бота
+    # Создаём экземпляр бота и загружаем конфиг
     monitor = DayZNewsMonitor(config_path=config_path)
-
-    # Загружаем конфиг заранее, чтобы GUI мог его отобразить
     monitor.load_config()
-    print(f"[MAIN] Конфиг загружен: {len(monitor.config)} ключей")
-    print(f"[MAIN] Ключи: {list(monitor.config.keys())}")
-
-    # Запускаем бот в фоновом потоке
-    bot_thread = threading.Thread(
-        target=_run_bot_thread,
-        args=(monitor,),
-        daemon=True,
-    )
-    bot_thread.start()
-    print("[MAIN] Бот запущен в фоновом потоке")
 
     # GUI — в главном потоке
     try:
-        from gui_desktop import DesktopGUI
-        gui = DesktopGUI(config_path=config_path, bot_instance=monitor)
-        gui.set_bot_status("Bot Starting...", "#ffd93d")
-        gui.run()  # mainloop() — блокирует
+        from gui_desktop import DesktopGUI, LogCapture
+
+        # Подключаем лог-хендлер к логгеру
+        log_capture = LogCapture()
+        logger.addHandler(log_capture)
+
+        gui = DesktopGUI(
+            config_path=config_path,
+            log_capture=log_capture,
+            bot_instance=monitor,
+        )
+        gui.run()  # mainloop() — блокирует главный поток
+
+        # После закрытия GUI — бот тоже останавливается (daemon thread)
     except ImportError:
         print("[MAIN] gui_desktop.py не найден — работаем без GUI")
-        bot_thread.join()
+        try:
+            asyncio.run(monitor.run())
+        except KeyboardInterrupt:
+            pass
     except KeyboardInterrupt:
         print("[MAIN] Прервано пользователем")
     except Exception as exc:
