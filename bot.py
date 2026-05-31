@@ -499,8 +499,52 @@ def _run_bot_thread(monitor, gui=None):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
+    async def run_and_update():
+        try:
+            await monitor.initialize()
+            # Обновляем GUI статусы после инициализации
+            if gui:
+                gui.set_status_running()
+                if monitor.db:
+                    gui.update_status("db", True, "SQLite подключена")
+                if monitor.ai_analyzer:
+                    gui.update_status("ai", True, monitor.config.get("openai_model", ""))
+                else:
+                    gui.update_status("ai", False, "API ключ не указан")
+                if monitor.publisher:
+                    gui.update_status("telegram", True, monitor.config.get("telegram_channel_id", ""))
+                else:
+                    gui.update_status("telegram", False, "Токен не указан")
+                if monitor.vk_monitor:
+                    gui.update_status("vk", True)
+                if monitor._discord_enabled:
+                    gui.update_status("discord", True,
+                                      f"{monitor.config.get('sources', {}).get('discord', {}).get('guild_id', '')}")
+                else:
+                    gui.update_status("discord", False, "Токен/канал не указан")
+
+            await monitor.scheduler.start()
+
+            if monitor._discord_enabled:
+                asyncio.create_task(monitor._run_discord_monitor())
+
+            gui_root_method = None
+            try:
+                gui_root_method = monitor.run_no_wait
+            except Exception:
+                pass
+
+            if gui_root_method:
+                await gui_root_method()
+            else:
+                await monitor._shutdown_event.wait()
+
+            await monitor._cleanup()
+        except Exception as exc:
+            logger.critical("Критическая ошибка в потоке бота: %s", exc, exc_info=True)
+
     try:
-        loop.run_until_complete(monitor.run())
+        loop.run_until_complete(run_and_update())
     except KeyboardInterrupt:
         pass
     except Exception as exc:
@@ -511,50 +555,46 @@ def _run_bot_thread(monitor, gui=None):
 
 def main():
     """
-    Главная функция.
-    GUI запускается в ГЛАВНОМ потоке (требование tkinter на Windows).
-    Бот запускается в фоновом daemon-потоке.
+    GUI в главном потоке, бот в фоновом.
     """
     config_path = os.environ.get("DAYZ_CONFIG", "config.json")
 
-    # Создаём экземпляр бота и загружаем конфиг
     monitor = DayZNewsMonitor(config_path=config_path)
     monitor.load_config()
 
-    # GUI — в главном потоке
     try:
         from gui_desktop import DesktopGUI, LogCapture
 
-        # Подключаем лог-хендлер к логгеру
         log_capture = LogCapture()
         logger.addHandler(log_capture)
 
-        # Запускаем бот в фоновом потоке ПЕРЕД GUI
-        bot_thread = threading.Thread(
-            target=_run_bot_thread,
-            args=(monitor,),
-            daemon=True,
-        )
-        bot_thread.start()
-
-        # GUI в главном потоке
         gui = DesktopGUI(
             config_path=config_path,
             log_capture=log_capture,
             bot_instance=monitor,
         )
-        gui.run()  # mainloop() — блокирует главный поток
+
+        # Бот в фоновом потоке, GUI передаётся для обновления статусов
+        bot_thread = threading.Thread(
+            target=_run_bot_thread,
+            args=(monitor, gui),
+            daemon=True,
+        )
+        bot_thread.start()
+
+        # GUI в главном потоке
+        gui.run()
 
     except ImportError:
-        print("[MAIN] gui_desktop.py не найден — работаем без GUI")
+        print("[MAIN] gui_desktop.py не найден")
         try:
             asyncio.run(monitor.run())
         except KeyboardInterrupt:
             pass
     except KeyboardInterrupt:
-        print("[MAIN] Прервано пользователем")
+        pass
     except Exception as exc:
-        logger.critical("Критическая ошибка GUI: %s", exc, exc_info=True)
+        logger.critical("Критическая ошибка: %s", exc, exc_info=True)
         sys.exit(1)
 
 

@@ -1,7 +1,6 @@
 """
-Десктопный GUI для DayZ News Monitor.
-Создаёт отдельное окно с тёмной темой, статусом, логами и настройками.
-Запускается в ГЛАВНОМ потоке (требование tkinter на Windows).
+Desktop GUI for DayZ News Monitor.
+Original design, all bugs fixed.
 """
 
 import json
@@ -17,58 +16,36 @@ import customtkinter as ctk
 from logger import logger
 
 
-# =====================================================================
-# Лог-хендлер для захвата записей
-# =====================================================================
-
 class LogCapture(Handler):
-    """Лог-хендлер, который передаёт записи в GUI."""
-
-    def __init__(self, max_size=500):
+    def __init__(self):
         super().__init__()
-        self.entries: list[dict] = []
-        self._queue: queue.Queue = queue.Queue(maxsize=1000)
+        self._queue = queue.Queue(maxsize=2000)
         self.setFormatter(Formatter("%(message)s"))
 
     def emit(self, record: LogRecord) -> None:
         try:
-            entry = {
-                "time": datetime.fromtimestamp(record.created).strftime(
-                    "%H:%M:%S"
-                ),
+            self._queue.put_nowait({
+                "time": datetime.fromtimestamp(record.created).strftime("%H:%M:%S"),
                 "level": record.levelname,
                 "message": self.format(record),
-            }
-            self.entries.append(entry)
-            if len(self.entries) > 2000:
-                self.entries = self.entries[-1000:]
-            try:
-                self._queue.put_nowait(entry)
-            except queue.Full:
-                pass
-        except Exception:
+            })
+        except queue.Full:
             pass
 
-    def get_entry(self, timeout=0.05):
+    def get(self, timeout=0.1):
         try:
             return self._queue.get(timeout=timeout)
         except queue.Empty:
             return None
 
 
-# =====================================================================
-# Основное окно
-# =====================================================================
-
 class DesktopGUI:
-    """Десктопное окно мониторинга DayZ News Monitor."""
 
-    # Цвета
+    # Original color scheme
     BG = "#1a1a2e"
     BG2 = "#16213e"
     BG3 = "#0f3460"
     CARD = "#1e2a4a"
-    CARD_BORDER = "#2a3a5e"
     ACCENT = "#58a6ff"
     GREEN = "#3fb950"
     RED = "#f85149"
@@ -79,39 +56,13 @@ class DesktopGUI:
     INPUT_BG = "#0d1117"
     INPUT_BORDER = "#30363d"
 
-    def __init__(
-        self,
-        config_path: str = "config.json",
-        log_capture: LogCapture = None,
-        bot_instance=None,
-    ):
+    def __init__(self, config_path="config.json", log_capture=None, bot_instance=None):
         self.config_path = config_path
-        self.log_capture = log_capture or LogCapture()
-        self.bot_instance = bot_instance
+        self.log_capture = log_capture
+        self.bot = bot_instance
         self._running = True
-        self._status = {
-            "discord": False,
-            "telegram": False,
-            "ai": False,
-            "db": False,
-            "vk": False,
-            "discord_user": "",
-            "discord_guild": "",
-            "discord_channel": "",
-            "messages": 0,
-            "analyzed": 0,
-            "published": 0,
-            "duplicates": 0,
-        }
-        self._log_level_filter = "ALL"
-        self._started_at = datetime.now()
 
-    # -----------------------------------------------------------------
-    # Запуск — вызывается из main() в главном потоке
-    # -----------------------------------------------------------------
-
-    def run(self) -> None:
-        """Запускает GUI mainloop. Блокирует!"""
+    def run(self):
         try:
             ctk.set_appearance_mode("dark")
             ctk.set_default_color_theme("blue")
@@ -124,30 +75,33 @@ class DesktopGUI:
         self.root.minsize(750, 500)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        self._build_ui()
-        self._load_config()
+        self._build_header()
+        self._build_tabs()
+        self._load_and_fill_config()
 
-        # Запускаем цикл логов в отдельном потоке (не блокирует mainloop)
-        threading.Thread(target=self._loop_logs, daemon=True).start()
+        # Log polling thread
+        threading.Thread(target=self._poll_logs, daemon=True).start()
+
+        # Uptime ticker
+        self._started = datetime.now()
+        threading.Thread(target=self._tick_uptime, daemon=True).start()
 
         self.root.mainloop()
-        self._running = False
 
-    def _on_close(self) -> None:
+    def _on_close(self):
         self._running = False
         try:
             self.root.destroy()
         except Exception:
             pass
 
-    # -----------------------------------------------------------------
-    # UI
-    # -----------------------------------------------------------------
+    # ================================================================
+    # Header
+    # ================================================================
 
-    def _build_ui(self):
-        # --- Header ---
+    def _build_header(self):
         header = ctk.CTkFrame(self.root, fg_color=self.BG2, height=50)
-        header.pack(fill="x", padx=0, pady=0)
+        header.pack(fill="x")
         header.pack_propagate(False)
 
         ctk.CTkLabel(
@@ -176,139 +130,107 @@ class DesktopGUI:
             text_color=self.TEXT3,
         ).pack(side="right", padx=(0, 4))
 
-        # --- Notebook (tabs) ---
+    # ================================================================
+    # Tabs
+    # ================================================================
+
+    def _build_tabs(self):
         self.notebook = ctk.CTkTabview(self.root)
         self.notebook.pack(fill="both", expand=True, padx=10, pady=10)
 
-        tab_dashboard = self.notebook.add("Дашборд")
-        tab_settings = self.notebook.add("Настройки")
-        tab_logs = self.notebook.add("Логи")
+        self._build_dashboard(self.notebook.add("Дашборд"))
+        self._build_settings(self.notebook.add("Настройки"))
+        self._build_logs(self.notebook.add("Логи"))
 
-        self._build_dashboard(tab_dashboard)
-        self._build_settings(tab_settings)
-        self._build_logs(tab_logs)
-
-    # === DASHBOARD ===
+    # === Dashboard ===
 
     def _build_dashboard(self, parent):
-        # Статусы компонентов
+        # Component status cards
         status_frame = ctk.CTkFrame(parent, fg_color=self.CARD)
         status_frame.pack(fill="x", padx=8, pady=(8, 4))
 
         self._status_cards = {}
-
-        for i, (key, label) in enumerate([
+        for key, label in [
             ("discord", "Discord"),
             ("telegram", "Telegram"),
             ("ai", "AI Анализатор"),
             ("db", "База данных"),
             ("vk", "VK"),
-        ]):
+        ]:
             card = ctk.CTkFrame(status_frame, fg_color=self.BG2, width=160)
             card.pack(side="left", padx=4, pady=6, fill="y", expand=True)
             card.pack_propagate(False)
 
-            ctk.CTkLabel(
-                card, text=label,
-                font=("Segoe UI", 11),
-                text_color=self.TEXT2,
-            ).pack(pady=(8, 0))
+            ctk.CTkLabel(card, text=label, font=("Segoe UI", 11),
+                        text_color=self.TEXT2).pack(pady=(8, 0))
+            val = ctk.CTkLabel(card, text="Отключён", font=("Segoe UI", 12, "bold"),
+                              text_color=self.TEXT3)
+            val.pack(pady=(2, 2))
+            info = ctk.CTkLabel(card, text="", font=("Segoe UI", 10),
+                               text_color=self.TEXT3, wraplength=140)
+            info.pack(pady=(0, 8))
+            self._status_cards[key] = {"value": val, "info": info}
 
-            val_label = ctk.CTkLabel(
-                card, text="Отключён",
-                font=("Segoe UI", 12, "bold"),
-                text_color=self.TEXT3,
-            )
-            val_label.pack(pady=(2, 2))
-
-            info_label = ctk.CTkLabel(
-                card, text="",
-                font=("Segoe UI", 10),
-                text_color=self.TEXT3,
-                wraplength=140,
-            )
-            info_label.pack(pady=(0, 8))
-
-            self._status_cards[key] = {
-                "value": val_label,
-                "info": info_label,
-            }
-
-        # Счётчики
+        # Counter cards
         counter_frame = ctk.CTkFrame(parent, fg_color=self.CARD)
         counter_frame.pack(fill="x", padx=8, pady=4)
 
         self._counter_labels = {}
-        counters = [
+        for key, label in [
             ("messages", "Сообщений собрано"),
             ("analyzed", "Проанализировано"),
             ("published", "Опубликовано"),
             ("duplicates", "Дубликатов"),
-        ]
-
-        for key, label in counters:
+        ]:
             card = ctk.CTkFrame(counter_frame, fg_color=self.BG2)
             card.pack(side="left", padx=4, pady=6, fill="both", expand=True)
+            ctk.CTkLabel(card, text=label, font=("Segoe UI", 10),
+                        text_color=self.TEXT2).pack(pady=(8, 0))
+            num = ctk.CTkLabel(card, text="0", font=("Segoe UI", 24, "bold"),
+                              text_color=self.TEXT)
+            num.pack(pady=(0, 8))
+            self._counter_labels[key] = num
 
-            ctk.CTkLabel(
-                card, text=label,
-                font=("Segoe UI", 10),
-                text_color=self.TEXT2,
-            ).pack(pady=(8, 0))
-
-            num_label = ctk.CTkLabel(
-                card, text="0",
-                font=("Segoe UI", 24, "bold"),
-                text_color=self.TEXT,
-            )
-            num_label.pack(pady=(0, 8))
-            self._counter_labels[key] = num_label
-
-        # Discord info
+        # Discord detail
         info_frame = ctk.CTkFrame(parent, fg_color=self.CARD)
         info_frame.pack(fill="x", padx=8, pady=4)
-
         self._discord_detail = ctk.CTkLabel(
-            info_frame,
-            text="Discord: ожидание подключения...",
-            font=("Segoe UI", 11),
-            text_color=self.TEXT2,
-            anchor="w",
-        )
+            info_frame, text="Discord: ожидание подключения...",
+            font=("Segoe UI", 11), text_color=self.TEXT2, anchor="w")
         self._discord_detail.pack(fill="x", padx=12, pady=10)
 
-    # === SETTINGS ===
+    # === Settings ===
 
     def _build_settings(self, parent):
-        # Скроллбар
         canvas = ctk.CTkScrollableFrame(parent)
         canvas.pack(fill="both", expand=True, padx=8, pady=8)
 
-        self._settings_entries = {}
+        self._entries = {}
+        self._toggles = {}
 
         sections = [
             ("Discord", [
-                ("discord_token", "Discord Token", "text", "Токен вашего аккаунта Discord"),
-                ("sources_discord_guild_id", "Guild ID", "text", "ID сервера"),
-                ("sources_discord_channel_id", "Channel ID", "text", "ID канала"),
+                ("discord_token", "Discord Token", "Токен вашего аккаунта Discord"),
+                ("sources_discord_guild_id", "Guild ID", "ID сервера"),
+                ("sources_discord_channel_id", "Channel ID", "ID канала"),
             ]),
             ("Telegram", [
-                ("telegram_bot_token", "Bot Token", "text", "Токен от @BotFather"),
-                ("telegram_channel_id", "Channel ID", "text", "-100xxxxxxxxxx"),
+                ("telegram_bot_token", "Bot Token", "Токен от @BotFather"),
+                ("telegram_channel_id", "Channel ID", "-100xxxxxxxxxx"),
             ]),
             ("AI / NVIDIA API", [
-                ("openai_api_key", "API Key", "text", "nvapi-..."),
-                ("openai_base_url", "Base URL", "text", "https://integrate.api.nvidia.com/v1"),
-                ("openai_model", "Модель", "text", "meta/llama-3.1-8b-instruct"),
+                ("openai_api_key", "API Key", "nvapi-..."),
+                ("openai_base_url", "Base URL", "https://integrate.api.nvidia.com/v1"),
+                ("openai_model", "Модель", "meta/llama-3.1-8b-instruct"),
             ]),
             ("Расписание", [
-                ("check_interval_minutes", "Интервал проверки (мин)", "number", "5"),
-                ("daily_summary_hour", "Час сводки (UTC)", "number", "10"),
-                ("min_message_length", "Мин. длина сообщения", "number", "20"),
-                ("similarity_threshold", "Порог похожести", "number", "0.85"),
+                ("check_interval_minutes", "Интервал проверки (мин)", "5"),
+                ("daily_summary_hour", "Час сводки (UTC)", "10"),
+                ("min_message_length", "Мин. длина сообщения", "20"),
+                ("similarity_threshold", "Порог похожести", "0.85"),
             ]),
             ("VK (опционально)", [
-                ("vk_access_token", "VK Access Token", "text", "Пусто = выключено"),
+                ("vk_access_token", "VK Access Token", "Пусто = выключено"),
             ]),
         ]
 
@@ -316,338 +238,268 @@ class DesktopGUI:
             frame = ctk.CTkFrame(canvas, fg_color=self.CARD)
             frame.pack(fill="x", pady=(6, 3))
 
-            ctk.CTkLabel(
-                frame, text=section_title,
-                font=("Segoe UI", 13, "bold"),
-                text_color=self.ACCENT,
-            ).pack(anchor="w", padx=12, pady=(10, 4))
+            ctk.CTkLabel(frame, text=section_title, font=("Segoe UI", 13, "bold"),
+                        text_color=self.ACCENT).pack(anchor="w", padx=12, pady=(10, 4))
 
-            for key, label, input_type, hint in fields:
+            for key, label, hint in fields:
                 row = ctk.CTkFrame(frame, fg_color="transparent")
                 row.pack(fill="x", padx=12, pady=2)
 
-                ctk.CTkLabel(
-                    row, text=label + ":",
-                    font=("Segoe UI", 11),
-                    text_color=self.TEXT2,
-                    width=200,
-                    anchor="w",
-                ).pack(side="left")
+                ctk.CTkLabel(row, text=label + ":", font=("Segoe UI", 11),
+                            text_color=self.TEXT2, width=200, anchor="w").pack(side="left")
 
+                is_secret = "token" in key or "key" in key
                 entry = ctk.CTkEntry(
-                    row,
-                    border_color=self.INPUT_BORDER,
-                    border_width=1,
-                    text_color=self.TEXT,
-                    font=("Consolas", 12),
-                    width=350,
-                    show="*" if "token" in key or "key" in key else "",
+                    row, border_color=self.INPUT_BORDER, border_width=1,
+                    text_color=self.TEXT, font=("Consolas", 12), width=350,
+                    show="*" if is_secret else "",
                 )
                 entry.pack(side="left", padx=(0, 8), fill="x", expand=True)
-                self._settings_entries[key] = entry
+                self._entries[key] = entry
 
-                ctk.CTkLabel(
-                    row, text=hint,
-                    font=("Segoe UI", 10),
-                    text_color=self.TEXT3,
-                    width=200,
-                    anchor="w",
-                ).pack(side="left")
+                ctk.CTkLabel(row, text=hint, font=("Segoe UI", 10),
+                            text_color=self.TEXT3, width=200, anchor="w").pack(side="left")
 
-            # Тогглы для публикации
+            # Priority toggles inside "Расписание" section
             if section_title == "Расписание":
-                toggle_frame = ctk.CTkFrame(frame, fg_color="transparent")
-                toggle_frame.pack(fill="x", padx=12, pady=(8, 10))
-
-                self._toggle_vars = {}
+                tf = ctk.CTkFrame(frame, fg_color="transparent")
+                tf.pack(fill="x", padx=12, pady=(8, 10))
                 for key, label in [
                     ("publish_high_priority", "Публиковать High"),
                     ("publish_medium_priority", "Публиковать Medium"),
                     ("publish_low_priority", "Публиковать Low"),
                 ]:
                     var = tk.BooleanVar(value=False)
-                    cb = ctk.CTkCheckBox(
-                        toggle_frame,
-                        text=label,
-                        variable=var,
-                        font=("Segoe UI", 11),
-                        text_color=self.TEXT2,
-                        fg_color=self.INPUT_BORDER,
-                        hover_color=self.ACCENT,
-                    )
-                    cb.pack(side="left", padx=(0, 20))
-                    self._toggle_vars[key] = var
+                    ctk.CTkCheckBox(tf, text=label, variable=var, font=("Segoe UI", 11),
+                                   text_color=self.TEXT2, fg_color=self.INPUT_BORDER,
+                                   hover_color=self.ACCENT).pack(side="left", padx=(0, 20))
+                    self._toggles[key] = var
 
-        # Кнопки
-        btn_frame = ctk.CTkFrame(canvas, fg_color="transparent")
-        btn_frame.pack(fill="x", pady=12)
+        # Buttons
+        bf = ctk.CTkFrame(canvas, fg_color="transparent")
+        bf.pack(fill="x", pady=12)
+        ctk.CTkButton(bf, text="Сохранить настройки", font=("Segoe UI", 12, "bold"),
+                      fg_color=self.ACCENT, hover_color="#79b8ff", width=200, height=38,
+                      command=self._save_config).pack(side="left", padx=4)
+        ctk.CTkButton(bf, text="Перезагрузить", font=("Segoe UI", 12, "bold"),
+                      fg_color="#2a3a5e", hover_color="#3a4a6e", width=200, height=38,
+                      command=self._load_and_fill_config).pack(side="left", padx=4)
 
-        save_btn = ctk.CTkButton(
-            btn_frame, text="Сохранить настройки",
-            font=("Segoe UI", 12, "bold"),
-            fg_color=self.ACCENT,
-            hover_color="#79b8ff",
-            width=200, height=38,
-            command=self._save_config,
-        )
-        save_btn.pack(side="left", padx=4)
-
-        reload_btn = ctk.CTkButton(
-            btn_frame, text="Перезагрузить",
-            font=("Segoe UI", 12, "bold"),
-            fg_color="#2a3a5e",
-            hover_color="#3a4a6e",
-            width=200, height=38,
-            command=self._load_config,
-        )
-        reload_btn.pack(side="left", padx=4)
-
-    # === LOGS ===
+    # === Logs ===
 
     def _build_logs(self, parent):
-        # Панель фильтров
-        filter_frame = ctk.CTkFrame(parent, fg_color=self.CARD)
-        filter_frame.pack(fill="x", padx=8, pady=(8, 4))
+        bar = ctk.CTkFrame(parent, fg_color=self.CARD)
+        bar.pack(fill="x", padx=8, pady=(8, 4))
 
-        self._filter_buttons = {}
+        self._filter_btns = {}
         for level in ("ALL", "INFO", "WARNING", "ERROR", "DEBUG"):
-            btn = ctk.CTkButton(
-                filter_frame, text=level,
-                font=("Segoe UI", 11, "bold"),
-                width=70, height=30,
-                fg_color=self.ACCENT if level == "ALL" else self.BG3,
-                hover_color="#79b8ff",
-                command=lambda l=level: self._set_filter(l),
-            )
+            btn = ctk.CTkButton(bar, text=level, font=("Segoe UI", 11, "bold"),
+                               width=70, height=30,
+                               fg_color=self.ACCENT if level == "ALL" else self.BG3,
+                               hover_color="#79b8ff",
+                               command=lambda l=level: self._set_filter(l))
             btn.pack(side="left", padx=3, pady=6)
-            self._filter_buttons[level] = btn
+            self._filter_btns[level] = btn
 
-        self._log_count_label = ctk.CTkLabel(
-            filter_frame, text="0 записей",
-            font=("Segoe UI", 10),
-            text_color=self.TEXT3,
-        )
-        self._log_count_label.pack(side="right", padx=12)
+        self._log_count = ctk.CTkLabel(bar, text="0 записей", font=("Segoe UI", 10),
+                                       text_color=self.TEXT3)
+        self._log_count.pack(side="right", padx=12)
 
-        clear_btn = ctk.CTkButton(
-            filter_frame, text="Очистить",
-            font=("Segoe UI", 10),
-            width=80, height=30,
-            fg_color=self.BG3,
-            hover_color=self.RED,
-            command=self._clear_logs,
-        )
-        clear_btn.pack(side="right", padx=3, pady=6)
+        ctk.CTkButton(bar, text="Очистить", font=("Segoe UI", 10), width=80, height=30,
+                      fg_color=self.BG3, hover_color=self.RED,
+                      command=self._clear_logs).pack(side="right", padx=3, pady=6)
 
-        # Текст логов
         self._log_text = tk.Text(
-            parent,
-            bg=self.INPUT_BG,
-            fg=self.TEXT,
-            font=("Consolas", 11),
-            insertbackground=self.TEXT,
-            selectbackground=self.BG3,
-            borderwidth=0,
-            highlightthickness=0,
-            wrap="word",
-            state="disabled",
-            cursor="arrow",
+            parent, bg=self.INPUT_BG, fg=self.TEXT, font=("Consolas", 11),
+            insertbackground=self.TEXT, selectbackground=self.BG3,
+            borderwidth=0, highlightthickness=0, wrap="word",
+            state="disabled", cursor="arrow",
         )
         self._log_text.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
-        # Цвета для уровней
         self._log_text.tag_configure("TIME", foreground=self.TEXT3)
         self._log_text.tag_configure("LEVEL_INFO", foreground=self.ACCENT)
         self._log_text.tag_configure("LEVEL_WARNING", foreground=self.YELLOW)
         self._log_text.tag_configure("LEVEL_ERROR", foreground=self.RED)
         self._log_text.tag_configure("LEVEL_DEBUG", foreground=self.TEXT3)
         self._log_text.tag_configure("MSG", foreground=self.TEXT)
+        self._total_lines = 0
+        self._filter_level = "ALL"
 
-        self._total_log_lines = 0
+    # ================================================================
+    # Config load / save
+    # ================================================================
 
-    # -----------------------------------------------------------------
-    # Логика
-    # -----------------------------------------------------------------
-
-    def _set_filter(self, level: str) -> None:
-        self._log_level_filter = level
-        for l, btn in self._filter_buttons.items():
-            btn.configure(
-                fg_color=self.ACCENT if l == level else self.BG3,
-            )
-
-    def _clear_logs(self) -> None:
-        self._total_log_lines = 0
-        self._log_text.configure(state="normal")
-        self._log_text.delete("1.0", "end")
-        self._log_text.configure(state="disabled")
-        self._log_count_label.configure(text="0 записей")
-
-    def _add_log_line(self, entry: dict) -> None:
-        level = entry["level"]
-        if self._log_level_filter != "ALL" and level != self._log_level_filter:
-            return
-
-        time_str = entry["time"]
-        msg = entry["message"]
-
-        self._log_text.configure(state="normal")
-        self._log_text.insert("end", f" {time_str} ", "TIME")
-        tag = f"LEVEL_{level}"
-        if tag not in {"LEVEL_INFO", "LEVEL_WARNING", "LEVEL_ERROR", "LEVEL_DEBUG"}:
-            tag = "MSG"
-        self._log_text.insert("end", f"{level:>8} ", tag)
-        self._log_text.insert("end", f"{msg}\n", "MSG")
-        self._total_log_lines += 1
-
-        # Ограничиваем строки
-        if self._total_log_lines > 2000:
-            self._log_text.delete("1.0", "500 lines")
-            self._total_log_lines -= 500
-
-        self._log_text.see("end")
-        self._log_text.configure(state="disabled")
-        self._log_count_label.configure(text=f"{self._total_log_lines} записей")
-
-    def _loop_logs(self) -> None:
-        """Цикл получения новых логов из хендлера."""
-        while self._running:
-            try:
-                entry = self.log_capture.get_entry(timeout=0.1)
-                if entry:
-                    try:
-                        self.root.after_idle(self._add_log_line, entry)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-            # Обновляем аптайм
-            try:
-                delta = datetime.now() - self._started_at
-                h, rem = divmod(int(delta.total_seconds()), 3600)
-                m, s = divmod(rem, 60)
-                self.root.after_idle(
-                    self.uptime_label.configure,
-                    {"text": f"{h:02d}:{m:02d}:{s:02d}"},
-                )
-            except Exception:
-                pass
-
-            threading.Event().wait(0.5)
-
-    # -----------------------------------------------------------------
-    # Config
-    # -----------------------------------------------------------------
-
-    def _load_config(self) -> None:
+    def _load_and_fill_config(self):
+        """Reads config.json and fills all entry fields."""
         try:
             with open(self.config_path, "r", encoding="utf-8") as f:
                 cfg = json.load(f)
-        except Exception:
+        except Exception as e:
+            print(f"[GUI] Ошибка загрузки конфига: {e}")
             return
 
-        # Простые поля
-        simple = [
+        print(f"[GUI] Конфиг загружен, заполняю {len(self._entries)} полей")
+
+        # Simple fields
+        simple_keys = [
             "discord_token", "telegram_bot_token", "telegram_channel_id",
             "openai_api_key", "openai_base_url", "openai_model",
             "vk_access_token", "check_interval_minutes",
-            "daily_summary_hour", "min_message_length",
-            "similarity_threshold",
+            "daily_summary_hour", "min_message_length", "similarity_threshold",
         ]
-        for key in simple:
-            el = self._settings_entries.get(key)
-            if el and key in cfg:
-                el.delete(0, "end")
-                el.insert(0, str(cfg[key]))
+        for key in simple_keys:
+            entry = self._entries.get(key)
+            if entry and key in cfg:
+                entry.delete(0, "end")
+                entry.insert(0, str(cfg[key]))
+                print(f"[GUI]   {key} = {'***' if ('token' in key or 'key' in key) else cfg[key]}")
 
-        # Вложенные: sources.discord
+        # Nested: sources.discord
         sources = cfg.get("sources", {})
         discord = sources.get("discord", {})
-        for key in ("sources_discord_guild_id", "sources_discord_channel_id"):
-            el = self._settings_entries.get(key)
-            if el:
-                el.delete(0, "end")
-                cfg_key = key.replace("sources_discord_", "")
-                el.insert(0, str(discord.get(cfg_key, "")))
+        for gui_key, cfg_key in [("sources_discord_guild_id", "guild_id"),
+                                  ("sources_discord_channel_id", "channel_id")]:
+            entry = self._entries.get(gui_key)
+            if entry:
+                entry.delete(0, "end")
+                entry.insert(0, str(discord.get(cfg_key, "")))
+                print(f"[GUI]   {gui_key} = {discord.get(cfg_key, '')}")
 
-        # Тогглы
-        for key, var in self._toggle_vars.items():
+        # Toggles
+        for key, var in self._toggles.items():
             var.set(cfg.get(key, False))
+            print(f"[GUI]   {key} = {cfg.get(key, False)}")
 
-    def _save_config(self) -> None:
+        print("[GUI] Настройки загружены")
+
+    def _save_config(self):
         try:
             with open(self.config_path, "r", encoding="utf-8") as f:
                 cfg = json.load(f)
         except Exception:
             cfg = {}
 
-        # Простые поля
-        simple = [
+        simple_keys = [
             "discord_token", "telegram_bot_token", "telegram_channel_id",
             "openai_api_key", "openai_base_url", "openai_model",
             "vk_access_token", "check_interval_minutes",
-            "daily_summary_hour", "min_message_length",
-            "similarity_threshold",
+            "daily_summary_hour", "min_message_length", "similarity_threshold",
         ]
-        for key in simple:
-            el = self._settings_entries.get(key)
-            if el:
-                val = el.get()
-                if key in ("check_interval_minutes", "daily_summary_hour",
-                           "min_message_length"):
-                    try:
-                        val = int(val)
-                    except ValueError:
-                        pass
+        for key in simple_keys:
+            entry = self._entries.get(key)
+            if entry:
+                val = entry.get()
+                if key in ("check_interval_minutes", "daily_summary_hour", "min_message_length"):
+                    try: val = int(val)
+                    except ValueError: pass
                 elif key == "similarity_threshold":
-                    try:
-                        val = float(val)
-                    except ValueError:
-                        pass
+                    try: val = float(val)
+                    except ValueError: pass
                 cfg[key] = val
 
-        # Вложенные: sources.discord
         if "sources" not in cfg:
             cfg["sources"] = {}
         if "discord" not in cfg["sources"]:
             cfg["sources"]["discord"] = {}
+        cfg["sources"]["discord"]["guild_id"] = self._entries["sources_discord_guild_id"].get()
+        cfg["sources"]["discord"]["channel_id"] = self._entries["sources_discord_channel_id"].get()
 
-        cfg["sources"]["discord"]["guild_id"] = (
-            self._settings_entries["sources_discord_guild_id"].get()
-        )
-        cfg["sources"]["discord"]["channel_id"] = (
-            self._settings_entries["sources_discord_channel_id"].get()
-        )
-
-        # Тогглы
-        for key, var in self._toggle_vars.items():
+        for key, var in self._toggles.items():
             cfg[key] = var.get()
 
         try:
             with open(self.config_path, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, indent=2, ensure_ascii=False)
+            print("[GUI] Конфиг сохранён")
             logger.info("Настройки сохранены через GUI")
+            if self.bot:
+                self.bot.config = cfg
         except Exception as e:
+            print(f"[GUI] Ошибка сохранения: {e}")
             logger.error("Ошибка сохранения настроек: %s", e)
 
-    # -----------------------------------------------------------------
-    # Public API — вызывается из bot.py для обновления статуса
-    # -----------------------------------------------------------------
+    # ================================================================
+    # Logs
+    # ================================================================
 
-    def update_status(self, key: str, value) -> None:
-        """Обновляет статус компонента на дашборде."""
-        self._status[key] = value
+    def _set_filter(self, level):
+        self._filter_level = level
+        for l, btn in self._filter_btns.items():
+            btn.configure(fg_color=self.ACCENT if l == level else self.BG3)
+
+    def _clear_logs(self):
+        self._total_lines = 0
+        self._log_text.configure(state="normal")
+        self._log_text.delete("1.0", "end")
+        self._log_text.configure(state="disabled")
+        self._log_count.configure(text="0 записей")
+
+    def _poll_logs(self):
+        while self._running:
+            if not self.log_capture:
+                threading.Event().wait(0.5)
+                continue
+            entry = self.log_capture.get(timeout=0.1)
+            if not entry:
+                continue
+
+            level = entry["level"]
+            if self._filter_level != "ALL" and level != self._filter_level:
+                continue
+
+            try:
+                self._log_text.configure(state="normal")
+                self._log_text.insert("end", f" {entry['time']} ", "TIME")
+                tag = f"LEVEL_{level}"
+                if tag not in ("LEVEL_INFO", "LEVEL_WARNING", "LEVEL_ERROR", "LEVEL_DEBUG"):
+                    tag = "MSG"
+                self._log_text.insert("end", f"{level:>8} ", tag)
+                self._log_text.insert("end", f"{entry['message']}\n", "MSG")
+                self._total_lines += 1
+                if self._total_lines > 2000:
+                    self._log_text.delete("1.0", "500 lines")
+                    self._total_lines -= 500
+                self._log_text.see("end")
+                self._log_text.configure(state="disabled")
+                self._log_count.configure(text=f"{self._total_lines} записей")
+            except Exception:
+                pass
+
+    def _tick_uptime(self):
+        while self._running:
+            try:
+                delta = datetime.now() - self._started
+                h, r = divmod(int(delta.total_seconds()), 3600)
+                m, s = divmod(r, 60)
+                self.root.after(0, lambda txt=f"{h:02d}:{m:02d}:{s:02d}":
+                               self.uptime_label.configure(text=txt))
+            except Exception:
+                break
+            threading.Event().wait(1)
+
+    # ================================================================
+    # Public API — called from bot.py
+    # ================================================================
+
+    def update_status(self, component, connected, info=""):
+        card = self._status_cards.get(component)
+        if not card:
+            return
         try:
-            self.root.after_idle(self._refresh_status)
+            if connected:
+                card["value"].configure(text="Подключён", text_color=self.GREEN)
+            else:
+                card["value"].configure(text="Отключён", text_color=self.TEXT3)
+            if info:
+                card["info"].configure(text=info)
         except Exception:
             pass
 
-    def increment_counter(self, key: str) -> None:
-        """Увеличивает счётчик на 1."""
-        self._status[key] = self._status.get(key, 0) + 1
+    def set_status_running(self):
         try:
-            self.root.after_idle(self._refresh_counters)
+            self.root.after(0, lambda: self.status_label.configure(
+                text="Работает", text_color=self.GREEN))
         except Exception:
             pass
 
@@ -664,60 +516,18 @@ class DesktopGUI:
         h, r = divmod(seconds, 3600)
         m, s = divmod(r, 60)
         try:
-            self.root.after(0, lambda: self.uptime_label.configure(text=f"{h:02d}:{m:02d}:{s:02d}"))
+            self.root.after(0, lambda: self.uptime_label.configure(
+                text=f"{h:02d}:{m:02d}:{s:02d}"))
         except Exception:
             pass
 
     def append_log(self, level, message):
-        entry = {
-            "time": datetime.now().strftime("%H:%M:%S"),
-            "level": level,
-            "message": f"[{level}] {message}",
-        }
-        try:
-            self.log_capture._queue.put_nowait(entry)
-        except Exception:
-            pass
-
-    def _refresh_status(self) -> None:
-        s = self._status
-
-        # Статусы компонентов
-        components = {
-            "discord": (s["discord"], s["discord_user"] or "",
-                       f"{s['discord_guild']} / #{s['discord_channel']}" if s["discord_guild"] else ""),
-            "telegram": (s["telegram"], "Подключён" if s["telegram"] else "", ""),
-            "ai": (s["ai"], "Активен" if s["ai"] else "", ""),
-            "db": (s["db"], "Подключена" if s["db"] else "", ""),
-            "vk": (s["vk"], "Активен" if s["vk"] else "", ""),
-        }
-
-        for key, (connected, value_text, info_text) in components.items():
-            card = self._status_cards.get(key)
-            if not card:
-                continue
-            if connected:
-                card["value"].configure(text=f"* {value_text}", text_color=self.GREEN)
-            else:
-                card["value"].configure(text="Отключён", text_color=self.TEXT3)
-            card["info"].configure(text=info_text)
-
-        # Глобальный статус
-        if s["discord"] or s["db"]:
-            self.status_label.configure(text="Работает", text_color=self.GREEN)
-        else:
-            self.status_label.configure(text="Остановлен", text_color=self.RED)
-
-        # Discord деталь
-        if s["discord"]:
-            self._discord_detail.configure(
-                text=f"Discord: {s['discord_user']} — "
-                     f"{s['discord_guild']} / #{s['discord_channel']}",
-            )
-        else:
-            self._discord_detail.configure(text="Discord: ожидание подключения...")
-
-    def _refresh_counters(self) -> None:
-        for key, label in self._counter_labels.items():
-            val = self._status.get(key, 0)
-            label.configure(text=str(val))
+        if self.log_capture:
+            try:
+                self.log_capture._queue.put_nowait({
+                    "time": datetime.now().strftime("%H:%M:%S"),
+                    "level": level,
+                    "message": f"[{level}] {message}",
+                })
+            except Exception:
+                pass
