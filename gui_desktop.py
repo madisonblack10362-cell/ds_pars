@@ -128,7 +128,7 @@ class DesktopGUI:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self._build_ui()
-        self._loop_logs()
+        self.root.after(500, self._poll_logs)
 
         self.root.mainloop()
         self._running = False
@@ -507,32 +507,35 @@ class DesktopGUI:
         self._log_text.configure(state="disabled")
         self._log_count_label.configure(text=f"{self._total_log_lines} записей")
 
-    def _loop_logs(self) -> None:
-        """Цикл получения новых логов из хендлера."""
-        while self._running:
+    def _poll_logs(self) -> None:
+        """Вызывается через root.after() — читает логи и обновляет uptime."""
+        if not self._running:
+            return
+
+        # Считываем все накопившиеся записи
+        while True:
+            entry = self.log_capture.get_entry(timeout=0.01)
+            if not entry:
+                break
             try:
-                entry = self.log_capture.get_entry(timeout=0.1)
-                if entry:
-                    try:
-                        self.root.after_idle(self._add_log_line, entry)
-                    except Exception:
-                        pass
+                self._add_log_line(entry)
             except Exception:
                 pass
 
-            # Обновляем аптайм
-            try:
-                delta = datetime.now() - self._started_at
-                h, rem = divmod(int(delta.total_seconds()), 3600)
-                m, s = divmod(rem, 60)
-                self.root.after_idle(
-                    self.uptime_label.configure,
-                    {"text": f"{h:02d}:{m:02d}:{s:02d}"},
-                )
-            except Exception:
-                pass
+        # Обновляем аптайм
+        try:
+            delta = datetime.now() - self._started_at
+            h, rem = divmod(int(delta.total_seconds()), 3600)
+            m, s = divmod(rem, 60)
+            self.uptime_label.configure(text=f"{h:02d}:{m:02d}:{s:02d}")
+        except Exception:
+            pass
 
-            threading.Event().wait(0.5)
+        # Планируем следующий вызов через 300мс
+        try:
+            self.root.after(300, self._poll_logs)
+        except Exception:
+            pass
 
     # -----------------------------------------------------------------
     # Config

@@ -568,8 +568,8 @@ def main():
     monitor._gui = gui
     bot_thread.start()
 
-    # 4. Запускаем цикл логов и главное окно
-    gui._loop_logs()
+    # 4. Запускаем цикл логов через after() и главное окно
+    gui.root.after(500, gui._poll_logs)
     gui.root.mainloop()
     gui._running = False
 
