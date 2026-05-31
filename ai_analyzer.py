@@ -204,12 +204,8 @@ class AIAnalyzer:
                     if content.endswith("```"):
                         content = content[:-3]
                     content = content.strip()
-                # Убираем управляющие символы (кроме \n и \t)
-                content = "".join(
-                    ch if ch in "\n\t\r" or ord(ch) >= 32 else " "
-                    for ch in content
-                )
-                return json.loads(content)
+                # strict=False разрешает control characters внутри JSON-строк
+                return json.loads(content, strict=False)
 
     @staticmethod
     def _validate_result(result: dict) -> dict:
