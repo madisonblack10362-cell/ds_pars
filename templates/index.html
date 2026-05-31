@@ -1,0 +1,1075 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DayZ News Monitor</title>
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-card: #1c2333;
+    --bg-input: #0d1117;
+    --border: #30363d;
+    --border-focus: #58a6ff;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #6e7681;
+    --accent: #58a6ff;
+    --accent-hover: #79b8ff;
+    --green: #3fb950;
+    --green-bg: rgba(63,185,80,0.1);
+    --red: #f85149;
+    --red-bg: rgba(248,81,73,0.1);
+    --yellow: #d29922;
+    --yellow-bg: rgba(210,153,34,0.1);
+    --purple: #bc8cff;
+    --radius: 8px;
+    --shadow: 0 2px 8px rgba(0,0,0,0.3);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* === HEADER === */
+  .header {
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .logo {
+    width: 36px; height: 36px;
+    background: linear-gradient(135deg, var(--accent), var(--purple));
+    border-radius: var(--radius);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+  }
+  .header-title {
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+  }
+  .header-title span {
+    color: var(--accent);
+  }
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .status-badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .status-badge.online {
+    background: var(--green-bg);
+    color: var(--green);
+    border: 1px solid rgba(63,185,80,0.2);
+  }
+  .status-badge.offline {
+    background: var(--red-bg);
+    color: var(--red);
+    border: 1px solid rgba(248,81,73,0.2);
+  }
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--green);
+  }
+  .status-badge.online .status-dot {
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  /* === LAYOUT === */
+  .main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* === SIDEBAR === */
+  .sidebar {
+    width: 220px;
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border);
+    padding: 16px 0;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 20px;
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: 14px;
+    font-weight: 500;
+    transition: all 0.15s;
+    border-left: 3px solid transparent;
+  }
+  .nav-item:hover {
+    background: rgba(88,166,255,0.05);
+    color: var(--text-primary);
+  }
+  .nav-item.active {
+    background: rgba(88,166,255,0.08);
+    color: var(--accent);
+    border-left-color: var(--accent);
+  }
+  .nav-icon {
+    width: 20px;
+    text-align: center;
+    font-size: 16px;
+  }
+
+  .sidebar-footer {
+    margin-top: auto;
+    padding: 16px 20px;
+    border-top: 1px solid var(--border);
+  }
+  .version {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  /* === CONTENT === */
+  .content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px;
+  }
+  .page { display: none; }
+  .page.active { display: block; }
+
+  /* === CARDS === */
+  .cards-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    transition: border-color 0.2s;
+  }
+  .card:hover {
+    border-color: rgba(88,166,255,0.3);
+  }
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .card-label {
+    font-size: 13px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+  }
+  .card-status {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--text-muted);
+  }
+  .card-status.connected { background: var(--green); box-shadow: 0 0 8px rgba(63,185,80,0.4); }
+  .card-status.disconnected { background: var(--red); box-shadow: 0 0 8px rgba(248,81,73,0.4); }
+  .card-status.disabled { background: var(--text-muted); }
+  .card-value {
+    font-size: 28px;
+    font-weight: 800;
+    margin-bottom: 4px;
+  }
+  .card-sub {
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+
+  /* === SECTION === */
+  .section {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+  .section-title {
+    font-size: 16px;
+    font-weight: 700;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .section-title .icon {
+    font-size: 18px;
+  }
+
+  /* === FORM === */
+  .form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 16px;
+  }
+  .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .form-group.full-width {
+    grid-column: 1 / -1;
+  }
+  .form-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+  .form-input {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    color: var(--text-primary);
+    font-size: 14px;
+    font-family: 'Consolas', 'Monaco', monospace;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .form-input:focus {
+    border-color: var(--border-focus);
+    box-shadow: 0 0 0 3px rgba(88,166,255,0.1);
+  }
+  .form-input::placeholder {
+    color: var(--text-muted);
+  }
+  .form-hint {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 20px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .btn:hover {
+    background: var(--bg-card);
+    border-color: var(--text-muted);
+  }
+  .btn-primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  .btn-primary:hover {
+    background: var(--accent-hover);
+    border-color: var(--accent-hover);
+  }
+  .btn-danger {
+    background: transparent;
+    border-color: var(--red);
+    color: var(--red);
+  }
+  .btn-danger:hover {
+    background: var(--red-bg);
+  }
+
+  .form-actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* === TOGGLE === */
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(48,54,61,0.5);
+  }
+  .toggle-row:last-child { border-bottom: none; }
+  .toggle-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .toggle-label {
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .toggle-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .toggle {
+    position: relative;
+    width: 44px;
+    height: 24px;
+    cursor: pointer;
+  }
+  .toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+  .toggle .slider {
+    position: absolute;
+    inset: 0;
+    background: var(--text-muted);
+    border-radius: 12px;
+    transition: 0.2s;
+  }
+  .toggle .slider::before {
+    content: '';
+    position: absolute;
+    width: 18px; height: 18px;
+    left: 3px; top: 3px;
+    background: #fff;
+    border-radius: 50%;
+    transition: 0.2s;
+  }
+  .toggle input:checked + .slider {
+    background: var(--accent);
+  }
+  .toggle input:checked + .slider::before {
+    transform: translateX(20px);
+  }
+
+  /* === LOGS === */
+  .log-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+  }
+  .log-filter {
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .log-filter:hover { border-color: var(--text-muted); }
+  .log-filter.active {
+    background: rgba(88,166,255,0.1);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .log-filter.active[data-level="ERROR"] {
+    background: var(--red-bg);
+    border-color: var(--red);
+    color: var(--red);
+  }
+  .log-filter.active[data-level="WARNING"] {
+    background: var(--yellow-bg);
+    border-color: var(--yellow);
+    color: var(--yellow);
+  }
+  .log-count {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .log-container {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    height: calc(100vh - 260px);
+    min-height: 400px;
+    overflow-y: auto;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  .log-entry {
+    padding: 4px 16px;
+    border-bottom: 1px solid rgba(48,54,61,0.3);
+    display: flex;
+    gap: 12px;
+    transition: background 0.1s;
+  }
+  .log-entry:hover {
+    background: rgba(88,166,255,0.03);
+  }
+  .log-entry.hidden { display: none; }
+  .log-time {
+    color: var(--text-muted);
+    flex-shrink: 0;
+    min-width: 150px;
+  }
+  .log-level {
+    flex-shrink: 0;
+    min-width: 70px;
+    font-weight: 700;
+    font-size: 11px;
+    text-transform: uppercase;
+  }
+  .log-level.INFO { color: var(--accent); }
+  .log-level.WARNING { color: var(--yellow); }
+  .log-level.ERROR { color: var(--red); }
+  .log-level.DEBUG { color: var(--text-muted); }
+  .log-message {
+    color: var(--text-primary);
+    word-break: break-word;
+  }
+
+  /* === TOAST === */
+  .toast-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .toast {
+    padding: 12px 20px;
+    border-radius: var(--radius);
+    font-size: 14px;
+    font-weight: 500;
+    animation: slideIn 0.3s ease, fadeOut 0.3s ease 2.7s forwards;
+    box-shadow: var(--shadow);
+  }
+  .toast.success {
+    background: var(--green);
+    color: #fff;
+  }
+  .toast.error {
+    background: var(--red);
+    color: #fff;
+  }
+  @keyframes slideIn {
+    from { transform: translateX(100px); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+  @keyframes fadeOut {
+    to { opacity: 0; transform: translateY(-10px); }
+  }
+
+  /* === SCROLLBAR === */
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg-primary); }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+  /* === RESPONSIVE === */
+  @media (max-width: 768px) {
+    .sidebar { width: 60px; }
+    .nav-item span { display: none; }
+    .nav-item { justify-content: center; padding: 12px; }
+    .cards-grid { grid-template-columns: 1fr; }
+    .form-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <div class="header-left">
+    <div class="logo">🎮</div>
+    <div class="header-title">DayZ <span>News Monitor</span></div>
+  </div>
+  <div class="header-right">
+    <div class="status-badge online" id="globalStatus">
+      <div class="status-dot"></div>
+      <span>Работает</span>
+    </div>
+  </div>
+</div>
+
+<div class="main">
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div class="nav-item active" data-page="dashboard">
+      <div class="nav-icon">📊</div>
+      <span>Дашборд</span>
+    </div>
+    <div class="nav-item" data-page="settings">
+      <div class="nav-icon">⚙️</div>
+      <span>Настройки</span>
+    </div>
+    <div class="nav-item" data-page="logs">
+      <div class="nav-icon">📋</div>
+      <span>Логи</span>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="version">v1.0.0</div>
+    </div>
+  </div>
+
+  <!-- CONTENT -->
+  <div class="content">
+
+    <!-- ===== DASHBOARD ===== -->
+    <div class="page active" id="page-dashboard">
+      <div class="cards-grid">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-label">Discord</div>
+            <div class="card-status" id="discordStatus"></div>
+          </div>
+          <div class="card-value" id="discordUser">—</div>
+          <div class="card-sub" id="discordInfo">Не подключён</div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-label">Telegram</div>
+            <div class="card-status" id="telegramStatus"></div>
+          </div>
+          <div class="card-value" id="telegramInfo">—</div>
+          <div class="card-sub" id="telegramSub">Не настроен</div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-label">AI Анализатор</div>
+            <div class="card-status" id="aiStatus"></div>
+          </div>
+          <div class="card-value" id="aiInfo">—</div>
+          <div class="card-sub" id="aiSub">Не настроен</div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-label">База данных</div>
+            <div class="card-status" id="dbStatus"></div>
+          </div>
+          <div class="card-value" id="dbInfo">—</div>
+          <div class="card-sub" id="dbSub">Не подключена</div>
+        </div>
+      </div>
+
+      <div class="cards-grid">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-label">Собрано сообщений</div>
+          </div>
+          <div class="card-value" id="statCollected">0</div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-label">Проанализировано</div>
+          </div>
+          <div class="card-value" id="statAnalyzed">0</div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-label">Опубликовано</div>
+          </div>
+          <div class="card-value" id="statPublished">0</div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-label">Дубликатов найдено</div>
+          </div>
+          <div class="card-value" id="statDuplicates">0</div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">
+          <span class="icon">⏱️</span> Информация
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <div class="form-group">
+            <div class="form-label">Аптайм</div>
+            <div class="form-input" id="uptime" style="pointer-events:none;">—</div>
+          </div>
+          <div class="form-group">
+            <div class="form-label">Последняя активность</div>
+            <div class="form-input" id="lastActivity" style="pointer-events:none;">—</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== SETTINGS ===== -->
+    <div class="page" id="page-settings">
+
+      <div class="section">
+        <div class="section-title">
+          <span class="icon">🤖</span> Discord
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <div class="form-label">Токен Discord</div>
+            <input type="text" class="form-input" id="cfg_discord_token" placeholder="Ваш Discord токен">
+            <div class="form-hint">User token для подключения к Discord</div>
+          </div>
+          <div class="form-group">
+            <div class="form-label">Guild ID</div>
+            <input type="text" class="form-input" id="cfg_guild_id" placeholder="000000000000000000">
+          </div>
+          <div class="form-group">
+            <div class="form-label">Channel ID</div>
+            <input type="text" class="form-input" id="cfg_channel_id" placeholder="000000000000000000">
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">
+          <span class="icon">📨</span> Telegram
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <div class="form-label">Bot Token</div>
+            <input type="text" class="form-input" id="cfg_telegram_bot_token" placeholder="7424891607:AAH...">
+            <div class="form-hint">Токен от @BotFather</div>
+          </div>
+          <div class="form-group">
+            <div class="form-label">Channel ID</div>
+            <input type="text" class="form-input" id="cfg_telegram_channel_id" placeholder="-100xxxxxxxxxx">
+            <div class="form-hint">ID канала (с -100 в начале для приватных)</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">
+          <span class="icon">🧠</span> AI / NVIDIA API
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <div class="form-label">API Key</div>
+            <input type="text" class="form-input" id="cfg_openai_api_key" placeholder="nvapi-...">
+            <div class="form-hint">NVIDIA NIM API ключ</div>
+          </div>
+          <div class="form-group">
+            <div class="form-label">Base URL</div>
+            <input type="text" class="form-input" id="cfg_openai_base_url" placeholder="https://integrate.api.nvidia.com/v1">
+          </div>
+          <div class="form-group">
+            <div class="form-label">Модель</div>
+            <input type="text" class="form-input" id="cfg_openai_model" placeholder="meta/llama-3.1-8b-instruct">
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">
+          <span class="icon">⏰</span> Расписание и фильтры
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <div class="form-label">Интервал проверки (мин)</div>
+            <input type="number" class="form-input" id="cfg_check_interval_minutes" min="1" max="60">
+          </div>
+          <div class="form-group">
+            <div class="form-label">Сводка в час (UTC)</div>
+            <input type="number" class="form-input" id="cfg_daily_summary_hour" min="0" max="23">
+          </div>
+          <div class="form-group">
+            <div class="form-label">Мин. длина сообщения</div>
+            <input type="number" class="form-input" id="cfg_min_message_length" min="1" max="1000">
+          </div>
+          <div class="form-group">
+            <div class="form-label">Порог похожести</div>
+            <input type="text" class="form-input" id="cfg_similarity_threshold" placeholder="0.85">
+          </div>
+        </div>
+
+        <div style="margin-top: 16px;">
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <div class="toggle-label">Публиковать High приоритет</div>
+              <div class="toggle-desc">Вайпы, открытие серверов, крупные обновления</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="cfg_publish_high_priority">
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <div class="toggle-label">Публиковать Medium приоритет</div>
+              <div class="toggle-desc">Обновления, ивенты, техработы</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="cfg_publish_medium_priority">
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <div class="toggle-label">Публиковать Low приоритет</div>
+              <div class="toggle-desc">Мемы, опросы, обычное общение</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="cfg_publish_low_priority">
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">
+          <span class="icon">🌐</span> VK (опционально)
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <div class="form-label">VK Access Token</div>
+            <input type="text" class="form-input" id="cfg_vk_access_token" placeholder="VK API token (пусто = выключено)">
+          </div>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button class="btn btn-primary" onclick="saveConfig()">💾 Сохранить настройки</button>
+        <button class="btn" onclick="loadConfig()">🔄 Сбросить</button>
+      </div>
+    </div>
+
+    <!-- ===== LOGS ===== -->
+    <div class="page" id="page-logs">
+      <div class="section" style="padding: 16px;">
+        <div class="log-toolbar">
+          <button class="log-filter active" data-level="ALL" onclick="setLogFilter('ALL', this)">Все</button>
+          <button class="log-filter" data-level="INFO" onclick="setLogFilter('INFO', this)">INFO</button>
+          <button class="log-filter" data-level="WARNING" onclick="setLogFilter('WARNING', this)">WARNING</button>
+          <button class="log-filter" data-level="ERROR" onclick="setLogFilter('ERROR', this)">ERROR</button>
+          <button class="log-filter" data-level="DEBUG" onclick="setLogFilter('DEBUG', this)">DEBUG</button>
+          <button class="btn" onclick="clearLogs()" style="margin-left: 8px;">🗑️ Очистить</button>
+          <label class="toggle" style="margin-left: auto; display: flex; align-items: center; gap: 6px;">
+            <span style="font-size: 12px; color: var(--text-secondary);">Автопрокрутка</span>
+            <input type="checkbox" id="autoScroll" checked>
+            <span class="slider"></span>
+          </label>
+          <span class="log-count" id="logCount">0 записей</span>
+        </div>
+
+        <div class="log-container" id="logContainer">
+          <div style="padding: 40px; text-align: center; color: var(--text-muted);">
+            Ожидание логов...
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Toast container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+// ===================================================
+// Navigation
+// ===================================================
+document.querySelectorAll('.nav-item').forEach(item => {
+  item.addEventListener('click', () => {
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    item.classList.add('active');
+    const page = document.getElementById('page-' + item.dataset.page);
+    if (page) page.classList.add('active');
+  });
+});
+
+// ===================================================
+// Toast
+// ===================================================
+function showToast(message, type = 'success') {
+  const container = document.getElementById('toastContainer');
+  const toast = document.createElement('div');
+  toast.className = 'toast ' + type;
+  toast.textContent = message;
+  container.appendChild(toast);
+  setTimeout(() => toast.remove(), 3000);
+}
+
+// ===================================================
+// Status polling
+// ===================================================
+async function updateStatus() {
+  try {
+    const res = await fetch('/api/status');
+    const s = await res.json();
+
+    // Discord
+    const ds = document.getElementById('discordStatus');
+    ds.className = 'card-status ' + (s.discord_connected ? 'connected' : 'disconnected');
+    document.getElementById('discordUser').textContent = s.discord_user || '—';
+    document.getElementById('discordInfo').textContent = s.discord_connected
+      ? s.discord_guild + ' / #' + s.discord_channel
+      : 'Не подключён';
+
+    // Telegram
+    const ts = document.getElementById('telegramStatus');
+    ts.className = 'card-status ' + (s.telegram_connected ? 'connected' : 'disabled');
+    document.getElementById('telegramInfo').textContent = s.telegram_connected ? 'Подключён' : '—';
+    document.getElementById('telegramSub').textContent = s.telegram_connected ? 'Бот активен' : 'Не настроен';
+
+    // AI
+    const as = document.getElementById('aiStatus');
+    as.className = 'card-status ' + (s.ai_enabled ? 'connected' : 'disabled');
+    document.getElementById('aiInfo').textContent = s.ai_enabled ? 'Активен' : '—';
+    document.getElementById('aiSub').textContent = s.ai_enabled ? 'NVIDIA NIM' : 'Не настроен';
+
+    // DB
+    const dbs = document.getElementById('dbStatus');
+    dbs.className = 'card-status ' + (s.db_connected ? 'connected' : 'disconnected');
+    document.getElementById('dbInfo').textContent = s.db_connected ? 'Подключена' : '—';
+    document.getElementById('dbSub').textContent = s.db_connected ? 'SQLite' : 'Не подключена';
+
+    // Stats
+    document.getElementById('statCollected').textContent = s.messages_collected;
+    document.getElementById('statAnalyzed').textContent = s.messages_analyzed;
+    document.getElementById('statPublished').textContent = s.messages_published;
+    document.getElementById('statDuplicates').textContent = s.duplicates_found;
+
+    // Info
+    document.getElementById('uptime').value = s.uptime || '—';
+    document.getElementById('lastActivity').value = s.last_activity || '—';
+
+    // Global status
+    const gs = document.getElementById('globalStatus');
+    if (s.discord_connected || s.db_connected) {
+      gs.className = 'status-badge online';
+      gs.querySelector('span').textContent = 'Работает';
+    } else {
+      gs.className = 'status-badge offline';
+      gs.querySelector('span').textContent = 'Остановлен';
+    }
+  } catch (e) {}
+}
+setInterval(updateStatus, 5000);
+updateStatus();
+
+// ===================================================
+// Config
+// ===================================================
+async function loadConfig() {
+  try {
+    const res = await fetch('/api/config');
+    const cfg = await res.json();
+
+    // Simple fields
+    const simple = [
+      'discord_token', 'telegram_bot_token', 'telegram_channel_id',
+      'openai_api_key', 'openai_base_url', 'openai_model',
+      'vk_access_token', 'check_interval_minutes', 'daily_summary_hour',
+      'min_message_length', 'similarity_threshold',
+    ];
+    simple.forEach(key => {
+      const el = document.getElementById('cfg_' + key);
+      if (el && cfg[key] !== undefined) el.value = cfg[key];
+    });
+
+    // Nested sources.discord
+    if (cfg.sources && cfg.sources.discord) {
+      const d = cfg.sources.discord;
+      const gid = document.getElementById('cfg_guild_id');
+      const cid = document.getElementById('cfg_channel_id');
+      if (gid) gid.value = d.guild_id || '';
+      if (cid) cid.value = d.channel_id || '';
+    }
+
+    // Toggles
+    ['publish_high_priority', 'publish_medium_priority', 'publish_low_priority'].forEach(key => {
+      const el = document.getElementById('cfg_' + key);
+      if (el) el.checked = cfg[key] === true;
+    });
+  } catch (e) {
+    console.error('Failed to load config:', e);
+  }
+}
+
+async function saveConfig() {
+  const data = {};
+
+  // Simple fields
+  const simple = [
+    'discord_token', 'telegram_bot_token', 'telegram_channel_id',
+    'openai_api_key', 'openai_base_url', 'openai_model',
+    'vk_access_token', 'check_interval_minutes', 'daily_summary_hour',
+    'min_message_length', 'similarity_threshold',
+  ];
+  simple.forEach(key => {
+    const el = document.getElementById('cfg_' + key);
+    if (el) data[key] = el.value;
+  });
+
+  // Nested sources.discord
+  data.sources = {
+    discord: {
+      guild_id: document.getElementById('cfg_guild_id').value,
+      channel_id: document.getElementById('cfg_channel_id').value,
+    }
+  };
+
+  // Toggles (boolean)
+  ['publish_high_priority', 'publish_medium_priority', 'publish_low_priority'].forEach(key => {
+    const el = document.getElementById('cfg_' + key);
+    if (el) data[key] = el.checked;
+  });
+
+  try {
+    const res = await fetch('/api/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    const result = await res.json();
+    if (result.status === 'ok') {
+      showToast('✅ Настройки сохранены! Перезапустите бота.');
+    } else {
+      showToast('❌ Ошибка: ' + (result.error || 'неизвестная ошибка'), 'error');
+    }
+  } catch (e) {
+    showToast('❌ Ошибка сохранения', 'error');
+  }
+}
+
+// ===================================================
+// Logs
+// ===================================================
+let currentFilter = 'ALL';
+let totalLogs = 0;
+
+function setLogFilter(level, btn) {
+  currentFilter = level;
+  document.querySelectorAll('.log-filter').forEach(f => f.classList.remove('active'));
+  btn.classList.add('active');
+
+  document.querySelectorAll('.log-entry').forEach(entry => {
+    if (level === 'ALL') {
+      entry.classList.remove('hidden');
+    } else {
+      entry.classList.toggle('hidden', entry.dataset.level !== level);
+    }
+  });
+}
+
+function addLogEntry(entry) {
+  const container = document.getElementById('logContainer');
+
+  // Убираем "Ожидание логов..."
+  if (totalLogs === 0) {
+    container.innerHTML = '';
+  }
+
+  const div = document.createElement('div');
+  div.className = 'log-entry';
+  div.dataset.level = entry.level;
+  if (currentFilter !== 'ALL' && entry.level !== currentFilter) {
+    div.classList.add('hidden');
+  }
+  div.innerHTML = `
+    <span class="log-time">${entry.time}</span>
+    <span class="log-level ${entry.level}">${entry.level}</span>
+    <span class="log-message">${escapeHtml(entry.message)}</span>
+  `;
+  container.appendChild(div);
+  totalLogs++;
+
+  // Keep max 2000 entries in DOM
+  while (container.children.length > 2000) {
+    container.removeChild(container.firstChild);
+  }
+
+  document.getElementById('logCount').textContent = totalLogs + ' записей';
+
+  // Auto-scroll
+  if (document.getElementById('autoScroll').checked) {
+    container.scrollTop = container.scrollHeight;
+  }
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function clearLogs() {
+  const container = document.getElementById('logContainer');
+  container.innerHTML = '<div style="padding: 40px; text-align: center; color: var(--text-muted);">Ожидание логов...</div>';
+  totalLogs = 0;
+  document.getElementById('logCount').textContent = '0 записей';
+}
+
+// SSE real-time logs
+function connectLogs() {
+  const es = new EventSource('/api/logs/stream');
+  es.onmessage = (event) => {
+    try {
+      const entry = JSON.parse(event.data);
+      addLogEntry(entry);
+    } catch (e) {}
+  };
+  es.onerror = () => {
+    es.close();
+    setTimeout(connectLogs, 3000);
+  };
+}
+
+// ===================================================
+// Init
+// ===================================================
+loadConfig();
+connectLogs();
+</script>
+
+</body>
+</html>

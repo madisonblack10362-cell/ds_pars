@@ -23,12 +23,14 @@ if not exist "venv\Scripts\activate.bat" (
 
 echo.
 echo [*] Starting bot...
+echo [*] GUI will open at http://127.0.0.1:8080
 echo [*] Press Ctrl+C to stop
 echo.
 
 python bot.py
 
 :: Если бот упал — не закрываем окно сразу
+echo [*] GUI available at: http://127.0.0.1:8080
 echo.
 echo ============================================
 echo   Bot stopped. Press any key to close...

@@ -19,6 +19,7 @@ from deduplicator import Deduplicator
 from publisher import Publisher
 from scheduler import Scheduler
 from vk_monitor import VKMonitor
+from gui import WebGUI, LogStreamer, SharedState
 
 
 class DayZNewsMonitor:
@@ -44,6 +45,9 @@ class DayZNewsMonitor:
 
         self._shutdown_event = asyncio.Event()
         self._discord_enabled = False
+        self._gui: Optional[WebGUI] = None
+        self._log_streamer: Optional[LogStreamer] = None
+        self._shared_state = SharedState()
 
     def load_config(self) -> None:
         """Загружает конфигурацию из JSON-файла."""
@@ -408,9 +412,29 @@ class DayZNewsMonitor:
                 channel_id=int(discord_cfg["channel_id"]),
                 min_message_length=self.config.get("min_message_length", 20),
             )
+
+            # Обновляем статус для GUI после подключения
+            original_ready = discord_monitor.on_ready
+
+            async def on_ready_with_gui():
+                await original_ready()
+                if discord_monitor._ready:
+                    self._shared_state.discord_connected = True
+                    self._shared_state.discord_user = (
+                        f"{discord_monitor.user.name}"
+                        if discord_monitor.user else ""
+                    )
+                    guild = discord_monitor.get_guild(discord_monitor.guild_id)
+                    self._shared_state.discord_guild = guild.name if guild else ""
+                    channel = guild.get_channel(discord_monitor.channel_id) if guild else None
+                    self._shared_state.discord_channel = channel.name if channel else ""
+
+            discord_monitor.on_ready = on_ready_with_gui
+
             await discord_monitor.start_monitoring()
         except Exception as exc:
             logger.error("Discord-монитор остановлен с ошибкой: %s", exc)
+            self._shared_state.discord_connected = False
 
     # =====================================================================
     # Жизненный цикл
@@ -423,6 +447,28 @@ class DayZNewsMonitor:
         logger.info("=" * 60)
 
         await self.initialize()
+
+        # -----------------------------------------------------------------
+        # Веб-интерфейс (GUI)
+        # -----------------------------------------------------------------
+        self._log_streamer = LogStreamer()
+        logger.addHandler(self._log_streamer)
+
+        self._gui = WebGUI(
+            config_path=self.config_path,
+            log_handler=self._log_streamer,
+            state=self._shared_state,
+            port=8080,
+            auto_open=True,
+        )
+        self._gui.run_in_thread()
+        logger.info("Веб-интерфейс: http://127.0.0.1:8080")
+
+        # Обновляем состояние для GUI
+        self._shared_state.db_connected = self.db is not None
+        self._shared_state.ai_enabled = self.ai_analyzer is not None
+        self._shared_state.telegram_connected = self.publisher is not None
+        self._shared_state.vk_connected = self.vk_monitor is not None
 
         # Запускаем планировщик
         await self.scheduler.start()
