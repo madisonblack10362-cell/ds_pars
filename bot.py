@@ -20,7 +20,6 @@ from deduplicator import Deduplicator
 from publisher import Publisher
 from scheduler import Scheduler
 from vk_monitor import VKMonitor
-from gui_desktop import DesktopGUI, LogCapture
 
 
 class DayZNewsMonitor:
@@ -46,20 +45,23 @@ class DayZNewsMonitor:
 
         self._shutdown_event = asyncio.Event()
         self._discord_enabled = False
-        self._gui: Optional[DesktopGUI] = None
-        self._log_capture: Optional[LogCapture] = None
 
     def load_config(self) -> None:
         """Загружает конфигурацию из JSON-файла."""
-        config_file = Path(self.config_path)
+        config_file = Path(self.config_path).resolve()
         if not config_file.exists():
-            logger.error("Файл конфигурации не найден: %s", self.config_path)
-            sys.exit(1)
+            print(f"[BOT] Файл конфигурации не найден: {config_file}")
+            print(f"[BOT] Текущая директория: {os.getcwd()}")
+            logger.error("Файл конфигурации не найден: %s", config_file)
+            return
 
-        with open(config_file, "r", encoding="utf-8") as f:
-            self.config = json.load(f)
-
-        logger.info("Конфигурация загружена из %s", self.config_path)
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                self.config = json.load(f)
+            logger.info("Конфигурация загружена из %s (%d ключей)", config_file, len(self.config))
+        except Exception as e:
+            print(f"[BOT] Ошибка чтения конфига: {e}")
+            logger.error("Ошибка чтения конфига: %s", e)
 
     async def initialize(self) -> None:
         """Инициализирует все компоненты системы."""
@@ -412,26 +414,9 @@ class DayZNewsMonitor:
                 channel_id=int(discord_cfg["channel_id"]),
                 min_message_length=self.config.get("min_message_length", 20),
             )
-
-            # Обновляем статус для GUI после подключения
-            original_ready = discord_monitor.on_ready
-
-            async def on_ready_with_gui():
-                await original_ready()
-                if discord_monitor._ready:
-                    self._gui.update_status("discord", True)
-                    self._gui.update_status("discord_user", discord_monitor.user.name if discord_monitor.user else "")
-                    guild = discord_monitor.get_guild(discord_monitor.guild_id)
-                    self._gui.update_status("discord_guild", guild.name if guild else "")
-                    channel = guild.get_channel(discord_monitor.channel_id) if guild else None
-                    self._gui.update_status("discord_channel", channel.name if channel else "")
-
-            discord_monitor.on_ready = on_ready_with_gui
-
             await discord_monitor.start_monitoring()
         except Exception as exc:
             logger.error("Discord-монитор остановлен с ошибкой: %s", exc)
-            self._gui.update_status("discord", False)
 
     # =====================================================================
     # Жизненный цикл
@@ -444,13 +429,6 @@ class DayZNewsMonitor:
         logger.info("=" * 60)
 
         await self.initialize()
-
-        # Обновляем статус для GUI (если GUI уже запущен)
-        if self._gui:
-            self._gui.update_status("db", self.db is not None)
-            self._gui.update_status("ai", self.ai_analyzer is not None)
-            self._gui.update_status("telegram", self.publisher is not None)
-            self._gui.update_status("vk", self.vk_monitor is not None)
 
         # Запускаем планировщик
         await self.scheduler.start()
@@ -516,62 +494,60 @@ class DayZNewsMonitor:
 # =============================================================================
 
 
-def run_bot_async(monitor: "DayZNewsMonitor"):
-    """Запускает asyncio-цикл бота в фоновом потоке."""
+def _run_bot_thread(monitor, gui=None):
+    """Фоновый поток для бота. Создаёт свой asyncio event loop."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+
     try:
         loop.run_until_complete(monitor.run())
+    except KeyboardInterrupt:
+        pass
     except Exception as exc:
-        logger.critical("Критическая ошибка бота: %s", exc, exc_info=True)
+        logger.critical("Критическая ошибка в потоке бота: %s", exc, exc_info=True)
+    finally:
+        loop.close()
 
 
 def main():
-    """Главная функция — GUI в главном потоке, бот в фоне."""
+    """
+    Главная функция.
+    GUI запускается в ГЛАВНОМ потоке (требование tkinter на Windows).
+    Бот запускается в фоновом daemon-потоке.
+    """
     config_path = os.environ.get("DAYZ_CONFIG", "config.json")
 
+    # Создаём экземпляр бота
     monitor = DayZNewsMonitor(config_path=config_path)
 
-    # 1. Инициализация компонентов (синхронная часть — загрузка конфига)
+    # Загружаем конфиг заранее, чтобы GUI мог его отобразить
     monitor.load_config()
+    print(f"[MAIN] Конфиг загружен: {len(monitor.config)} ключей")
+    print(f"[MAIN] Ключи: {list(monitor.config.keys())}")
 
-    # 2. Запускаем GUI на главном потоке (требование tkinter)
-    import customtkinter as ctk
-    try:
-        ctk.set_appearance_mode("dark")
-        ctk.set_default_color_theme("blue")
-    except Exception:
-        pass
-
-    gui = DesktopGUI(
-        config_path=config_path,
-        log_capture=LogCapture(),
-    )
-
-    gui.root = ctk.CTk()
-    gui.root.title("DayZ News Monitor")
-    gui.root.geometry("900x650")
-    gui.root.minsize(750, 500)
-    gui.root.configure(fg_color=gui.BG)
-    gui.root.protocol("WM_DELETE_WINDOW", gui._on_close)
-
-    gui._build_ui()
-    logger.addHandler(gui.log_capture)
-
-    # 3. Запускаем бота в фоновом потоке
+    # Запускаем бот в фоновом потоке
     bot_thread = threading.Thread(
-        target=run_bot_async,
+        target=_run_bot_thread,
         args=(monitor,),
         daemon=True,
-        name="BotAsync",
     )
-    monitor._gui = gui
     bot_thread.start()
+    print("[MAIN] Бот запущен в фоновом потоке")
 
-    # 4. Запускаем цикл логов через after() и главное окно
-    gui.root.after(500, gui._poll_logs)
-    gui.root.mainloop()
-    gui._running = False
+    # GUI — в главном потоке
+    try:
+        from gui_desktop import DesktopGUI
+        gui = DesktopGUI(config_path=config_path, bot_instance=monitor)
+        gui.set_bot_status("Bot Starting...", "#ffd93d")
+        gui.run()  # mainloop() — блокирует
+    except ImportError:
+        print("[MAIN] gui_desktop.py не найден — работаем без GUI")
+        bot_thread.join()
+    except KeyboardInterrupt:
+        print("[MAIN] Прервано пользователем")
+    except Exception as exc:
+        logger.critical("Критическая ошибка GUI: %s", exc, exc_info=True)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
