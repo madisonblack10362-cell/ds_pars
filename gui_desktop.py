@@ -463,7 +463,7 @@ class DesktopGUI:
         ).pack(anchor="w", padx=15, pady=6)
 
     def _add_entry(self, parent, label_text, default_value, show=None):
-        row = ctk.CTkFrame(parent, fg_color=("transparent", "transparent"))
+        row = ctk.CTkFrame(parent, fg_color="transparent")
         row.pack(fill="x", padx=15, pady=2)
 
         lbl = ctk.CTkLabel(
@@ -492,7 +492,7 @@ class DesktopGUI:
         return var
 
     def _add_checkbox(self, parent, label_text, default_value):
-        row = ctk.CTkFrame(parent, fg_color=("transparent", "transparent"))
+        row = ctk.CTkFrame(parent, fg_color="transparent")
         row.pack(fill="x", padx=15, pady=2)
 
         var = tk.BooleanVar(value=bool(default_value))
