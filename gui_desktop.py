@@ -181,26 +181,44 @@ class DesktopGUI:
             font=("Segoe UI", 10)
         ).pack(side="right", padx=8)
 
-        # Tabs
-        self.tabs = ctk.CTkTabview(
-            self.root, fg_color=BG_DARK,
-            segmented_button_fg_color=BG_SECONDARY,
-            segmented_button_selected_color=ACCENT,
-            segmented_button_selected_hover_color=ACCENT_HOVER,
-            segmented_button_unselected_color=BG_SECONDARY,
-            segmented_button_unselected_hover_color=BG_HOVER,
-            text_color=TEXT_MUTED,
-            text_color_selected=TEXT_HEADER,
-        )
-        self.tabs.pack(fill="both", expand=True, padx=12, pady=(8, 12))
+        # Tab bar
+        tab_bar = tk.Frame(self.root, bg=BG_PRIMARY, height=40)
+        tab_bar.pack(fill="x", padx=12, pady=(8, 0))
 
-        tab_dash = self.tabs.add(" Dashboard ")
-        tab_settings = self.tabs.add(" Settings ")
-        tab_logs = self.tabs.add(" Logs ")
+        self.tab_buttons = []
+        tab_names = ["Dashboard", "Settings", "Logs"]
 
-        self._build_dashboard(tab_dash)
-        self._build_settings(tab_settings)
-        self._build_logs(tab_logs)
+        for i, name in enumerate(tab_names):
+            btn = tk.Frame(tab_bar, bg=BG_TERTIARY if i == 0 else BG_PRIMARY, cursor="hand2")
+            btn.pack(side="left", padx=(0, 2))
+            btn.pack_propagate(False)
+
+            lbl = tk.Label(
+                btn, text=f"  {name}  ", bg=btn["bg"], fg=TEXT_HEADER if i == 0 else TEXT_MUTED,
+                font=("Segoe UI", 10, "bold" if i == 0 else "normal"), cursor="hand2",
+                padx=12, pady=8,
+            )
+            lbl.pack(fill="both", expand=True)
+
+            btn.bind("<Button-1>", lambda e, idx=i, b=btn, l=lbl: self._switch_tab(idx, b, l))
+            lbl.bind("<Button-1>", lambda e, idx=i, b=btn, l=lbl: self._switch_tab(idx, b, l))
+            self.tab_buttons.append((btn, lbl))
+
+        # Tab frames
+        self.tab_container = tk.Frame(self.root, bg=BG_DARK)
+        self.tab_container.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+
+        self.tab_frames = []
+        for name in tab_names:
+            frame = tk.Frame(self.tab_container, bg=BG_DARK)
+            self.tab_frames.append(frame)
+
+        self._build_dashboard(self.tab_frames[0])
+        self._build_settings(self.tab_frames[1])
+        self._build_logs(self.tab_frames[2])
+
+        # Show first tab
+        self.tab_frames[0].pack(fill="both", expand=True)
 
     # ----------------------------------------------------------------
     # Dashboard
@@ -478,6 +496,16 @@ class DesktopGUI:
         self.log_text.tag_configure("warning", foreground=YELLOW)
         self.log_text.tag_configure("error", foreground=RED)
         self.log_text.tag_configure("default", foreground=TEXT_MUTED)
+
+    def _switch_tab(self, idx, btn, lbl):
+        for frame in self.tab_frames:
+            frame.pack_forget()
+        for i, (b, l) in enumerate(self.tab_buttons):
+            b.configure(bg=BG_TERTIARY if i == idx else BG_PRIMARY)
+            l.configure(bg=BG_TERTIARY if i == idx else BG_PRIMARY,
+                        fg=TEXT_HEADER if i == idx else TEXT_MUTED,
+                        font=("Segoe UI", 10, "bold" if i == idx else "normal"))
+        self.tab_frames[idx].pack(fill="both", expand=True)
 
     # ================================================================
     # Populate / Reload
