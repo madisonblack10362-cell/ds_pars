@@ -19,7 +19,7 @@ from deduplicator import Deduplicator
 from publisher import Publisher
 from scheduler import Scheduler
 from vk_monitor import VKMonitor
-from gui import WebGUI, LogStreamer, SharedState
+from gui_desktop import DesktopGUI, LogCapture
 
 
 class DayZNewsMonitor:
@@ -45,9 +45,8 @@ class DayZNewsMonitor:
 
         self._shutdown_event = asyncio.Event()
         self._discord_enabled = False
-        self._gui: Optional[WebGUI] = None
-        self._log_streamer: Optional[LogStreamer] = None
-        self._shared_state = SharedState()
+        self._gui: Optional[DesktopGUI] = None
+        self._log_capture: Optional[LogCapture] = None
 
     def load_config(self) -> None:
         """Загружает конфигурацию из JSON-файла."""
@@ -419,22 +418,19 @@ class DayZNewsMonitor:
             async def on_ready_with_gui():
                 await original_ready()
                 if discord_monitor._ready:
-                    self._shared_state.discord_connected = True
-                    self._shared_state.discord_user = (
-                        f"{discord_monitor.user.name}"
-                        if discord_monitor.user else ""
-                    )
+                    self._gui.update_status("discord", True)
+                    self._gui.update_status("discord_user", discord_monitor.user.name if discord_monitor.user else "")
                     guild = discord_monitor.get_guild(discord_monitor.guild_id)
-                    self._shared_state.discord_guild = guild.name if guild else ""
+                    self._gui.update_status("discord_guild", guild.name if guild else "")
                     channel = guild.get_channel(discord_monitor.channel_id) if guild else None
-                    self._shared_state.discord_channel = channel.name if channel else ""
+                    self._gui.update_status("discord_channel", channel.name if channel else "")
 
             discord_monitor.on_ready = on_ready_with_gui
 
             await discord_monitor.start_monitoring()
         except Exception as exc:
             logger.error("Discord-монитор остановлен с ошибкой: %s", exc)
-            self._shared_state.discord_connected = False
+            self._gui.update_status("discord", False)
 
     # =====================================================================
     # Жизненный цикл
@@ -449,26 +445,23 @@ class DayZNewsMonitor:
         await self.initialize()
 
         # -----------------------------------------------------------------
-        # Веб-интерфейс (GUI)
+        # Десктопный GUI
         # -----------------------------------------------------------------
-        self._log_streamer = LogStreamer()
-        logger.addHandler(self._log_streamer)
+        self._log_capture = LogCapture()
+        logger.addHandler(self._log_capture)
 
-        self._gui = WebGUI(
+        self._gui = DesktopGUI(
             config_path=self.config_path,
-            log_handler=self._log_streamer,
-            state=self._shared_state,
-            port=8080,
-            auto_open=True,
+            log_capture=self._log_capture,
         )
         self._gui.run_in_thread()
-        logger.info("Веб-интерфейс: http://127.0.0.1:8080")
+        logger.info("Десктопный GUI запущен")
 
-        # Обновляем состояние для GUI
-        self._shared_state.db_connected = self.db is not None
-        self._shared_state.ai_enabled = self.ai_analyzer is not None
-        self._shared_state.telegram_connected = self.publisher is not None
-        self._shared_state.vk_connected = self.vk_monitor is not None
+        # Обновляем статус для GUI
+        self._gui.update_status("db", self.db is not None)
+        self._gui.update_status("ai", self.ai_analyzer is not None)
+        self._gui.update_status("telegram", self.publisher is not None)
+        self._gui.update_status("vk", self.vk_monitor is not None)
 
         # Запускаем планировщик
         await self.scheduler.start()
