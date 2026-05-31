@@ -136,36 +136,35 @@ class Publisher:
         lines = []
         lines.append(f"{priority_icon} <b>{type_label}</b>")
         lines.append("")
-        lines.append(f"\U0001f3ae <b>{server_name}</b>")
 
+        # Вводное предложение
+        intro_parts = []
+        intro_parts.append(f"Сервер <b>{server_name}</b>")
         if date_str:
-            lines.append(f"\U0001f4c5 {date_str}")
-
+            intro_parts.append(f"от {date_str}")
         if author:
-            lines.append(f"\U0001f464 Автор: <i>{author}</i>")
+            intro_parts.append(f"автор: <i>{author}</i>")
+        lines.append(", ".join(intro_parts) + ".")
 
-        lines.append("")
-
-        # Резюме
+        # Блок с деталями через blockquote
+        bq_lines = []
         if summary:
-            lines.append(f"<i>{summary}</i>")
-            lines.append("")
-
-        # Основные изменения (из оригинального текста)
+            bq_lines.append(summary)
         if original_text and len(original_text) > len(summary):
             trimmed = original_text[:1000]
             paragraphs = [p.strip() for p in trimmed.split("\n") if p.strip()]
-            lines.append("<b>Подробнее:</b>")
-            for para in paragraphs[:10]:
-                # Оборачиваем названия предметов/серверов в code
+            for para in paragraphs[:8]:
                 para_escaped = para.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                lines.append(f"\u2022 {para_escaped}")
+                bq_lines.append(f"\u2022 {para_escaped}")
+
+        if bq_lines:
+            lines.append("")
+            lines.append("<blockquote>" + "\n".join(bq_lines) + "</blockquote>")
 
         # Ссылки — кликабельные
         if links:
             lines.append("")
             for link in links[:3]:
-                # Берём домен как текст ссылки
                 from urllib.parse import urlparse
                 try:
                     domain = urlparse(link).netloc
