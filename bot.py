@@ -18,7 +18,7 @@ from database import Database
 
 # Web Panel integration (опционально — нужен httpx)
 try:
-    from web_app_integration import setup_web_app_button, send_to_web_panel
+    from web_app_integration import setup_web_app_button, send_to_web_panel, check_publish_queue, mark_published_on_panel
     HAS_WEB_PANEL = True
 except ImportError:
     HAS_WEB_PANEL = False
@@ -224,6 +224,14 @@ class DayZNewsMonitor:
                 minutes=1,
             )
 
+        # Проверка очереди публикации с веб-панели (по расписанию)
+        if HAS_WEB_PANEL and self.web_panel_url and self.publisher:
+            self.scheduler.add_interval_job(
+                func=self._task_publish_from_panel,
+                job_id="publish_from_panel",
+                minutes=1,
+            )
+
         # Ежедневная сводка
         summary_hour = cfg.get("daily_summary_hour", 10)
         summary_minute = cfg.get("daily_summary_minute", 0)
@@ -390,6 +398,41 @@ class DayZNewsMonitor:
                 telegram_message_id=tg_msg_id,
                 publish_format=msg.get("news_type", ""),
             )
+
+    async def _task_publish_from_panel(self) -> None:
+        """Публикует новости из очереди веб-панели по расписанию."""
+        if not self.publisher or not self.web_panel_url:
+            return
+        try:
+            queue = await check_publish_queue(
+                web_app_url=self.web_panel_url,
+                bot_api_key=self.web_panel_api_key,
+            )
+            for item in queue:
+                news_id = item.get('id', '')
+                text = item.get('formatted_post', '') or item.get('summary', '')
+                images = item.get('images', '[]')
+                if isinstance(images, str):
+                    try:
+                        images = json.loads(images)
+                    except (json.JSONDecodeError, TypeError):
+                        images = []
+                url_images = [img for img in images if isinstance(img, str) and img.startswith('http')]
+
+                if text:
+                    tg_msg_id = await self.publisher.publish_message(
+                        text=text,
+                        image_urls=url_images if url_images else None,
+                    )
+                    if tg_msg_id:
+                        await mark_published_on_panel(
+                            news_id=news_id,
+                            web_app_url=self.web_panel_url,
+                            bot_api_key=self.web_panel_api_key,
+                        )
+                        logger.info('Опубликовано с панели: %s', news_id)
+        except Exception as exc:
+            logger.debug('Очередь панели: %s', exc)
 
     async def _task_daily_summary(self) -> None:
         """Публикует ежедневную сводку."""

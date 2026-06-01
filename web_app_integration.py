@@ -207,3 +207,69 @@ async def get_moderation_status(
     except Exception as e:
         print(f"[WebApp] Ошибка проверки статуса: {e}")
         return {"pending": 0, "total_pages": 0}
+
+
+async def check_publish_queue(
+    web_app_url: str,
+    bot_api_key: str = "",
+    timeout: float = 15.0,
+) -> list:
+    """
+    Проверяет очередь публикации на веб-панели.
+    Возвращает новости со статусом 'scheduled', у которых scheduledAt <= сейчас.
+
+    Returns:
+        Список новостей для публикации
+    """
+    try:
+        headers = {}
+        if bot_api_key:
+            headers["Authorization"] = f"Bearer {bot_api_key}"
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(
+                f"{web_app_url}/api/publish-queue",
+                headers=headers,
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("queue", [])
+
+            return []
+    except Exception as e:
+        print(f"[WebApp] Ошибка проверки очереди публикации: {e}")
+        return []
+
+
+async def mark_published_on_panel(
+    news_id: str,
+    web_app_url: str,
+    bot_api_key: str = "",
+    timeout: float = 10.0,
+) -> bool:
+    """
+    Отмечает новость как опубликованную на веб-панели.
+
+    Args:
+        news_id: ID новости на панели
+        web_app_url: URL панели
+        bot_api_key: API ключ
+
+    Returns:
+        True если успешно
+    """
+    try:
+        headers = {}
+        if bot_api_key:
+            headers["Authorization"] = f"Bearer {bot_api_key}"
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{web_app_url}/api/news/{news_id}/publish",
+                headers=headers,
+            )
+            return response.status_code in (200, 201)
+    except Exception as e:
+        print(f"[WebApp] Ошибка отметки публикации: {e}")
+        return False
