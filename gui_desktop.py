@@ -327,12 +327,12 @@ class DesktopGUI:
         self._log_text.pack(side="left", fill="both", expand=True)
         self._log_scrollbar.configure(command=self._log_text.yview)
 
-        # UserScroll binding — stop auto-scroll when user scrolls up
+        # Scrolling on Windows: CTkTabview eats MouseWheel, so bind globally
+        # when cursor enters the log area and unbind on leave
         self._user_scrolled = False
-        self._log_text.bind("<MouseWheel>", self._on_user_scroll)
-        self._log_text.bind("<Button-4>", self._on_user_scroll)   # Linux scroll up
-        self._log_text.bind("<Button-5>", self._on_user_scroll)   # Linux scroll down
-        self._log_text.bind("<ButtonPress-1>", self._on_user_click)  # Click to resume auto-scroll
+        self._log_frame = log_frame
+        log_frame.bind("<Enter>", self._bind_log_mousewheel)
+        log_frame.bind("<Leave>", self._unbind_log_mousewheel)
 
         self._log_text.tag_configure("TIME", foreground=self.TEXT3)
         self._log_text.tag_configure("LEVEL_INFO", foreground=self.ACCENT)
@@ -485,28 +485,30 @@ class DesktopGUI:
             except Exception:
                 pass
 
-    def _on_user_scroll(self, event):
-        """Detect if user scrolled away from the bottom — pause auto-scroll."""
+    def _bind_log_mousewheel(self, event):
+        """Bind mousewheel globally so CTkTabview doesn't eat it."""
+        self.root.bind_all("<MouseWheel>", self._on_mousewheel)
+        self.root.bind_all("<Button-4>", self._on_mousewheel)
+        self.root.bind_all("<Button-5>", self._on_mousewheel)
+
+    def _unbind_log_mousewheel(self, event):
+        """Unbind global mousewheel when cursor leaves the log area."""
+        self.root.unbind_all("<MouseWheel>")
+        self.root.unbind_all("<Button-4>")
+        self.root.unbind_all("<Button-5>")
+
+    def _on_mousewheel(self, event):
+        """Scroll the log text and detect user scroll direction."""
         try:
+            # Windows: event.delta is ±120; Linux: event.num 4/5
             if event.num == 4 or (hasattr(event, 'delta') and event.delta > 0):
-                # Scrolling up
+                self._log_text.yview_scroll(-3, "units")
                 self._user_scrolled = True
             elif event.num == 5 or (hasattr(event, 'delta') and event.delta < 0):
-                # Scrolling down — check if we reached the bottom
+                self._log_text.yview_scroll(3, "units")
                 yview = self._log_text.yview()
                 if yview[1] >= 1.0:
                     self._user_scrolled = False
-        except Exception:
-            pass
-
-    def _on_user_click(self, event):
-        """Click on log area: if at the bottom, resume auto-scroll."""
-        try:
-            self._log_text.configure(state="normal")
-            yview = self._log_text.yview()
-            self._log_text.configure(state="disabled")
-            if yview[1] >= 1.0:
-                self._user_scrolled = False
         except Exception:
             pass
 
