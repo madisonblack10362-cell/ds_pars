@@ -116,38 +116,30 @@ class DesktopGUI:
 
     def _setup_mousewheel_router(self):
         """Set up global mousewheel routing on the raw tkinter root."""
-        # Get the underlying tkinter.Tk window — it allows bind_all
         tk_root = self.root.winfo_toplevel()
-
-        # Global mousewheel handler on the raw tkinter root
         tk_root.bind_all("<MouseWheel>", self._on_global_mousewheel, add="+")
         tk_root.bind_all("<Button-4>", self._on_global_mousewheel, add="+")
         tk_root.bind_all("<Button-5>", self._on_global_mousewheel, add="+")
 
     def _on_global_mousewheel(self, event):
-        """Route mousewheel to the active scroll target only when on Логи tab."""
-        # Only handle scroll when Логи tab is active.
-        # For other tabs, do nothing — CTkScrollableFrame handles settings.
+        """Scroll logs when Логи tab is active. Simple — no Enter/Leave needed."""
         try:
             current_tab = self.notebook.get()
             if current_tab != "Логи":
-                return
+                return  # Settings tab handled by CTkScrollableFrame
         except Exception:
             return
 
-        target = self._scroll_target
-        if target is None:
-            return
+        # Always scroll the log textbox when on Логи tab — period.
+        # No need for Enter/Leave tracking, CTkTabview breaks those.
         try:
-            # Windows: event.delta = +-120 per notch
-            # Linux: event.num = 4 (up) or 5 (down)
+            tb = self._log_text._textbox
             if event.num == 4 or (hasattr(event, 'delta') and event.delta > 0):
-                target.yview_scroll(-3, "units")
+                tb.yview_scroll(-3, "units")
                 self._user_scrolled = True
             elif event.num == 5 or (hasattr(event, 'delta') and event.delta < 0):
-                target.yview_scroll(3, "units")
-                # Check if scrolled to bottom — resume auto-scroll
-                yview = target.yview()
+                tb.yview_scroll(3, "units")
+                yview = tb.yview()
                 if yview[1] >= 1.0:
                     self._user_scrolled = False
         except Exception:
@@ -367,7 +359,8 @@ class DesktopGUI:
                       fg_color=self.BG3, hover_color=self.RED,
                       command=self._clear_logs).pack(side="right", padx=3, pady=6)
 
-        # CTkTextbox for log display with scrolling support.
+        # CTkTextbox for log display. state="normal" so user can select and
+        # copy text. Keyboard input is blocked via <Key> binding instead.
         self._user_scrolled = False
         self._log_text = ctk.CTkTextbox(
             parent,
@@ -375,14 +368,19 @@ class DesktopGUI:
             text_color=self.TEXT,
             font=("Consolas", 11),
             border_width=0,
-            state="disabled",
             activate_scrollbars=True,
         )
         self._log_text.pack(fill="both", expand=True, padx=8, pady=(0, 8))
         self._log_text._textbox.configure(wrap="word")
 
-        # Configure colored tags on the internal tk.Text widget
+        # Block keyboard typing but allow selection, copy, navigation
         tb = self._log_text._textbox
+        tb.bind("<Key>", self._block_typing)
+        tb.bind("<Control-c>", lambda e: tb.event_generate("<<Copy>>"))
+        tb.bind("<Control-a>", lambda e: tb.tag_add("sel", "1.0", "end"))
+        tb.bind("<Button-1>", lambda e: tb.focus_set())
+
+        # Configure colored tags
         tb.tag_configure("TIME", foreground=self.TEXT3)
         tb.tag_configure("LEVEL_INFO", foreground=self.ACCENT)
         tb.tag_configure("LEVEL_WARNING", foreground=self.YELLOW)
@@ -390,33 +388,24 @@ class DesktopGUI:
         tb.tag_configure("LEVEL_DEBUG", foreground=self.TEXT3)
         tb.tag_configure("MSG", foreground=self.TEXT)
 
-        # Allow text selection and copy (Ctrl+C)
-        tb.bind("<Control-c>", lambda e: tb.event_generate("<<Copy>>"))
-        tb.bind("<Control-a>", lambda e: tb.tag_add("sel", "1.0", "end"))
-
-        # Enter/Leave on the internal textbox to activate/deactivate scroll routing
-        # This is key: we bind on the raw tkinter.Text, NOT on the CTkTextbox,
-        # because CTkBaseClass blocks bind_all and interferes with event routing.
-        tb.bind("<Enter>", self._on_log_enter)
-        tb.bind("<Leave>", self._on_log_leave)
-        tb.bind("<Button-1>", self._on_log_click)  # Also on click for focus
-
         self._total_lines = 0
         self._filter_level = "ALL"
 
-    def _on_log_enter(self, event):
-        """Mouse entered the log text area — activate scroll routing."""
-        self._scroll_target = self._log_text._textbox
-
-    def _on_log_leave(self, event):
-        """Mouse left the log text area — deactivate scroll routing."""
-        if self._scroll_target is self._log_text._textbox:
-            self._scroll_target = None
-
-    def _on_log_click(self, event):
-        """Click in log text — focus it and activate scroll routing."""
-        self._log_text._textbox.focus_set()
-        self._scroll_target = self._log_text._textbox
+    def _block_typing(self, event):
+        """Block keyboard input but allow Ctrl combos and navigation."""
+        if event.keysym in ("Control_L", "Control_R", "Shift_L", "Shift_R",
+                             "Alt_L", "Alt_R", "Caps_Lock",
+                             "Left", "Right", "Up", "Down",
+                             "Home", "End", "Next", "Prior",
+                             "F1", "F2", "F3", "F4", "F5", "F6",
+                             "F7", "F8", "F9", "F10", "F11", "F12",
+                             "Insert", "Delete"):
+            return
+        if event.state & 0x4:  # Ctrl held
+            return
+        if event.state & 0x1:  # Shift held
+            return
+        return "break"
 
     # ================================================================
     # Config load / save
@@ -522,9 +511,7 @@ class DesktopGUI:
 
     def _clear_logs(self):
         self._total_lines = 0
-        self._log_text.configure(state="normal")
         self._log_text._textbox.delete("1.0", "end")
-        self._log_text.configure(state="disabled")
         self._log_count.configure(text="0 записей")
 
     def _poll_logs(self):
@@ -542,7 +529,6 @@ class DesktopGUI:
 
             try:
                 tb = self._log_text._textbox
-                self._log_text.configure(state="normal")
                 tb.insert("end", f" {entry['time']} ", "TIME")
                 tag = f"LEVEL_{level}"
                 if tag not in ("LEVEL_INFO", "LEVEL_WARNING", "LEVEL_ERROR", "LEVEL_DEBUG"):
@@ -556,7 +542,6 @@ class DesktopGUI:
                 # Auto-scroll only if user hasn't manually scrolled up
                 if not self._user_scrolled:
                     tb.see("end")
-                self._log_text.configure(state="disabled")
                 self._log_count.configure(text=f"{self._total_lines} записей")
             except Exception:
                 pass
