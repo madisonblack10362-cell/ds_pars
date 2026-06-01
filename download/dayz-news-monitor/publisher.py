@@ -15,6 +15,78 @@ from aiogram.types import InputMediaPhoto, FSInputFile
 
 from logger import logger
 
+# Telegram HTML поддерживает только эти теги
+TELEGRAM_ALLOWED_TAGS = {
+    'b', 'strong', 'i', 'em', 'u', 'ins', 's', 'del', 'strike',
+    'code', 'pre', 'a', 'tg-spoiler', 'blockquote',
+}
+
+
+def sanitize_html_for_telegram(text: str) -> str:
+    """
+    Очищает HTML-текст от тегов, которые Telegram не поддерживает.
+    Оставляет только разрешённые теги, убирает все атрибуты кроме href у <a>.
+    Также исправляет незакрытые теги и убирает некорректные вложения.
+    """
+    import re
+
+    if not text:
+        return text
+
+    # Убираем HTML-комментарии
+    text = re.sub(r'<!--.*?-->', '', text, flags=re.DOTALL)
+
+    # Убираем теги, которые Telegram НЕ поддерживает, но оставляем содержимое
+    # Сначала заменим разрешённые теги на плейсхолдеры
+    placeholders = {}
+
+    def _store(match):
+        tag = match.group(0)
+        key = f'\x00TAG{len(placeholders)}\x00'
+        placeholders[key] = tag
+        return key
+
+    # Сохраняем открывающие и закрывающие разрешённые теги
+    allowed_pattern = r'</?(?:' + '|'.join(TELEGRAM_ALLOWED_TAGS) + r')(?:\s[^>]*)?>'
+    text = re.sub(allowed_pattern, _store, text, flags=re.IGNORECASE)
+
+    # Убираем все оставшиеся HTML-теги (не разрешённые Telegram)
+    text = re.sub(r'<[^>]+>', '', text)
+
+    # Возвращаем разрешённые теги на место
+    for key, tag in placeholders.items():
+        text = text.replace(key, tag)
+
+    # Убираем атрибуты у разрешённых тегов, кроме href у <a>
+    def _clean_attrs(match):
+        tag = match.group(0)
+        if tag.startswith('</'):
+            return tag  # Закрывающий тег — атрибутов нет
+        # Оставляем href у <a>
+        if re.match(r'<a\s', tag, re.IGNORECASE):
+            href_match = re.search(r'href="([^"]*)"', tag)
+            if href_match:
+                return f'<a href="{href_match.group(1)}">'
+        # Все остальные теги — убираем атрибуты
+        clean = re.sub(r'<(\w+)\s+[^>]*>', r'<\1>', tag)
+        return clean
+
+    text = re.sub(r'</?(?:' + '|'.join(TELEGRAM_ALLOWED_TAGS) + r')(?:\s[^>]*)?>',
+                  _clean_attrs, text, flags=re.IGNORECASE)
+
+    # Исправляем незакрытые blockquote (Telegram поддерживает, но они должны быть парными)
+    # Считаем открывающие и закрывающие
+    open_bq = len(re.findall(r'<blockquote>', text, re.IGNORECASE))
+    close_bq = len(re.findall(r'</blockquote>', text, re.IGNORECASE))
+    if open_bq > close_bq:
+        text += '</blockquote>' * (open_bq - close_bq)
+
+    # Убираем пустые строки подряд (больше 3)
+    text = re.sub(r'\n{4,}', '\n\n\n', text)
+
+    return text.strip()
+
+
 # Соответствие типов новостей и иконок
 NEWS_TYPE_ICONS = {
     "wipe": "\u26a0\ufe0f ВАЙП",
@@ -249,6 +321,9 @@ class Publisher:
 
         # Ограничиваем количество изображений
         local_images = local_images[: self.max_images_per_post]
+
+        # Очищаем HTML от тегов, которые Telegram не поддерживает
+        text = sanitize_html_for_telegram(text)
 
         try:
             if local_images:
