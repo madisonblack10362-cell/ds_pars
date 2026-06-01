@@ -1,8 +1,0 @@
-node_modules/
-.next/
-.env
-.env.local
-*.db
-*.log
-server.log
-dev.log
