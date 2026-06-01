@@ -313,7 +313,7 @@ class DayZNewsMonitor:
                     )
 
                     # Отправить на веб-панель для модерации
-                    if HAS_WEB_PANEL and self.web_panel_url and self.web_panel_api_key:
+                    if HAS_WEB_PANEL and self.web_panel_url:
                         try:
                             await send_to_web_panel(
                                 news_data={
@@ -327,10 +327,10 @@ class DayZNewsMonitor:
                                     "images": json.loads(msg.get("images", "[]")) if msg.get("images") else [],
                                 },
                                 web_app_url=self.web_panel_url,
-                                bot_api_key=self.web_panel_api_key,
+                                bot_api_key=self.web_panel_api_key or None,
                             )
                         except Exception as web_err:
-                            logger.debug("Веб-панель: %s", web_err)
+                            logger.warning("Веб-панель: ошибка отправки: %s", web_err)
                 else:
                     await self.db.save_processed(
                         message_id=msg_id,
@@ -339,6 +339,26 @@ class DayZNewsMonitor:
                         should_publish=False,
                         summary="Ошибка анализа",
                     )
+                    # Всё равно отправляем на веб-панель как черновик
+                    if HAS_WEB_PANEL and self.web_panel_url:
+                        try:
+                            await send_to_web_panel(
+                                news_data={
+                                    "sourceId": msg.get("source_type", "discord"),
+                                    "externalId": str(msg_id),
+                                    "serverName": "",
+                                    "content": text,
+                                    "summary": "",
+                                    "formattedPost": "",
+                                    "newsType": "other",
+                                    "priority": "low",
+                                    "images": json.loads(msg.get("images", "[]")) if msg.get("images") else [],
+                                },
+                                web_app_url=self.web_panel_url,
+                                bot_api_key=self.web_panel_api_key or None,
+                            )
+                        except Exception as web_err:
+                            logger.warning("Веб-панель: ошибка отправки черновика: %s", web_err)
 
         except Exception as exc:
             logger.error("Ошибка AI-анализа: %s", exc)
