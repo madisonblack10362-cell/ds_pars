@@ -309,13 +309,29 @@ class DesktopGUI:
                       fg_color=self.BG3, hover_color=self.RED,
                       command=self._clear_logs).pack(side="right", padx=3, pady=6)
 
+        # Log area with scrollbar
+        log_frame = ctk.CTkFrame(parent, fg_color=self.INPUT_BG)
+        log_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+
+        self._log_scrollbar = tk.Scrollbar(log_frame, bg=self.BG2, troughcolor=self.INPUT_BG,
+                                           activebackground=self.ACCENT)
+        self._log_scrollbar.pack(side="right", fill="y")
+
         self._log_text = tk.Text(
-            parent, bg=self.INPUT_BG, fg=self.TEXT, font=("Consolas", 11),
+            log_frame, bg=self.INPUT_BG, fg=self.TEXT, font=("Consolas", 11),
             insertbackground=self.TEXT, selectbackground=self.BG3,
             borderwidth=0, highlightthickness=0, wrap="word",
             state="disabled", cursor="arrow",
+            yscrollcommand=self._log_scrollbar.set,
         )
-        self._log_text.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self._log_text.pack(side="left", fill="both", expand=True)
+        self._log_scrollbar.configure(command=self._log_text.yview)
+
+        # UserScroll binding — stop auto-scroll when user scrolls up
+        self._user_scrolled = False
+        self._log_text.bind("<MouseWheel>", self._on_user_scroll)
+        self._log_text.bind("<Button-4>", self._on_user_scroll)
+        self._log_text.bind("<Button-5>", self._on_user_scroll)
 
         self._log_text.tag_configure("TIME", foreground=self.TEXT3)
         self._log_text.tag_configure("LEVEL_INFO", foreground=self.ACCENT)
