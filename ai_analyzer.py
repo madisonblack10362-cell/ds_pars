@@ -119,6 +119,8 @@ class AIAnalyzer:
                 result = await self._call_api(truncated)
                 if result:
                     return self._validate_result(result)
+                # result is None — LLM вернул что-то нечитаемое, пробуем ещё
+                logger.warning("Попытка %d/%d: LLM вернул пустой результат", attempt, self.max_retries)
             except Exception as exc:
                 logger.warning(
                     "Попытка %d/%d анализа LLM не удалась: %s",
@@ -126,8 +128,8 @@ class AIAnalyzer:
                     self.max_retries,
                     exc,
                 )
-                if attempt < self.max_retries:
-                    await asyncio.sleep(2 ** attempt)
+            if attempt < self.max_retries:
+                await asyncio.sleep(2 ** attempt)
 
         logger.error("Не удалось проанализировать новость через LLM после %d попыток", self.max_retries)
         return None
@@ -146,7 +148,7 @@ class AIAnalyzer:
                 {"role": "user", "content": f"Проанализируй новость:\n\n{text}"},
             ],
             "temperature": 0.3,
-            "max_tokens": 1000,
+            "max_tokens": 2048,
         }
 
         async with aiohttp.ClientSession(timeout=self.timeout) as session:
@@ -208,7 +210,105 @@ class AIAnalyzer:
         try:
             return json.loads(text, strict=False)
         except (json.JSONDecodeError, ValueError):
-            return None
+            pass
+
+        # 7. Фоллбэк: если LLM вернул текст вместо JSON — вытаскиваем данные regex-ом
+        return AIAnalyzer._extract_from_text(raw)
+
+    @staticmethod
+    def _extract_from_text(raw: str) -> Optional[dict]:
+        """
+        Фоллбэк: когда LLM возвращает свободный текст вместо JSON,
+        вытаскиваем данные через regex-паттерны.
+        """
+        text = raw.strip()
+
+        # Паттерны для извлечения
+        type_patterns = [
+            r"тип новости[:\s]+(\w+)",
+            r"news_type[:\s]+(\w+)",
+            r"тип[:\s]+(\w+)",
+        ]
+        prio_patterns = [
+            r"приоритет[:\s]+(\w+)",
+            r"priority[:\s]+(\w+)",
+        ]
+        publish_patterns = [
+            r"(?:нужно|должно|should)\s+(?:публиковать|быть опубликовано|publish)[:\s]*(да|нет|true|false|yes|no)",
+        ]
+        server_patterns = [
+            r"сервер[:\s]+([^\n,]{2,50})",
+            r"server_name[:\s]+\"([^\"]+)\"",
+        ]
+
+        news_type = "other"
+        for p in type_patterns:
+            m = re.search(p, text, re.IGNORECASE)
+            if m:
+                val = m.group(1).lower()
+                type_map = {
+                    "вайп": "wipe", "wipe": "wipe",
+                    "обновление": "update", "update": "update",
+                    "ивент": "event", "event": "event",
+                    "тех": "maintenance", "техработы": "maintenance", "maintenance": "maintenance",
+                    "открытие": "server_open", "server_open": "server_open",
+                    "сезон": "new_season", "new_season": "new_season",
+                }
+                news_type = type_map.get(val, val)
+                break
+
+        priority = "medium"
+        for p in prio_patterns:
+            m = re.search(p, text, re.IGNORECASE)
+            if m:
+                val = m.group(1).lower()
+                if val in ("high", "высокий"):
+                    priority = "high"
+                elif val in ("medium", "средний"):
+                    priority = "medium"
+                else:
+                    priority = "low"
+                break
+
+        should_publish = True
+        for p in publish_patterns:
+            m = re.search(p, text, re.IGNORECASE)
+            if m:
+                val = m.group(1).lower()
+                should_publish = val in ("да", "true", "yes")
+                break
+
+        server_name = ""
+        for p in server_patterns:
+            m = re.search(p, text, re.IGNORECASE)
+            if m:
+                server_name = m.group(1).strip()
+                break
+
+        # Ищем HTML-пост — весь текст после <b>...</b>
+        formatted_post = ""
+        html_match = re.search(r"(<b>[^<]+</b>.*?)(?=#\w|$)", text, re.DOTALL | re.IGNORECASE)
+        if html_match:
+            formatted_post = html_match.group(1).strip()
+
+        # Если не нашли HTML — ищем JSON-подобный фрагмент с formatted_post
+        if not formatted_post:
+            fp_match = re.search(r'"formatted_post"[:\s]*"(.+?)"', text, re.DOTALL)
+            if fp_match:
+                formatted_post = fp_match.group(1).strip()
+                formatted_post = formatted_post.replace('\\n', '\n').replace('\\"', '"')
+
+        logger.info("LLM фоллбэк: извлечено из текста — type=%s, priority=%s, publish=%s",
+                    news_type, priority, should_publish)
+
+        return {
+            "news_type": news_type,
+            "priority": priority,
+            "should_publish": should_publish,
+            "server_name": server_name[:200],
+            "formatted_post": formatted_post[:2000],
+            "summary": formatted_post[:500] if formatted_post else "",
+        }
 
     @staticmethod
     def _validate_result(result: dict) -> dict:
