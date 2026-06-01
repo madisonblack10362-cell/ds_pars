@@ -369,6 +369,7 @@ class DesktopGUI:
 
         self._total_lines = 0
         self._filter_level = "ALL"
+        self._all_logs = []  # store all log entries for filtering
 
     def _log_text_yview(self, *args):
         """Route scrollbar commands to the tk.Text widget."""
@@ -479,9 +480,33 @@ class DesktopGUI:
         self._filter_level = level
         for l, btn in self._filter_btns.items():
             btn.configure(fg_color=self.ACCENT if l == level else self.BG3)
+        self._rebuild_log_display()
+
+    def _rebuild_log_display(self):
+        """Re-render log text widget showing only entries matching current filter."""
+        try:
+            tb = self._log_text
+            tb.config(state="normal")
+            tb.delete("1.0", "end")
+            count = 0
+            for entry in self._all_logs:
+                if self._filter_level != "ALL" and entry["level"] != self._filter_level:
+                    continue
+                tag = f"LEVEL_{entry['level']}"
+                if tag not in ("LEVEL_INFO", "LEVEL_WARNING", "LEVEL_ERROR", "LEVEL_DEBUG"):
+                    tag = "MSG"
+                tb.insert("end", f" {entry['time']} ", "TIME")
+                tb.insert("end", f"{entry['level']:>8} ", tag)
+                tb.insert("end", f"{entry['message']}\n", "MSG")
+                count += 1
+            tb.see("end")
+            self._log_count.configure(text=f"{count} записей")
+        except Exception:
+            pass
 
     def _clear_logs(self):
         self._total_lines = 0
+        self._all_logs.clear()
         self._log_text.delete("1.0", "end")
         self._log_count.configure(text="0 записей")
 
@@ -495,7 +520,19 @@ class DesktopGUI:
                 continue
 
             level = entry["level"]
+
+            # Store all entries for filtering
+            self._all_logs.append(entry)
+            if len(self._all_logs) > 2000:
+                self._all_logs = self._all_logs[-1500:]
+            self._total_lines = len(self._all_logs)
+
+            # Only insert into text widget if it matches current filter
             if self._filter_level != "ALL" and level != self._filter_level:
+                try:
+                    self._log_count.configure(text=f"{self._count_visible()} записей")
+                except Exception:
+                    pass
                 continue
 
             try:
@@ -506,15 +543,17 @@ class DesktopGUI:
                     tag = "MSG"
                 tb.insert("end", f"{level:>8} ", tag)
                 tb.insert("end", f"{entry['message']}\n", "MSG")
-                self._total_lines += 1
-                if self._total_lines > 2000:
-                    tb.delete("1.0", "500 lines")
-                    self._total_lines -= 500
                 if not self._user_scrolled:
                     tb.see("end")
-                self._log_count.configure(text=f"{self._total_lines} записей")
+                self._log_count.configure(text=f"{self._count_visible()} записей")
             except Exception:
                 pass
+
+    def _count_visible(self):
+        """Count how many entries match current filter."""
+        if self._filter_level == "ALL":
+            return len(self._all_logs)
+        return sum(1 for e in self._all_logs if e["level"] == self._filter_level)
 
     def _tick_uptime(self):
         while self._running:
