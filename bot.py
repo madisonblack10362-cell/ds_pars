@@ -15,6 +15,20 @@ from typing import Optional
 
 from logger import logger
 from database import Database
+
+# Web Panel integration (опционально — нужен httpx)
+try:
+    from web_app_integration import setup_web_app_button, send_to_web_panel
+    HAS_WEB_PANEL = True
+except ImportError:
+    HAS_WEB_PANEL = False
+    print("[BOT] web_app_integration.py не найден — веб-панель отключена")
+
+from ai_analyzer import AIAnalyzer
+from deduplicator import Deduplicator
+from publisher import Publisher
+from scheduler import Scheduler
+from vk_monitor import VKMonitor
 from ai_analyzer import AIAnalyzer
 from deduplicator import Deduplicator
 from publisher import Publisher
@@ -42,6 +56,8 @@ class DayZNewsMonitor:
         self.publisher: Optional[Publisher] = None
         self.scheduler: Optional[Scheduler] = None
         self.vk_monitor: Optional[VKMonitor] = None
+        self.web_panel_url: str = ""
+        self.web_panel_api_key: str = ""
 
         self._shutdown_event = asyncio.Event()
         self._discord_enabled = False
@@ -59,6 +75,12 @@ class DayZNewsMonitor:
             with open(config_file, "r", encoding="utf-8") as f:
                 self.config = json.load(f)
             logger.info("Конфигурация загружена из %s (%d ключей)", config_file, len(self.config))
+
+            # Web Panel URL и API ключ
+            self.web_panel_url = cfg.get("web_panel_url", "")
+            self.web_panel_api_key = cfg.get("web_panel_api_key", "")
+            if self.web_panel_url:
+                logger.info("Веб-панель: %s", self.web_panel_url)
         except Exception as e:
             print(f"[BOT] Ошибка чтения конфига: {e}")
             logger.error("Ошибка чтения конфига: %s", e)
@@ -119,6 +141,15 @@ class DayZNewsMonitor:
                 max_images_per_post=cfg.get("max_images_per_post", 10),
             )
             logger.info("Publisher инициализирован (канал: %s)", channel_id)
+
+            # Кнопка Web App в меню бота
+            if HAS_WEB_PANEL and self.web_panel_url:
+                try:
+                    bot_for_web = self.publisher.bot
+                    await setup_web_app_button(bot_for_web, self.web_panel_url)
+                    logger.info("Кнопка панели управления добавлена в меню бота")
+                except Exception as e:
+                    logger.warning("Не удалось установить кнопку панели: %s", e)
         else:
             logger.warning("Publisher отключён: не указан токен Telegram-бота")
 
@@ -272,6 +303,26 @@ class DayZNewsMonitor:
                         server_name=result.get("server_name", ""),
                         formatted_post=result.get("formatted_post", ""),
                     )
+
+                    # Отправить на веб-панель для модерации
+                    if HAS_WEB_PANEL and self.web_panel_url and self.web_panel_api_key:
+                        try:
+                            await send_to_web_panel(
+                                news_data={
+                                    "sourceId": msg.get("source_type", "discord"),
+                                    "serverName": result.get("server_name", ""),
+                                    "content": text,
+                                    "summary": result.get("summary", ""),
+                                    "formattedPost": result.get("formatted_post", ""),
+                                    "newsType": result.get("news_type", "other"),
+                                    "priority": result.get("priority", "low"),
+                                    "images": json.loads(msg.get("images", "[]")) if msg.get("images") else [],
+                                },
+                                web_app_url=self.web_panel_url,
+                                bot_api_key=self.web_panel_api_key,
+                            )
+                        except Exception as web_err:
+                            logger.debug("Веб-панель: %s", web_err)
                 else:
                     await self.db.save_processed(
                         message_id=msg_id,

@@ -27,6 +27,9 @@
   "publish_high_priority": true,
   "publish_medium_priority": true,
   "publish_low_priority": false,
+
+  "web_panel_url": "https://dayz-monitor-web.vercel.app",
+  "web_panel_api_key": "YOUR_BOT_API_KEY_HERE",
   "max_images_per_post": 10,
 
   "sources": {
