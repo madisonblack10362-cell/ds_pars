@@ -243,9 +243,9 @@ class Publisher:
         Args:
             text: Текст сообщения.
             image_paths: Локальные пути к изображениям.
-            image_urls: URL-адреса изображений для скачивания.
+            image_urls: URL-адреса изображений для скачивания (поддерживает data: URIs).
             video_paths: Локальные пути к видео.
-            video_urls: URL-адреса видео для скачивания.
+            video_urls: URL-адреса видео для скачивания (поддерживает data: URIs).
 
         Returns:
             ID отправленного сообщения в Telegram или None при ошибке.
@@ -253,16 +253,20 @@ class Publisher:
         # Собираем изображения для отправки
         local_images: list[str] = list(image_paths or [])
 
-        # Скачиваем изображения по URL, если есть
+        # Скачиваем/декодируем изображения
         if image_urls:
-            downloaded = await self._download_images(image_urls)
-            local_images.extend(downloaded)
+            for url in image_urls:
+                path = await self._resolve_media_url(url)
+                if path:
+                    local_images.append(path)
 
         # Собираем видео
         local_videos: list[str] = list(video_paths or [])
         if video_urls:
-            downloaded_videos = await self._download_images(video_urls)
-            local_videos.extend(downloaded_videos)
+            for url in video_urls:
+                path = await self._resolve_media_url(url)
+                if path:
+                    local_videos.append(path)
 
         # Ограничиваем количество
         local_images = local_images[: self.max_images_per_post]
@@ -462,6 +466,46 @@ class Publisher:
             # Fallback: send text only
             msg = await self.bot.send_message(chat_id=self.channel_id, text=text)
             return msg.message_id
+
+    async def _resolve_media_url(self, url: str) -> Optional[str]:
+        """
+        Обрабатывает URL медиа: data: URI декодирует в файл, http URL скачивает.
+        Возвращает локальный путь к файлу или None.
+        """
+        if not url:
+            return None
+
+        # Data URI — декодируем base64 в файл
+        if url.startswith("data:"):
+            try:
+                import base64
+                # data:image/jpeg;base64,/9j/4AAQ...
+                header, data = url.split(",", 1)
+                mime_part = header.split(":")[1].split(";")[0]  # image/jpeg
+
+                ext_map = {
+                    "image/jpeg": ".jpg", "image/png": ".png",
+                    "image/gif": ".gif", "image/webp": ".webp",
+                    "video/mp4": ".mp4", "video/webm": ".webm",
+                    "video/quicktime": ".mov",
+                }
+                ext = ext_map.get(mime_part, ".jpg")
+                filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{abs(hash(url)) % 100000}{ext}"
+                filepath = os.path.join(self.images_dir, filename)
+
+                file_data = base64.b64decode(data)
+                with open(filepath, "wb") as f:
+                    f.write(file_data)
+
+                logger.debug("Data URI декодирован: %s (%s)", filepath, mime_part)
+                return filepath
+            except Exception as exc:
+                logger.warning("Не удалось декодировать data URI: %s", exc)
+                return None
+
+        # HTTP URL — скачиваем
+        downloaded = await self._download_images([url])
+        return downloaded[0] if downloaded else None
 
     async def _download_images(self, urls: list[str]) -> list[str]:
         """
