@@ -1,6 +1,5 @@
 """
 Desktop GUI for DayZ News Monitor.
-Original design, all bugs fixed.
 """
 
 import json
@@ -41,7 +40,6 @@ class LogCapture(Handler):
 
 class DesktopGUI:
 
-    # Original color scheme
     BG = "#1a1a2e"
     BG2 = "#16213e"
     BG3 = "#0f3460"
@@ -79,19 +77,17 @@ class DesktopGUI:
         self._build_tabs()
         self._load_and_fill_config()
 
-        # Mousewheel router — binds on the raw tkinter.Tk root window
-        # (bypasses CTkBaseClass which blocks bind_all).
-        # Routes scroll events to the correct widget based on Enter/Leave.
-        self._scroll_target = None  # will be set to _textbox or _parent_canvas
-        self._setup_mousewheel_router()
+        # Mousewheel: call tk.Tk.bind_all DIRECTLY to bypass CTkBaseClass
+        # which raises AttributeError on bind_all/unbind_all.
+        # tk.Tk.bind_all(self.root, ...) calls the original tkinter method,
+        # skipping any override in the CTk class hierarchy.
+        tk.Tk.bind_all(self.root, "<MouseWheel>", self._on_mousewheel, add="+")
+        tk.Tk.bind_all(self.root, "<Button-4>", self._on_mousewheel, add="+")
+        tk.Tk.bind_all(self.root, "<Button-5>", self._on_mousewheel, add="+")
 
-        # Log polling thread
         threading.Thread(target=self._poll_logs, daemon=True).start()
-
-        # Uptime ticker
         self._started = datetime.now()
         threading.Thread(target=self._tick_uptime, daemon=True).start()
-
         self.root.mainloop()
 
     def _on_close(self):
@@ -102,45 +98,24 @@ class DesktopGUI:
             pass
 
     # ================================================================
-    # Mousewheel Router
+    # Mousewheel
     # ================================================================
-    #
-    # Problem: CTkBaseClass (parent of all CTk widgets) blocks bind_all().
-    # CTkScrollableFrame bypasses this by inheriting tkinter.Frame directly,
-    # but CTkTabview's internal canvas steals Enter/Leave events so the
-    # frame's bind never fires. On Windows, MouseWheel goes to the widget
-    # with KEYBOARD FOCUS, not the widget under the cursor.
-    #
-    # Solution: bind_all on the raw tkinter.Tk root (not a CTk widget),
-    # and use Enter/Leave on internal tkinter widgets to track the target.
 
-    def _setup_mousewheel_router(self):
-        """Set up global mousewheel routing on the raw tkinter root."""
-        tk_root = self.root.winfo_toplevel()
-        tk_root.bind_all("<MouseWheel>", self._on_global_mousewheel, add="+")
-        tk_root.bind_all("<Button-4>", self._on_global_mousewheel, add="+")
-        tk_root.bind_all("<Button-5>", self._on_global_mousewheel, add="+")
-
-    def _on_global_mousewheel(self, event):
-        """Scroll logs when Логи tab is active. Simple — no Enter/Leave needed."""
+    def _on_mousewheel(self, event):
+        """Scroll the log text when Логи tab is active."""
         try:
-            current_tab = self.notebook.get()
-            if current_tab != "Логи":
-                return  # Settings tab handled by CTkScrollableFrame
+            if self.notebook.get() != "Логи":
+                return
         except Exception:
             return
-
-        # Always scroll the log textbox when on Логи tab — period.
-        # No need for Enter/Leave tracking, CTkTabview breaks those.
         try:
-            tb = self._log_text._textbox
+            tb = self._log_text
             if event.num == 4 or (hasattr(event, 'delta') and event.delta > 0):
                 tb.yview_scroll(-3, "units")
                 self._user_scrolled = True
             elif event.num == 5 or (hasattr(event, 'delta') and event.delta < 0):
                 tb.yview_scroll(3, "units")
-                yview = tb.yview()
-                if yview[1] >= 1.0:
+                if tb.yview()[1] >= 1.0:
                     self._user_scrolled = False
         except Exception:
             pass
@@ -195,7 +170,6 @@ class DesktopGUI:
     # === Dashboard ===
 
     def _build_dashboard(self, parent):
-        # Component status cards
         status_frame = ctk.CTkFrame(parent, fg_color=self.CARD)
         status_frame.pack(fill="x", padx=8, pady=(8, 4))
 
@@ -221,7 +195,6 @@ class DesktopGUI:
             info.pack(pady=(0, 8))
             self._status_cards[key] = {"value": val, "info": info}
 
-        # Counter cards
         counter_frame = ctk.CTkFrame(parent, fg_color=self.CARD)
         counter_frame.pack(fill="x", padx=8, pady=4)
 
@@ -241,7 +214,6 @@ class DesktopGUI:
             num.pack(pady=(0, 8))
             self._counter_labels[key] = num
 
-        # Discord detail
         info_frame = ctk.CTkFrame(parent, fg_color=self.CARD)
         info_frame.pack(fill="x", padx=8, pady=4)
         self._discord_detail = ctk.CTkLabel(
@@ -310,7 +282,6 @@ class DesktopGUI:
                 ctk.CTkLabel(row, text=hint, font=("Segoe UI", 10),
                             text_color=self.TEXT3, width=200, anchor="w").pack(side="left")
 
-            # Priority toggles inside "Расписание" section
             if section_title == "Расписание":
                 tf = ctk.CTkFrame(frame, fg_color="transparent")
                 tf.pack(fill="x", padx=12, pady=(8, 10))
@@ -325,7 +296,6 @@ class DesktopGUI:
                                    hover_color=self.ACCENT).pack(side="left", padx=(0, 20))
                     self._toggles[key] = var
 
-        # Buttons
         bf = ctk.CTkFrame(canvas, fg_color="transparent")
         bf.pack(fill="x", pady=12)
         ctk.CTkButton(bf, text="Сохранить настройки", font=("Segoe UI", 12, "bold"),
@@ -359,51 +329,65 @@ class DesktopGUI:
                       fg_color=self.BG3, hover_color=self.RED,
                       command=self._clear_logs).pack(side="right", padx=3, pady=6)
 
-        # CTkTextbox for log display. state="normal" so user can select and
-        # copy text. Keyboard input is blocked via <Key> binding instead.
+        # Log area: tk.Text + CTkScrollbar inside a CTkFrame.
+        # No CTkTextbox — it inherits CTkBaseClass which blocks bind_all
+        # and breaks mousewheel in CTkTabview on Windows.
         self._user_scrolled = False
-        self._log_text = ctk.CTkTextbox(
-            parent,
-            fg_color=self.INPUT_BG,
-            text_color=self.TEXT,
-            font=("Consolas", 11),
-            border_width=0,
-            activate_scrollbars=True,
+
+        log_frame = ctk.CTkFrame(parent, fg_color=self.INPUT_BG)
+        log_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+
+        self._log_scrollbar = ctk.CTkScrollbar(
+            log_frame,
+            command=self._log_text_yview,
+            fg_color=self.BG3,
+            button_color=self.ACCENT,
+            button_hover_color="#79b8ff",
         )
-        self._log_text.pack(fill="both", expand=True, padx=8, pady=(0, 8))
-        self._log_text._textbox.configure(wrap="word")
+        self._log_scrollbar.pack(side="right", fill="y", padx=(0, 2), pady=2)
 
-        # Block keyboard typing but allow selection, copy, navigation
-        tb = self._log_text._textbox
-        tb.bind("<Key>", self._block_typing)
-        tb.bind("<Control-c>", lambda e: tb.event_generate("<<Copy>>"))
-        tb.bind("<Control-a>", lambda e: tb.tag_add("sel", "1.0", "end"))
-        tb.bind("<Button-1>", lambda e: tb.focus_set())
+        self._log_text = tk.Text(
+            log_frame, bg=self.INPUT_BG, fg=self.TEXT, font=("Consolas", 11),
+            insertbackground=self.TEXT, selectbackground=self.BG3,
+            selectforeground=self.TEXT,
+            borderwidth=0, highlightthickness=0, wrap="word",
+            cursor="arrow", takefocus=True,
+            yscrollcommand=self._log_scrollbar.set,
+        )
+        self._log_text.pack(side="left", fill="both", expand=True, padx=(2, 0), pady=2)
 
-        # Configure colored tags
-        tb.tag_configure("TIME", foreground=self.TEXT3)
-        tb.tag_configure("LEVEL_INFO", foreground=self.ACCENT)
-        tb.tag_configure("LEVEL_WARNING", foreground=self.YELLOW)
-        tb.tag_configure("LEVEL_ERROR", foreground=self.RED)
-        tb.tag_configure("LEVEL_DEBUG", foreground=self.TEXT3)
-        tb.tag_configure("MSG", foreground=self.TEXT)
+        # Block keyboard typing, allow selection + copy + navigation
+        self._log_text.bind("<Key>", self._block_typing)
+
+        # Colored tags
+        self._log_text.tag_configure("TIME", foreground=self.TEXT3)
+        self._log_text.tag_configure("LEVEL_INFO", foreground=self.ACCENT)
+        self._log_text.tag_configure("LEVEL_WARNING", foreground=self.YELLOW)
+        self._log_text.tag_configure("LEVEL_ERROR", foreground=self.RED)
+        self._log_text.tag_configure("LEVEL_DEBUG", foreground=self.TEXT3)
+        self._log_text.tag_configure("MSG", foreground=self.TEXT)
 
         self._total_lines = 0
         self._filter_level = "ALL"
 
+    def _log_text_yview(self, *args):
+        """Route scrollbar commands to the tk.Text widget."""
+        self._log_text.yview(*args)
+
     def _block_typing(self, event):
         """Block keyboard input but allow Ctrl combos and navigation."""
         if event.keysym in ("Control_L", "Control_R", "Shift_L", "Shift_R",
-                             "Alt_L", "Alt_R", "Caps_Lock",
+                             "Alt_L", "Alt_R", "Super_L", "Super_R",
+                             "Caps_Lock", "Tab",
                              "Left", "Right", "Up", "Down",
                              "Home", "End", "Next", "Prior",
                              "F1", "F2", "F3", "F4", "F5", "F6",
                              "F7", "F8", "F9", "F10", "F11", "F12",
                              "Insert", "Delete"):
             return
-        if event.state & 0x4:  # Ctrl held
+        if event.state & 0x4:  # Ctrl
             return
-        if event.state & 0x1:  # Shift held
+        if event.state & 0x1:  # Shift
             return
         return "break"
 
@@ -412,7 +396,6 @@ class DesktopGUI:
     # ================================================================
 
     def _load_and_fill_config(self):
-        """Reads config.json and fills all entry fields."""
         try:
             with open(self.config_path, "r", encoding="utf-8") as f:
                 cfg = json.load(f)
@@ -420,9 +403,6 @@ class DesktopGUI:
             print(f"[GUI] Ошибка загрузки конфига: {e}")
             return
 
-        print(f"[GUI] Конфиг загружен, заполняю {len(self._entries)} полей")
-
-        # Simple fields
         simple_keys = [
             "discord_token", "telegram_bot_token", "telegram_channel_id",
             "openai_api_key", "openai_base_url", "openai_model",
@@ -434,9 +414,7 @@ class DesktopGUI:
             if entry and key in cfg:
                 entry.delete(0, "end")
                 entry.insert(0, str(cfg[key]))
-                print(f"[GUI]   {key} = {'***' if ('token' in key or 'key' in key) else cfg[key]}")
 
-        # Nested: sources.discord
         sources = cfg.get("sources", {})
         discord = sources.get("discord", {})
         for gui_key, cfg_key in [("sources_discord_guild_id", "guild_id"),
@@ -445,14 +423,9 @@ class DesktopGUI:
             if entry:
                 entry.delete(0, "end")
                 entry.insert(0, str(discord.get(cfg_key, "")))
-                print(f"[GUI]   {gui_key} = {discord.get(cfg_key, '')}")
 
-        # Toggles
         for key, var in self._toggles.items():
             var.set(cfg.get(key, False))
-            print(f"[GUI]   {key} = {cfg.get(key, False)}")
-
-        print("[GUI] Настройки загружены")
 
     def _save_config(self):
         try:
@@ -492,12 +465,10 @@ class DesktopGUI:
         try:
             with open(self.config_path, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, indent=2, ensure_ascii=False)
-            print("[GUI] Конфиг сохранён")
             logger.info("Настройки сохранены через GUI")
             if self.bot:
                 self.bot.config = cfg
         except Exception as e:
-            print(f"[GUI] Ошибка сохранения: {e}")
             logger.error("Ошибка сохранения настроек: %s", e)
 
     # ================================================================
@@ -511,7 +482,7 @@ class DesktopGUI:
 
     def _clear_logs(self):
         self._total_lines = 0
-        self._log_text._textbox.delete("1.0", "end")
+        self._log_text.delete("1.0", "end")
         self._log_count.configure(text="0 записей")
 
     def _poll_logs(self):
@@ -528,7 +499,7 @@ class DesktopGUI:
                 continue
 
             try:
-                tb = self._log_text._textbox
+                tb = self._log_text
                 tb.insert("end", f" {entry['time']} ", "TIME")
                 tag = f"LEVEL_{level}"
                 if tag not in ("LEVEL_INFO", "LEVEL_WARNING", "LEVEL_ERROR", "LEVEL_DEBUG"):
@@ -539,7 +510,6 @@ class DesktopGUI:
                 if self._total_lines > 2000:
                     tb.delete("1.0", "500 lines")
                     self._total_lines -= 500
-                # Auto-scroll only if user hasn't manually scrolled up
                 if not self._user_scrolled:
                     tb.see("end")
                 self._log_count.configure(text=f"{self._total_lines} записей")
@@ -559,7 +529,7 @@ class DesktopGUI:
             threading.Event().wait(1)
 
     # ================================================================
-    # Public API — called from bot.py
+    # Public API
     # ================================================================
 
     def update_status(self, component, connected, info=""):
@@ -575,7 +545,6 @@ class DesktopGUI:
                         card["value"].configure(text="Отключён", text_color=self.TEXT3)
                     if info:
                         card["info"].configure(text=info)
-                    # Обновляем нижнюю строку Discord на дашборде
                     if component == "discord":
                         if connected:
                             detail = f"Discord: подключён — {info}" if info else "Discord: подключён"
