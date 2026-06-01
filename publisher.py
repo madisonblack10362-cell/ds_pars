@@ -5,6 +5,7 @@
 
 import json
 import os
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -291,15 +292,29 @@ class Publisher:
             ID отправленного сообщения в Telegram или None при ошибке.
         """
         # Безопасная обработка текста перед отправкой в Telegram
-        # Проверяем баланс blockquote-тегов и при необходимости исправляем
+        # Telegram поддерживает только ограниченный набор HTML-тегов.
+        # LLM может сгенерировать теги которые TG не парсит.
         import re as _re
-        bq_open = len(_re.findall(r'<blockquote>', text))
-        bq_close = len(_re.findall(r'</blockquote>', text))
+        # Убираем все HTML-теги кроме разрешённых Telegram
+        _allowed = re.compile(r'<(/?)(b|i|u|s|a|code|pre|blockquote|spoiler|strong|em)(\b[^>]*)>', re.IGNORECASE)
+        # Сначала заменяем разрешённые теги на плейсхолдеры
+        placeholders = []
+        def _save_tag(m):
+            placeholders.append(m.group(0))
+            return f'__TAG_{len(placeholders) - 1}__'
+        text = _allowed.sub(_save_tag, text)
+        # Убираем все оставшиеся теги
+        text = re.sub(r'<[^>]+>', '', text)
+        # Возвращаем разрешённые теги обратно
+        for i, tag in enumerate(placeholders):
+            text = text.replace(f'__TAG_{i}__', tag)
+        # Проверяем баланс blockquote — если не сбалансированы, удаляем все
+        bq_open = len(re.findall(r'<blockquote>', text, re.IGNORECASE))
+        bq_close = len(re.findall(r'</blockquote>', text, re.IGNORECASE))
         if bq_open != bq_close:
-            # Неравное количество — убираем все blockquote и оборачиваем весь текст в один
-            text = _re.sub(r'<blockquote>', '', text)
-            text = _re.sub(r'</blockquote>', '', text)
+            text = re.sub(r'</?blockquote>', '', text, flags=re.IGNORECASE)
             text = text.strip()
+            logger.warning('Убраны несбалансированные blockquote-теги из текста перед отправкой')
 
         # Собираем изображения для отправки
         local_images: list[str] = list(image_paths or [])
@@ -342,7 +357,23 @@ class Publisher:
                 )
                 return msg.message_id
         except Exception as exc:
-            logger.error("Ошибка публикации в Telegram: %s", exc)
+            error_msg = str(exc)
+            logger.error("Ошибка публикации в Telegram: %s", error_msg)
+            # Если ошибка парсинга HTML — пробуем отправить без медиа и с очищенным текстом
+            if "parse entities" in error_msg or "can't parse" in error_msg:
+                logger.warning('HTML parse error — пробуем отправить очищенный текст без медиа')
+                try:
+                    # Убираем ВСЕ HTML-теги и отправляем как plain text
+                    clean = re.sub(r'<[^>]+>', '', text).strip()
+                    msg = await self.bot.send_message(
+                        chat_id=self.channel_id, text=clean
+                    )
+                    logger.info("Опубликовано без HTML (fallback): TG msg_id=%d", msg.message_id)
+                    return msg.message_id
+                except Exception as fallback_exc:
+                    logger.error("Fallback (plain text) также не удалась: %s", fallback_exc)
+                    return None
+            # Для других ошибок — пробуем без медиа
             try:
                 msg = await self.bot.send_message(
                     chat_id=self.channel_id, text=text
