@@ -4,9 +4,11 @@
 Текущий день — logs/app.log, предыдущие дни — logs/app-YYYY-MM-DD.log
 """
 
+import asyncio
 import logging
 import os
 import sys
+import traceback
 from logging.handlers import TimedRotatingFileHandler
 
 
@@ -83,6 +85,60 @@ def setup_logger(
 
     logger.info("Логгер инициализирован. Файл логов: %s (хранение %d дней)", log_file, backup_count)
     return logger
+
+
+class WebPanelHandler(logging.Handler):
+    """
+    Обработчик логов, отправляющий WARNING и ERROR записи на веб-панель.
+    Использует fire-and-forget через asyncio.create_task().
+    """
+
+    def __init__(self, web_panel_url: str):
+        super().__init__()
+        self.web_panel_url = web_panel_url
+        # Only forward WARNING and ERROR levels
+        self.setLevel(logging.WARNING)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if not self.web_panel_url:
+            return
+
+        try:
+            from web_app_integration import send_log_to_panel
+        except ImportError:
+            return
+
+        log_data = {
+            "level": record.levelname.lower(),
+            "module": record.name,
+            "message": self.format(record),
+            "details": "",
+        }
+
+        # Add traceback for errors if available
+        if record.exc_info and record.exc_info[0] is not None:
+            log_data["details"] = "".join(traceback.format_exception(*record.exc_info))
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(send_log_to_panel(log_data, self.web_panel_url))
+        except RuntimeError:
+            # No running loop — create a new one
+            asyncio.create_task(send_log_to_panel(log_data, self.web_panel_url))
+
+
+def add_web_panel_handler(web_panel_url: str):
+    """
+    Добавляет обработчик пересылки логов на веб-панель.
+    Вызывать после загрузки конфига, когда web_panel_url известен.
+    """
+    if not web_panel_url:
+        return
+    handler = WebPanelHandler(web_panel_url)
+    # Simple formatter for the web panel
+    handler.setFormatter(logging.Formatter(fmt="%(asctime)s | %(levelname)-8s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+    logger.addHandler(handler)
+    logger.info("Веб-панель: пересылка логов (%s) включена", web_panel_url)
 
 
 # Глобальный экземпляр логгера

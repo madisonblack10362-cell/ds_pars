@@ -13,7 +13,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from logger import logger
+from logger import logger, add_web_panel_handler
 from database import Database
 
 # Web Panel integration (опционально — нужен httpx)
@@ -88,6 +88,13 @@ class DayZNewsMonitor:
         """Инициализирует все компоненты системы."""
         self.load_config()
         cfg = self.config
+
+        # Add web panel log forwarding handler
+        if self.web_panel_url:
+            try:
+                add_web_panel_handler(self.web_panel_url)
+            except Exception as e:
+                logger.warning("Не удалось включить пересылку логов на панель: %s", e)
 
         # -----------------------------------------------------------------
         # База данных

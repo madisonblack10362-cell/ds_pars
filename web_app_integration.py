@@ -179,6 +179,26 @@ async def check_publish_queue(
         return []
 
 
+async def send_log_to_panel(log_data: dict, web_app_url: str, timeout: float = 3.0) -> bool:
+    """
+    Отправляет лог на веб-панель. Fire-and-forget pattern —
+    вызывающий код должен использовать asyncio.create_task().
+    """
+    url = f"{web_app_url}/api/logs"
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(url, json=log_data)
+            if response.status_code in (200, 201):
+                return True
+            else:
+                logger.debug("Веб-панель: ошибка отправки лога (HTTP %d): %s",
+                             response.status_code, response.text[:200])
+                return False
+    except Exception as e:
+        logger.debug("Веб-панель: не удалось отправить лог — %s", e)
+        return False
+
+
 async def mark_published_on_panel(
     news_id: str,
     web_app_url: str,
