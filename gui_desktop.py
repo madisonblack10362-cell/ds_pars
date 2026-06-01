@@ -330,8 +330,9 @@ class DesktopGUI:
         # UserScroll binding — stop auto-scroll when user scrolls up
         self._user_scrolled = False
         self._log_text.bind("<MouseWheel>", self._on_user_scroll)
-        self._log_text.bind("<Button-4>", self._on_user_scroll)
-        self._log_text.bind("<Button-5>", self._on_user_scroll)
+        self._log_text.bind("<Button-4>", self._on_user_scroll)   # Linux scroll up
+        self._log_text.bind("<Button-5>", self._on_user_scroll)   # Linux scroll down
+        self._log_text.bind("<ButtonPress-1>", self._on_user_click)  # Click to resume auto-scroll
 
         self._log_text.tag_configure("TIME", foreground=self.TEXT3)
         self._log_text.tag_configure("LEVEL_INFO", foreground=self.ACCENT)
@@ -476,11 +477,38 @@ class DesktopGUI:
                 if self._total_lines > 2000:
                     self._log_text.delete("1.0", "500 lines")
                     self._total_lines -= 500
-                self._log_text.see("end")
+                # Auto-scroll only if user hasn't manually scrolled up
+                if not self._user_scrolled:
+                    self._log_text.see("end")
                 self._log_text.configure(state="disabled")
                 self._log_count.configure(text=f"{self._total_lines} записей")
             except Exception:
                 pass
+
+    def _on_user_scroll(self, event):
+        """Detect if user scrolled away from the bottom — pause auto-scroll."""
+        try:
+            if event.num == 4 or (hasattr(event, 'delta') and event.delta > 0):
+                # Scrolling up
+                self._user_scrolled = True
+            elif event.num == 5 or (hasattr(event, 'delta') and event.delta < 0):
+                # Scrolling down — check if we reached the bottom
+                yview = self._log_text.yview()
+                if yview[1] >= 1.0:
+                    self._user_scrolled = False
+        except Exception:
+            pass
+
+    def _on_user_click(self, event):
+        """Click on log area: if at the bottom, resume auto-scroll."""
+        try:
+            self._log_text.configure(state="normal")
+            yview = self._log_text.yview()
+            self._log_text.configure(state="disabled")
+            if yview[1] >= 1.0:
+                self._user_scrolled = False
+        except Exception:
+            pass
 
     def _tick_uptime(self):
         while self._running:
