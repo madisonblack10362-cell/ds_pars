@@ -11,7 +11,7 @@ from typing import Optional
 from aiogram import Bot, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.types import InputMediaPhoto, FSInputFile
+from aiogram.types import InputMediaPhoto, InputMediaVideo, FSInputFile
 
 from logger import logger
 
@@ -234,6 +234,8 @@ class Publisher:
         text: str,
         image_paths: list[str] | None = None,
         image_urls: list[str] | None = None,
+        video_paths: list[str] | None = None,
+        video_urls: list[str] | None = None,
     ) -> Optional[int]:
         """
         Публикует сообщение в Telegram-канал.
@@ -242,6 +244,8 @@ class Publisher:
             text: Текст сообщения.
             image_paths: Локальные пути к изображениям.
             image_urls: URL-адреса изображений для скачивания.
+            video_paths: Локальные пути к видео.
+            video_urls: URL-адреса видео для скачивания.
 
         Returns:
             ID отправленного сообщения в Telegram или None при ошибке.
@@ -254,30 +258,42 @@ class Publisher:
             downloaded = await self._download_images(image_urls)
             local_images.extend(downloaded)
 
-        # Ограничиваем количество изображений
+        # Собираем видео
+        local_videos: list[str] = list(video_paths or [])
+        if video_urls:
+            downloaded_videos = await self._download_images(video_urls)
+            local_videos.extend(downloaded_videos)
+
+        # Ограничиваем количество
         local_images = local_images[: self.max_images_per_post]
+        local_videos = local_videos[:3]
 
         try:
-            if local_images:
+            if local_videos and not local_images:
+                # Only video(s)
+                return await self._send_with_videos(text, local_videos)
+            elif local_images and local_videos:
+                # Mixed: images + video — send separately (video first, then images with text)
+                return await self._send_mixed_media(text, local_images, local_videos)
+            elif local_images:
                 return await self._send_with_images(text, local_images)
             else:
                 msg = await self.bot.send_message(
                     chat_id=self.channel_id, text=text
                 )
                 logger.info(
-                    "Сообщение опубликовано (без фото): TG msg_id=%d",
+                    "Сообщение опубликовано (без медиа): TG msg_id=%d",
                     msg.message_id,
                 )
                 return msg.message_id
         except Exception as exc:
             logger.error("Ошибка публикации в Telegram: %s", exc)
-            # Попытка отправить без изображений
             try:
                 msg = await self.bot.send_message(
                     chat_id=self.channel_id, text=text
                 )
                 logger.warning(
-                    "Сообщение опубликовано без фото (fallback): TG msg_id=%d",
+                    "Сообщение опубликовано без медиа (fallback): TG msg_id=%d",
                     msg.message_id,
                 )
                 return msg.message_id
@@ -348,9 +364,108 @@ class Publisher:
             msg = await self.bot.send_message(chat_id=self.channel_id, text=text)
             return msg.message_id
 
+    async def _send_with_videos(
+        self, text: str, video_paths: list[str]
+    ) -> Optional[int]:
+        """Отправляет видео с текстом."""
+        if not video_paths:
+            return None
+
+        valid_videos = []
+        for path in video_paths:
+            if os.path.exists(path) and os.path.isfile(path):
+                valid_videos.append(path)
+
+        if not valid_videos:
+            msg = await self.bot.send_message(chat_id=self.channel_id, text=text)
+            return msg.message_id
+
+        try:
+            if len(valid_videos) == 1:
+                msg = await self.bot.send_video(
+                    chat_id=self.channel_id,
+                    video=FSInputFile(valid_videos[0]),
+                    caption=text,
+                    supports_streaming=True,
+                )
+                logger.info("Видео опубликовано: TG msg_id=%d", msg.message_id)
+                return msg.message_id
+            else:
+                # Multiple videos as media group
+                media_group = []
+                for path in valid_videos:
+                    try:
+                        media_group.append(
+                            InputMediaVideo(media=FSInputFile(path))
+                        )
+                    except Exception as exc:
+                        logger.warning("Не удалось прикрепить видео %s: %s", path, exc)
+
+                if not media_group:
+                    msg = await self.bot.send_message(chat_id=self.channel_id, text=text)
+                    return msg.message_id
+
+                media_group[0].caption = text
+                media_group[0].parse_mode = ParseMode.HTML
+                messages = await self.bot.send_media_group(
+                    chat_id=self.channel_id, media=media_group
+                )
+                logger.info("Видео группа опубликована (%d): TG msg_id=%d",
+                            len(media_group), messages[0].message_id)
+                return messages[0].message_id
+        except Exception as exc:
+            logger.error("Ошибка отправки видео: %s", exc)
+            msg = await self.bot.send_message(chat_id=self.channel_id, text=text)
+            return msg.message_id
+
+    async def _send_mixed_media(
+        self, text: str, image_paths: list[str], video_paths: list[str]
+    ) -> Optional[int]:
+        """Отправляет видео + изображения как медиагруппу."""
+        media_group = []
+
+        # Add videos first
+        for path in video_paths[:3]:
+            try:
+                if os.path.exists(path) and os.path.isfile(path):
+                    media_group.append(
+                        InputMediaVideo(media=FSInputFile(path))
+                    )
+            except Exception as exc:
+                logger.warning("Не удалось прикрепить видео %s: %s", path, exc)
+
+        # Add images
+        for path in image_paths[:10]:
+            try:
+                if os.path.exists(path) and os.path.isfile(path):
+                    media_group.append(
+                        InputMediaPhoto(media=FSInputFile(path))
+                    )
+            except Exception as exc:
+                logger.warning("Не удалось прикрепить изображение %s: %s", path, exc)
+
+        if not media_group:
+            msg = await self.bot.send_message(chat_id=self.channel_id, text=text)
+            return msg.message_id
+
+        try:
+            media_group[0].caption = text
+            media_group[0].parse_mode = ParseMode.HTML
+            messages = await self.bot.send_media_group(
+                chat_id=self.channel_id, media=media_group
+            )
+            logger.info("Медиагруппа опубликована (%d файлов): TG msg_id=%d",
+                        len(media_group), messages[0].message_id)
+            return messages[0].message_id
+        except Exception as exc:
+            logger.error("Ошибка отправки медиагруппы: %s", exc)
+            # Fallback: send text only
+            msg = await self.bot.send_message(chat_id=self.channel_id, text=text)
+            return msg.message_id
+
     async def _download_images(self, urls: list[str]) -> list[str]:
         """
-        Скачивает изображения по URL-адресам и сохраняет локально.
+        Скачивает файлы (изображения/видео) по URL и сохраняет локально.
         Возвращает список путей к скачанным файлам.
         """
         import aiohttp
@@ -367,14 +482,29 @@ class Publisher:
 
                         # Определяем расширение файла
                         content_type = resp.headers.get("Content-Type", "")
-                        if "png" in content_type:
+                        if "mp4" in content_type or "mpeg" in content_type:
+                            ext = ".mp4"
+                        elif "webm" in content_type:
+                            ext = ".webm"
+                        elif "quicktime" in content_type:
+                            ext = ".mov"
+                        elif "png" in content_type:
                             ext = ".png"
                         elif "gif" in content_type:
                             ext = ".gif"
                         elif "webp" in content_type:
                             ext = ".webp"
                         else:
-                            ext = ".jpg"
+                            # Fallback: check URL extension
+                            url_lower = url.lower()
+                            if url_lower.endswith(".mp4"):
+                                ext = ".mp4"
+                            elif url_lower.endswith(".webm"):
+                                ext = ".webm"
+                            elif url_lower.endswith(".mov"):
+                                ext = ".mov"
+                            else:
+                                ext = ".jpg"
 
                         # Генерируем имя файла
                         filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{abs(hash(url)) % 100000}{ext}"
