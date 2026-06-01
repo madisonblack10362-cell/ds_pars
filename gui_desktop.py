@@ -79,6 +79,12 @@ class DesktopGUI:
         self._build_tabs()
         self._load_and_fill_config()
 
+        # Force log scroll binding after CTkTabview finishes setup.
+        # CTkScrollableFrame uses bind_all/unbind_all on enter/leave,
+        # but CTkTabview interferes with enter/leave events.
+        # We override _unbind_mousewheel so it never unbinds while on Логи tab.
+        self.root.after(300, self._setup_log_scroll)
+
         # Log polling thread
         threading.Thread(target=self._poll_logs, daemon=True).start()
 
@@ -309,8 +315,7 @@ class DesktopGUI:
                       fg_color=self.BG3, hover_color=self.RED,
                       command=self._clear_logs).pack(side="right", padx=3, pady=6)
 
-        # CTkTextbox — built on CTkScrollableFrame, handles mousewheel
-        # automatically inside CTkTabview on Windows (same as settings tab).
+        # CTkTextbox — built on CTkScrollableFrame, handles mousewheel.
         self._user_scrolled = False
         self._log_text = ctk.CTkTextbox(
             parent,
@@ -322,15 +327,7 @@ class DesktopGUI:
             activate_scrollbars=True,
         )
         self._log_text.pack(fill="both", expand=True, padx=8, pady=(0, 8))
-        # CTkTextbox doesn't pass wrap to internal tk.Text, set it manually
         self._log_text._textbox.configure(wrap="word")
-
-        # Bind mousewheel on CTkTextbox to detect scroll direction
-        # for auto-scroll pause feature. CTkScrollableFrame handles
-        # the actual scrolling automatically.
-        self._log_text.bind("<MouseWheel>", self._on_log_mousewheel)
-        self._log_text.bind("<Button-4>", self._on_log_mousewheel)
-        self._log_text.bind("<Button-5>", self._on_log_mousewheel)
 
         tb = self._log_text._textbox
         tb.tag_configure("TIME", foreground=self.TEXT3)
@@ -484,6 +481,56 @@ class DesktopGUI:
                 self._log_count.configure(text=f"{self._total_lines} записей")
             except Exception:
                 pass
+
+    def _setup_log_scroll(self):
+        """Force mousewheel binding for CTkTextbox in the logs tab.
+        The problem: CTkScrollableFrame uses bind_all/unbind_all on Enter/Leave,
+        but CTkTabview's internal canvas breaks Enter/Leave events.
+        Also, the Settings tab's CTkScrollableFrame calls unbind_all when you
+        leave it, which destroys ALL mousewheel handlers including ours.
+        Fix: override _unbind_mousewheel to not unbind while on Логи tab,
+        and force an initial bind_all."""
+        # Force initial binding
+        try:
+            self._log_text._bind_mousewheel(None)
+        except Exception:
+            pass
+
+        # Override _unbind_mousewheel so it doesn't kill our binding
+        # when mouse briefly leaves the textbox area
+        original_unbind = self._log_text._unbind_mousewheel
+        gui = self
+
+        def _safe_unbind(event):
+            try:
+                if gui.notebook.get() == "Логи":
+                    return  # Keep binding alive while on logs tab
+            except Exception:
+                pass
+            original_unbind(event)
+
+        self._log_text._unbind_mousewheel = _safe_unbind
+
+        # Also override _bind_mousewheel to re-apply when entering logs tab
+        # (in case settings tab's unbind_all killed it)
+        original_bind = self._log_text._bind_mousewheel
+
+        def _safe_bind(event):
+            original_bind(event)
+            # Also track scroll direction
+            gui._log_text.bind("<MouseWheel>", gui._on_log_mousewheel, add="+")
+            gui._log_text.bind("<Button-4>", gui._on_log_mousewheel, add="+")
+            gui._log_text.bind("<Button-5>", gui._on_log_mousewheel, add="+")
+
+        self._log_text._bind_mousewheel = _safe_bind
+
+        # Bind directly for scroll direction detection
+        try:
+            self._log_text._textbox.bind("<MouseWheel>", self._on_log_mousewheel)
+            self._log_text._textbox.bind("<Button-4>", self._on_log_mousewheel)
+            self._log_text._textbox.bind("<Button-5>", self._on_log_mousewheel)
+        except Exception:
+            pass
 
     def _on_log_mousewheel(self, event):
         """Detect scroll direction to pause/resume auto-scroll."""
