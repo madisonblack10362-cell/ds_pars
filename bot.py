@@ -217,13 +217,15 @@ class DayZNewsMonitor:
                 minutes=2,
             )
 
-        # Публикация готовых сообщений
-        if self.publisher:
-            self.scheduler.add_interval_job(
-                func=self._task_publish_pending,
-                job_id="publish_pending",
-                minutes=1,
-            )
+        # Публикация готовых сообщений — ОТКЛЮЧЕНА.
+        # Теперь все новости идут через модерацию на веб-панели.
+        # _task_publish_pending зарезервирован, но не активирован.
+        # if self.publisher:
+        #     self.scheduler.add_interval_job(
+        #         func=self._task_publish_pending,
+        #         job_id="publish_pending",
+        #         minutes=1,
+        #     )
 
         # Проверка очереди публикации с веб-панели (по расписанию)
         if HAS_WEB_PANEL and self.web_panel_url and self.publisher:
@@ -302,14 +304,23 @@ class DayZNewsMonitor:
                 result = await self.ai_analyzer.analyze(text)
 
                 if result:
+                    # Всегда сохраняем с should_publish=False в локальной БД,
+                    # чтобы авто-публикатор _task_publish_pending не публиковал
+                    # новости без модерации. Публикация — ТОЛЬКО после одобрения
+                    # через веб-панель.
                     await self.db.save_processed(
                         message_id=msg_id,
                         news_type=result["news_type"],
                         priority=result["priority"],
-                        should_publish=result["should_publish"],
+                        should_publish=False,
                         summary=result["summary"],
                         server_name=result.get("server_name", ""),
                         formatted_post=result.get("formatted_post", ""),
+                    )
+
+                    logger.info(
+                        "Сообщение #%d отправлено на модерацию (type=%s, priority=%s)",
+                        msg_id, result["news_type"], result["priority"],
                     )
 
                     # Отправить на веб-панель для модерации

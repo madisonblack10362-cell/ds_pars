@@ -234,7 +234,22 @@ async def check_publish_queue(
 
             if response.status_code == 200:
                 data = response.json()
-                return data.get("queue", [])
+                items = data.get("items", data.get("queue", []))
+                # Фильтруем: только те, у которых scheduledAt <= сейчас
+                from datetime import datetime, timezone
+                now = datetime.now(timezone.utc)
+                ready = []
+                for item in items:
+                    scheduled = item.get("scheduledAt")
+                    if not scheduled:
+                        continue
+                    try:
+                        sched_dt = datetime.fromisoformat(scheduled.replace("Z", "+00:00"))
+                        if sched_dt <= now:
+                            ready.append(item)
+                    except (ValueError, TypeError):
+                        continue
+                return ready
 
             return []
     except Exception as e:
