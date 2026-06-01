@@ -330,25 +330,22 @@ class DesktopGUI:
         self._log_scrollbar.configure(command=self._log_text.yview)
 
         # Keep text in normal state but prevent user typing.
-        # This is critical: state="disabled" blocks mousewheel on Windows.
-        # Normal state + key blocking = read-only but scrollable.
+        # state="disabled" blocks mousewheel on Windows, so we use normal
+        # state + key blocking for read-only behaviour.
         self._log_text.bind("<Key>", self._block_typing)
-        # Allow Ctrl+A (select all) and Ctrl+C (copy)
         self._log_text.bind("<Control-a>", lambda e: None)
         self._log_text.bind("<Control-A>", lambda e: None)
         self._log_text.bind("<Control-c>", lambda e: None)
         self._log_text.bind("<Control-C>", lambda e: None)
-        # Give focus on click so native mousewheel works
         self._log_text.bind("<ButtonPress-1>", self._log_text.focus_set)
+
         # Detect user scroll direction for auto-scroll pause
         self._user_scrolled = False
-        self._log_text.bind("<MouseWheel>", self._on_mousewheel)
-        self._log_text.bind("<Button-4>", self._on_mousewheel)
-        self._log_text.bind("<Button-5>", self._on_mousewheel)
-        # Also bind on scrollbar
-        self._log_scrollbar.bind("<MouseWheel>", self._on_mousewheel)
-        self._log_scrollbar.bind("<Button-4>", self._on_mousewheel)
-        self._log_scrollbar.bind("<Button-5>", self._on_mousewheel)
+        # Recursively bind mousewheel to EVERY widget inside the logs tab.
+        # CTkTabview has an internal canvas that captures MouseWheel, so binding
+        # only on tk.Text is not enough — the event never reaches it.
+        # This is exactly how CTkScrollableFrame does it for the settings tab.
+        self._bind_scroll_recursive(self._logs_tab_frame)
 
         self._log_text.tag_configure("TIME", foreground=self.TEXT3)
         self._log_text.tag_configure("LEVEL_INFO", foreground=self.ACCENT)
@@ -517,18 +514,24 @@ class DesktopGUI:
             return  # Allow Shift combos
         return "break"  # Block everything else
 
-    def _on_mousewheel(self, event):
-        """Detect user scroll direction to pause/resume auto-scroll."""
+    def _bind_scroll_recursive(self, widget):
+        """Bind mousewheel to widget and all its children recursively.
+        This is the same approach CTkScrollableFrame uses internally."""
+        widget.bind("<MouseWheel>", self._scroll_logs)
+        widget.bind("<Button-4>", self._scroll_logs)
+        widget.bind("<Button-5>", self._scroll_logs)
+        for child in widget.winfo_children():
+            self._bind_scroll_recursive(child)
+
+    def _scroll_logs(self, event):
+        """Actually scroll the log text and track user scroll direction."""
         try:
-            if hasattr(event, 'delta') and event.delta > 0:
+            # Windows: event.delta is ±120 per notch
+            if event.num == 4 or (hasattr(event, 'delta') and event.delta > 0):
+                self._log_text.yview_scroll(-3, "units")
                 self._user_scrolled = True
-            elif hasattr(event, 'delta') and event.delta < 0:
-                yview = self._log_text.yview()
-                if yview[1] >= 1.0:
-                    self._user_scrolled = False
-            elif event.num == 4:
-                self._user_scrolled = True
-            elif event.num == 5:
+            elif event.num == 5 or (hasattr(event, 'delta') and event.delta < 0):
+                self._log_text.yview_scroll(3, "units")
                 yview = self._log_text.yview()
                 if yview[1] >= 1.0:
                     self._user_scrolled = False
