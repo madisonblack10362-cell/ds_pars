@@ -79,11 +79,11 @@ class DesktopGUI:
         self._build_tabs()
         self._load_and_fill_config()
 
-        # Force log scroll binding after CTkTabview finishes setup.
-        # CTkScrollableFrame uses bind_all/unbind_all on enter/leave,
-        # but CTkTabview interferes with enter/leave events.
-        # We override _unbind_mousewheel so it never unbinds while on Логи tab.
-        self.root.after(300, self._setup_log_scroll)
+        # Mousewheel router — binds on the raw tkinter.Tk root window
+        # (bypasses CTkBaseClass which blocks bind_all).
+        # Routes scroll events to the correct widget based on Enter/Leave.
+        self._scroll_target = None  # will be set to _textbox or _parent_canvas
+        self._setup_mousewheel_router()
 
         # Log polling thread
         threading.Thread(target=self._poll_logs, daemon=True).start()
@@ -98,6 +98,49 @@ class DesktopGUI:
         self._running = False
         try:
             self.root.destroy()
+        except Exception:
+            pass
+
+    # ================================================================
+    # Mousewheel Router
+    # ================================================================
+    #
+    # Problem: CTkBaseClass (parent of all CTk widgets) blocks bind_all().
+    # CTkScrollableFrame bypasses this by inheriting tkinter.Frame directly,
+    # but CTkTabview's internal canvas steals Enter/Leave events so the
+    # frame's bind never fires. On Windows, MouseWheel goes to the widget
+    # with KEYBOARD FOCUS, not the widget under the cursor.
+    #
+    # Solution: bind_all on the raw tkinter.Tk root (not a CTk widget),
+    # and use Enter/Leave on internal tkinter widgets to track the target.
+
+    def _setup_mousewheel_router(self):
+        """Set up global mousewheel routing on the raw tkinter root."""
+        # Get the underlying tkinter.Tk window — it allows bind_all
+        tk_root = self.root.winfo_toplevel()
+
+        # Global mousewheel handler on the raw tkinter root
+        tk_root.bind_all("<MouseWheel>", self._on_global_mousewheel)
+        tk_root.bind_all("<Button-4>", self._on_global_mousewheel)  # Linux up
+        tk_root.bind_all("<Button-5>", self._on_global_mousewheel)  # Linux down
+
+    def _on_global_mousewheel(self, event):
+        """Route mousewheel to the active scroll target."""
+        target = self._scroll_target
+        if target is None:
+            return  # No target — let CTkScrollableFrame handle settings tab
+        try:
+            # Windows: event.delta = +-120 per notch
+            # Linux: event.num = 4 (up) or 5 (down)
+            if event.num == 4 or (hasattr(event, 'delta') and event.delta > 0):
+                target.yview_scroll(-3, "units")
+                self._user_scrolled = True
+            elif event.num == 5 or (hasattr(event, 'delta') and event.delta < 0):
+                target.yview_scroll(3, "units")
+                # Check if scrolled to bottom — resume auto-scroll
+                yview = target.yview()
+                if yview[1] >= 1.0:
+                    self._user_scrolled = False
         except Exception:
             pass
 
@@ -315,7 +358,7 @@ class DesktopGUI:
                       fg_color=self.BG3, hover_color=self.RED,
                       command=self._clear_logs).pack(side="right", padx=3, pady=6)
 
-        # CTkTextbox — built on CTkScrollableFrame, handles mousewheel.
+        # CTkTextbox for log display with scrolling support.
         self._user_scrolled = False
         self._log_text = ctk.CTkTextbox(
             parent,
@@ -329,6 +372,7 @@ class DesktopGUI:
         self._log_text.pack(fill="both", expand=True, padx=8, pady=(0, 8))
         self._log_text._textbox.configure(wrap="word")
 
+        # Configure colored tags on the internal tk.Text widget
         tb = self._log_text._textbox
         tb.tag_configure("TIME", foreground=self.TEXT3)
         tb.tag_configure("LEVEL_INFO", foreground=self.ACCENT)
@@ -336,8 +380,34 @@ class DesktopGUI:
         tb.tag_configure("LEVEL_ERROR", foreground=self.RED)
         tb.tag_configure("LEVEL_DEBUG", foreground=self.TEXT3)
         tb.tag_configure("MSG", foreground=self.TEXT)
+
+        # Allow text selection and copy (Ctrl+C)
+        tb.bind("<Control-c>", lambda e: tb.event_generate("<<Copy>>"))
+        tb.bind("<Control-a>", lambda e: tb.tag_add("sel", "1.0", "end"))
+
+        # Enter/Leave on the internal textbox to activate/deactivate scroll routing
+        # This is key: we bind on the raw tkinter.Text, NOT on the CTkTextbox,
+        # because CTkBaseClass blocks bind_all and interferes with event routing.
+        tb.bind("<Enter>", self._on_log_enter)
+        tb.bind("<Leave>", self._on_log_leave)
+        tb.bind("<Button-1>", self._on_log_click)  # Also on click for focus
+
         self._total_lines = 0
         self._filter_level = "ALL"
+
+    def _on_log_enter(self, event):
+        """Mouse entered the log text area — activate scroll routing."""
+        self._scroll_target = self._log_text._textbox
+
+    def _on_log_leave(self, event):
+        """Mouse left the log text area — deactivate scroll routing."""
+        if self._scroll_target is self._log_text._textbox:
+            self._scroll_target = None
+
+    def _on_log_click(self, event):
+        """Click in log text — focus it and activate scroll routing."""
+        self._log_text._textbox.focus_set()
+        self._scroll_target = self._log_text._textbox
 
     # ================================================================
     # Config load / save
@@ -481,74 +551,6 @@ class DesktopGUI:
                 self._log_count.configure(text=f"{self._total_lines} записей")
             except Exception:
                 pass
-
-    def _setup_log_scroll(self):
-        """Force mousewheel binding for CTkTextbox in the logs tab.
-        The problem: CTkScrollableFrame uses bind_all/unbind_all on Enter/Leave,
-        but CTkTabview's internal canvas breaks Enter/Leave events.
-        Also, the Settings tab's CTkScrollableFrame calls unbind_all when you
-        leave it, which destroys ALL mousewheel handlers including ours.
-        Fix: override _unbind_mousewheel to not unbind while on Логи tab,
-        and force an initial bind_all."""
-        # Force initial binding
-        try:
-            self._log_text._bind_mousewheel(None)
-        except Exception:
-            pass
-
-        # Override _unbind_mousewheel so it doesn't kill our binding
-        # when mouse briefly leaves the textbox area
-        original_unbind = self._log_text._unbind_mousewheel
-        gui = self
-
-        def _safe_unbind(event):
-            try:
-                if gui.notebook.get() == "Логи":
-                    return  # Keep binding alive while on logs tab
-            except Exception:
-                pass
-            original_unbind(event)
-
-        self._log_text._unbind_mousewheel = _safe_unbind
-
-        # Also override _bind_mousewheel to re-apply when entering logs tab
-        # (in case settings tab's unbind_all killed it)
-        original_bind = self._log_text._bind_mousewheel
-
-        def _safe_bind(event):
-            original_bind(event)
-            # Also track scroll direction
-            gui._log_text.bind("<MouseWheel>", gui._on_log_mousewheel, add="+")
-            gui._log_text.bind("<Button-4>", gui._on_log_mousewheel, add="+")
-            gui._log_text.bind("<Button-5>", gui._on_log_mousewheel, add="+")
-
-        self._log_text._bind_mousewheel = _safe_bind
-
-        # Bind directly for scroll direction detection
-        try:
-            self._log_text._textbox.bind("<MouseWheel>", self._on_log_mousewheel)
-            self._log_text._textbox.bind("<Button-4>", self._on_log_mousewheel)
-            self._log_text._textbox.bind("<Button-5>", self._on_log_mousewheel)
-        except Exception:
-            pass
-
-    def _on_log_mousewheel(self, event):
-        """Detect scroll direction to pause/resume auto-scroll."""
-        try:
-            if hasattr(event, 'delta') and event.delta > 0:
-                self._user_scrolled = True
-            elif hasattr(event, 'delta') and event.delta < 0:
-                yview = self._log_text._textbox.yview()
-                if yview[1] >= 1.0:
-                    self._user_scrolled = False
-            elif event.num == 4:
-                self._user_scrolled = True
-            elif event.num == 5:
-                yview = self._log_text._textbox.yview()
-                if yview[1] >= 1.0:
-                    self._user_scrolled = False
-        except Exception:
-            pass
 
     def _tick_uptime(self):
         while self._running:
