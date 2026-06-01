@@ -323,25 +323,32 @@ class DayZNewsMonitor:
                         msg_id, result["news_type"], result["priority"],
                     )
 
-                    # Отправить на веб-панель для модерации
-                    if HAS_WEB_PANEL and self.web_panel_url:
-                        try:
-                            await send_to_web_panel(
-                                news_data={
-                                    "sourceId": msg.get("source_type", "discord"),
-                                    "serverName": result.get("server_name", ""),
-                                    "content": text,
-                                    "summary": result.get("summary", ""),
-                                    "formattedPost": result.get("formatted_post", ""),
-                                    "newsType": result.get("news_type", "other"),
-                                    "priority": result.get("priority", "low"),
-                                    "images": json.loads(msg.get("images", "[]")) if msg.get("images") else [],
-                                },
-                                web_app_url=self.web_panel_url,
-                                bot_api_key=self.web_panel_api_key or None,
-                            )
-                        except Exception as web_err:
-                            logger.warning("Веб-панель: ошибка отправки: %s", web_err)
+                    # Отправить на веб-панель для модерацию
+                    if HAS_WEB_PANEL:
+                        if not self.web_panel_url:
+                            logger.warning("Веб-панель: URL не настроен в config.json (web_panel_url)")
+                        else:
+                            try:
+                                success = await send_to_web_panel(
+                                    news_data={
+                                        "externalId": str(msg_id),
+                                        "serverName": result.get("server_name", ""),
+                                        "content": text,
+                                        "summary": result.get("summary", ""),
+                                        "formattedPost": result.get("formatted_post", ""),
+                                        "newsType": result.get("news_type", "other"),
+                                        "priority": result.get("priority", "low"),
+                                        "images": json.loads(msg.get("images", "[]")) if msg.get("images") else [],
+                                    },
+                                    web_app_url=self.web_panel_url,
+                                    bot_api_key=self.web_panel_api_key or None,
+                                )
+                                if not success:
+                                    logger.error("Веб-панель: не удалось отправить новость #%d", msg_id)
+                            except Exception as web_err:
+                                logger.error("Веб-панель: исключение при отправке #%d: %s", msg_id, web_err)
+                    else:
+                        logger.warning("Веб-панель: модуль web_app_integration не загружен")
                 else:
                     await self.db.save_processed(
                         message_id=msg_id,

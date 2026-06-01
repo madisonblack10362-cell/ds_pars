@@ -1,19 +1,8 @@
 """
 Telegram Web App Integration for DayZ News Monitor Bot
 ==========================================================
-Добавляет кнопку Web App в Telegram бота для открытия панели управления.
-
-Инструкция по интеграции:
-1. Добавить этот файл в корень проекта бота (ds_pars/)
-2. В bot.py добавить импорт и вызов setup_web_app_button()
-3. В publisher.py добавить вызов send_to_web_panel() после публикации
-
-Пример интеграции в bot.py:
-
-    from web_app_integration import setup_web_app_button
-
-    # После запуска бота:
-    await setup_web_app_button(bot, WEB_APP_URL)
+Отправка новостей на веб-панель для модерации,
+проверка очереди публикации и управление кнопкой бота.
 """
 
 import json
@@ -28,17 +17,11 @@ from aiogram.types import (
     WebAppInfo,
     MenuButtonWebApp,
 )
+from logger import logger
 
 
 async def setup_web_app_button(bot: Bot, web_app_url: str):
-    """
-    Устанавливает кнопку Web App в меню бота.
-    Открывает панель управления напрямую из меню бота.
-
-    Args:
-        bot: Экземпляр aiogram Bot
-        web_app_url: URL вашего Web App на Vercel (например: https://dayz-panel.vercel.app)
-    """
+    """Устанавливает кнопку Web App в меню бота."""
     try:
         await bot.set_chat_menu_button(
             menu_button=MenuButtonWebApp(
@@ -46,9 +29,9 @@ async def setup_web_app_button(bot: Bot, web_app_url: str):
                 web_app=WebAppInfo(url=web_app_url),
             )
         )
-        print(f"[WebApp] Кнопка 'Панель управления' установлена -> {web_app_url}")
+        logger.info("Кнопка 'Панель управления' установлена -> %s", web_app_url)
     except Exception as e:
-        print(f"[WebApp] Ошибка установки кнопки: {e}")
+        logger.warning("Не удалось установить кнопку панели: %s", e)
 
 
 async def setup_commands(bot: Bot):
@@ -60,51 +43,27 @@ async def setup_commands(bot: Bot):
         BotCommand(command="help", description="Помощь"),
     ]
     await bot.set_my_commands(commands)
-    print("[WebApp] Команды бота обновлены")
+    logger.info("Команды бота обновлены")
 
 
 def get_web_app_keyboard(web_app_url: str) -> InlineKeyboardMarkup:
-    """
-    Возвращает клавиатуру с кнопкой Web App для использования в сообщениях.
-
-    Args:
-        web_app_url: URL Web App на Vercel
-
-    Returns:
-        InlineKeyboardMarkup с кнопкой Web App
-    """
-    keyboard = InlineKeyboardMarkup(
+    """Клавиатура с кнопкой Web App."""
+    return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="Панель управления",
-                    web_app=WebAppInfo(url=web_app_url),
-                )
-            ]
+            [InlineKeyboardButton(
+                text="Панель управления",
+                web_app=WebAppInfo(url=web_app_url),
+            )]
         ]
     )
-    return keyboard
 
 
 def get_main_reply_keyboard(web_app_url: str = "") -> ReplyKeyboardMarkup:
-    """
-    Возвращает основную reply-клавиатуру бота с кнопкой Web App.
-
-    Args:
-        web_app_url: URL Web App (если не указан, кнопка Web App не добавляется)
-
-    Returns:
-        ReplyKeyboardMarkup
-    """
-    buttons = [
-        [KeyboardButton(text="Статус мониторинга")],
-    ]
-
+    """Основная reply-клавиатура бота с кнопкой Web App."""
+    buttons = [[KeyboardButton(text="Статус мониторинга")]]
     if web_app_url:
         buttons.insert(0, [KeyboardButton(text="Панель управления", web_app=WebAppInfo(url=web_app_url))])
-
-    keyboard = ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-    return keyboard
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
 async def send_to_web_panel(
@@ -115,56 +74,41 @@ async def send_to_web_panel(
 ) -> bool:
     """
     Отправляет новость на веб-панель для модерации.
-
-    Args:
-        news_data: Словарь с данными новости:
-            {
-                "sourceId": "discord-channel-id",
-                "externalId": "message-id",
-                "serverName": "DayZ Official",
-                "channelName": "announcements",
-                "author": "Username",
-                "title": "Server Wipe",
-                "content": "Full message text",
-                "summary": "AI summary",
-                "formattedPost": "Formatted Telegram post",
-                "newsType": "wipe|update|patch|event|maintenance|other",
-                "priority": "high|medium|low",
-                "images": ["url1", "url2"],
-                "links": ["url1", "url2"]
-            }
-        web_app_url: URL веб-панели (например: https://dayz-panel.vercel.app)
-        bot_api_key: API ключ для авторизации (настраивается в Vercel env BOT_API_KEY)
-        timeout: Таймаут запроса в секундах
-
-    Returns:
-        True если новость успешно отправлена, False в противном случае
+    Возвращает True при успешной отправке.
     """
+    url = f"{web_app_url}/api/news"
+
     try:
         headers = {"Content-Type": "application/json"}
         if bot_api_key:
             headers["Authorization"] = f"Bearer {bot_api_key}"
 
+        logger.info("Веб-панель: отправка новости на %s (content=%d символов)",
+                     url, len(str(news_data.get("content", ""))))
+
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{web_app_url}/api/news",
-                json=news_data,
-                headers=headers,
-            )
+            response = await client.post(url, json=news_data, headers=headers)
 
             if response.status_code in (200, 201):
                 result = response.json()
-                print(f"[WebApp] Новость отправлена на панель: {result.get('news_id', 'unknown')}")
+                news_id = result.get('news_id', 'unknown')
+                logger.info("Веб-панель: новость #%s успешно отправлена на модерацию", news_id)
                 return True
             else:
-                print(f"[WebApp] Ошибка отправки ({response.status_code}): {response.text}")
+                logger.error(
+                    "Веб-панель: ошибка отправки (HTTP %d): %s",
+                    response.status_code, response.text[:500]
+                )
                 return False
 
     except httpx.TimeoutException:
-        print("[WebApp] Таймаут отправки на панель")
+        logger.error("Веб-панель: таймаут отправки (%s)", url)
+        return False
+    except httpx.ConnectError as e:
+        logger.error("Веб-панель: не удалось подключиться к %s — %s", url, e)
         return False
     except Exception as e:
-        print(f"[WebApp] Ошибка отправки на панель: {e}")
+        logger.error("Веб-панель: ошибка отправки — %s", e)
         return False
 
 
@@ -173,17 +117,7 @@ async def get_moderation_status(
     bot_api_key: str = "",
     timeout: float = 5.0,
 ) -> dict:
-    """
-    Проверяет статус модерации новостей с веб-панели.
-
-    Args:
-        web_app_url: URL веб-панели
-        bot_api_key: API ключ
-        timeout: Таймаут
-
-    Returns:
-        Словарь со статусами: {"pending": N, "approved": N, "rejected": N}
-    """
+    """Проверяет количество ожидающих модерацию новостей."""
     try:
         headers = {}
         if bot_api_key:
@@ -194,18 +128,12 @@ async def get_moderation_status(
                 f"{web_app_url}/api/news?status=pending&limit=1",
                 headers=headers,
             )
-
             if response.status_code == 200:
                 data = response.json()
-                return {
-                    "pending": data.get("total", 0),
-                    "total_pages": data.get("totalPages", 0),
-                }
-
+                return {"pending": data.get("total", 0), "total_pages": data.get("totalPages", 0)}
             return {"pending": 0, "total_pages": 0}
-
     except Exception as e:
-        print(f"[WebApp] Ошибка проверки статуса: {e}")
+        logger.debug("Веб-панель: ошибка проверки статуса: %s", e)
         return {"pending": 0, "total_pages": 0}
 
 
@@ -217,9 +145,6 @@ async def check_publish_queue(
     """
     Проверяет очередь публикации на веб-панели.
     Возвращает новости со статусом 'scheduled', у которых scheduledAt <= сейчас.
-
-    Returns:
-        Список новостей для публикации
     """
     try:
         headers = {}
@@ -231,11 +156,9 @@ async def check_publish_queue(
                 f"{web_app_url}/api/publish-queue",
                 headers=headers,
             )
-
             if response.status_code == 200:
                 data = response.json()
                 items = data.get("items", data.get("queue", []))
-                # Фильтруем: только те, у которых scheduledAt <= сейчас
                 from datetime import datetime, timezone
                 now = datetime.now(timezone.utc)
                 ready = []
@@ -250,10 +173,9 @@ async def check_publish_queue(
                     except (ValueError, TypeError):
                         continue
                 return ready
-
             return []
     except Exception as e:
-        print(f"[WebApp] Ошибка проверки очереди публикации: {e}")
+        logger.debug("Веб-панель: ошибка проверки очереди: %s", e)
         return []
 
 
@@ -263,17 +185,7 @@ async def mark_published_on_panel(
     bot_api_key: str = "",
     timeout: float = 10.0,
 ) -> bool:
-    """
-    Отмечает новость как опубликованную на веб-панели.
-
-    Args:
-        news_id: ID новости на панели
-        web_app_url: URL панели
-        bot_api_key: API ключ
-
-    Returns:
-        True если успешно
-    """
+    """Отмечает новость как опубликованную на веб-панели."""
     try:
         headers = {}
         if bot_api_key:
@@ -284,7 +196,12 @@ async def mark_published_on_panel(
                 f"{web_app_url}/api/news/{news_id}/publish",
                 headers=headers,
             )
-            return response.status_code in (200, 201)
+            if response.status_code in (200, 201):
+                logger.info("Веб-панель: новость #%s отмечена как опубликованная", news_id)
+                return True
+            else:
+                logger.error("Веб-панель: ошибка отметки публикации #%s (HTTP %d)", news_id, response.status_code)
+                return False
     except Exception as e:
-        print(f"[WebApp] Ошибка отметки публикации: {e}")
+        logger.error("Веб-панель: ошибка отметки публикации #%s — %s", news_id, e)
         return False
