@@ -327,12 +327,13 @@ class DesktopGUI:
         self._log_text.pack(side="left", fill="both", expand=True)
         self._log_scrollbar.configure(command=self._log_text.yview)
 
-        # Scrolling on Windows: CTkTabview eats MouseWheel, so bind globally
-        # when cursor enters the log area and unbind on leave
+        # Scrolling: bind on root and check if mouse is over log area.
+        # This is the most reliable way on Windows with CTkTabview.
         self._user_scrolled = False
         self._log_frame = log_frame
-        log_frame.bind("<Enter>", self._bind_log_mousewheel)
-        log_frame.bind("<Leave>", self._unbind_log_mousewheel)
+        self.root.bind("<MouseWheel>", self._on_mousewheel)
+        self.root.bind("<Button-4>", self._on_mousewheel)
+        self.root.bind("<Button-5>", self._on_mousewheel)
 
         self._log_text.tag_configure("TIME", foreground=self.TEXT3)
         self._log_text.tag_configure("LEVEL_INFO", foreground=self.ACCENT)
@@ -485,22 +486,32 @@ class DesktopGUI:
             except Exception:
                 pass
 
-    def _bind_log_mousewheel(self, event):
-        """Bind mousewheel globally so CTkTabview doesn't eat it."""
-        self.root.bind_all("<MouseWheel>", self._on_mousewheel)
-        self.root.bind_all("<Button-4>", self._on_mousewheel)
-        self.root.bind_all("<Button-5>", self._on_mousewheel)
-
-    def _unbind_log_mousewheel(self, event):
-        """Unbind global mousewheel when cursor leaves the log area."""
-        self.root.unbind_all("<MouseWheel>")
-        self.root.unbind_all("<Button-4>")
-        self.root.unbind_all("<Button-5>")
+    def _is_mouse_over_logs(self):
+        """Check if mouse cursor is currently over the log text area."""
+        try:
+            x = self.root.winfo_pointerx()
+            y = self.root.winfo_pointery()
+            widget = self.root.winfo_containing(x, y)
+            if widget is None:
+                return False
+            # Walk up from the widget to see if it's inside _log_text or _log_frame
+            while widget is not None:
+                if widget is self._log_text:
+                    return True
+                if widget is self._log_frame:
+                    return True
+                if widget is self._log_scrollbar:
+                    return True
+                widget = widget.master
+            return False
+        except Exception:
+            return False
 
     def _on_mousewheel(self, event):
-        """Scroll the log text and detect user scroll direction."""
+        """Scroll the log text when mouse is over the log area."""
+        if not self._is_mouse_over_logs():
+            return  # Let other widgets handle it
         try:
-            # Windows: event.delta is ±120; Linux: event.num 4/5
             if event.num == 4 or (hasattr(event, 'delta') and event.delta > 0):
                 self._log_text.yview_scroll(-3, "units")
                 self._user_scrolled = True
