@@ -120,15 +120,24 @@ class DesktopGUI:
         tk_root = self.root.winfo_toplevel()
 
         # Global mousewheel handler on the raw tkinter root
-        tk_root.bind_all("<MouseWheel>", self._on_global_mousewheel)
-        tk_root.bind_all("<Button-4>", self._on_global_mousewheel)  # Linux up
-        tk_root.bind_all("<Button-5>", self._on_global_mousewheel)  # Linux down
+        tk_root.bind_all("<MouseWheel>", self._on_global_mousewheel, add="+")
+        tk_root.bind_all("<Button-4>", self._on_global_mousewheel, add="+")
+        tk_root.bind_all("<Button-5>", self._on_global_mousewheel, add="+")
 
     def _on_global_mousewheel(self, event):
-        """Route mousewheel to the active scroll target."""
+        """Route mousewheel to the active scroll target only when on Логи tab."""
+        # Only handle scroll when Логи tab is active.
+        # For other tabs, do nothing — CTkScrollableFrame handles settings.
+        try:
+            current_tab = self.notebook.get()
+            if current_tab != "Логи":
+                return
+        except Exception:
+            return
+
         target = self._scroll_target
         if target is None:
-            return  # No target — let CTkScrollableFrame handle settings tab
+            return
         try:
             # Windows: event.delta = +-120 per notch
             # Linux: event.num = 4 (up) or 5 (down)
