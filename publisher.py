@@ -15,6 +15,43 @@ from aiogram.types import InputMediaPhoto, InputMediaVideo, FSInputFile
 
 from logger import logger
 
+
+def strip_html_tags(text: str) -> str:
+    """
+    Удаляет ВСЕ HTML-теги из текста.
+    Нужно для очистки summary от LLM перед вставкой в Telegram-формат.
+    Telegram поддерживает ограниченный набор тегов (b, i, a, code, pre, blockquote, s, u, spoiler).
+    Любые другие теги или невалидный HTML ломают парсер.
+    """
+    import re
+    # Убираем все HTML-теги
+    cleaned = re.sub(r'<[^>]+>', '', text)
+    # Декодируем частые HTML-entities
+    cleaned = cleaned.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
+    cleaned = cleaned.replace('&quot;', '"').replace('&#39;', "'").replace('&#x27;', "'")
+    # Убираем лишние пробелы/пустые строки
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+    return cleaned.strip()
+
+
+def sanitize_html_for_telegram(text: str) -> str:
+    """
+    Очищает HTML-текст для безопасной отправки в Telegram.
+    Удаляет теги, которые Telegram не поддерживает.
+    Сохраняет только разрешённые теги: b, i, u, s, a, code, pre, blockquote, spoiler.
+    """
+    import re
+    allowed_tags = {'b', 'i', 'u', 's', 'a', 'code', 'pre', 'blockquote', 'spoiler', 'strong', 'em'}
+    # Удаляем все теги, кроме разрешённых
+    result = re.sub(r'<(/?)(\w+)([^>]*)>', lambda m: f'<{m.group(1)}{m.group(2)}>' if m.group(2).lower() in allowed_tags else '', text)
+    # Убираем оставшиеся невалидные конструкции
+    result = re.sub(r'<[^>]*>', '', result)
+    # Декодируем entities
+    result = result.replace('&lt;', '<').replace('&gt;', '>')
+    result = result.replace('&amp;', '&').replace('&#39;', "'")
+    return result
+
+
 # Соответствие типов новостей и иконок
 NEWS_TYPE_ICONS = {
     "wipe": "\u26a0\ufe0f ВАЙП",
@@ -149,8 +186,11 @@ class Publisher:
         # Блок с деталями через blockquote
         bq_lines = []
         if summary:
-            bq_lines.append(summary)
-        if original_text and len(original_text) > len(summary):
+            # Очищаем summary от HTML-тегов, которые генерирует LLM,
+            # чтобы не сломать Telegram-парсер
+            clean_summary = strip_html_tags(summary)
+            bq_lines.append(clean_summary)
+        if original_text and len(original_text) > len(summary or ""):
             trimmed = original_text[:1000]
             paragraphs = [p.strip() for p in trimmed.split("\n") if p.strip()]
             for para in paragraphs[:8]:
@@ -250,6 +290,17 @@ class Publisher:
         Returns:
             ID отправленного сообщения в Telegram или None при ошибке.
         """
+        # Безопасная обработка текста перед отправкой в Telegram
+        # Проверяем баланс blockquote-тегов и при необходимости исправляем
+        import re as _re
+        bq_open = len(_re.findall(r'<blockquote>', text))
+        bq_close = len(_re.findall(r'</blockquote>', text))
+        if bq_open != bq_close:
+            # Неравное количество — убираем все blockquote и оборачиваем весь текст в один
+            text = _re.sub(r'<blockquote>', '', text)
+            text = _re.sub(r'</blockquote>', '', text)
+            text = text.strip()
+
         # Собираем изображения для отправки
         local_images: list[str] = list(image_paths or [])
 
