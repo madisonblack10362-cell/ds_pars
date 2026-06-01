@@ -79,14 +79,6 @@ class DesktopGUI:
         self._build_tabs()
         self._load_and_fill_config()
 
-        # Global mousewheel binding — must be AFTER all widgets are built.
-        # CTkTabview captures MouseWheel in its internal canvas, so bind_all
-        # is the only reliable way. We detect active tab to avoid conflicts.
-        self._user_scrolled = False
-        self.root.bind_all("<MouseWheel>", self._on_mousewheel)
-        self.root.bind_all("<Button-4>", self._on_mousewheel)
-        self.root.bind_all("<Button-5>", self._on_mousewheel)
-
         # Log polling thread
         threading.Thread(target=self._poll_logs, daemon=True).start()
 
@@ -148,7 +140,8 @@ class DesktopGUI:
 
         self._build_dashboard(self.notebook.add("Дашборд"))
         self._build_settings(self.notebook.add("Настройки"))
-        self._build_logs(self.notebook.add("Логи"))
+        self._logs_tab_frame = self.notebook.add("Логи")
+        self._build_logs(self._logs_tab_frame)
 
     # === Dashboard ===
 
@@ -329,13 +322,33 @@ class DesktopGUI:
             log_frame, bg=self.INPUT_BG, fg=self.TEXT, font=("Consolas", 11),
             insertbackground=self.TEXT, selectbackground=self.BG3,
             borderwidth=0, highlightthickness=0, wrap="word",
-            state="disabled", cursor="arrow",
+            cursor="arrow",
             yscrollcommand=self._log_scrollbar.set,
+            takefocus=True,
         )
         self._log_text.pack(side="left", fill="both", expand=True)
         self._log_scrollbar.configure(command=self._log_text.yview)
 
-        # Scrolling is handled via bind_all in run() — nothing needed here
+        # Keep text in normal state but prevent user typing.
+        # This is critical: state="disabled" blocks mousewheel on Windows.
+        # Normal state + key blocking = read-only but scrollable.
+        self._log_text.bind("<Key>", self._block_typing)
+        # Allow Ctrl+A (select all) and Ctrl+C (copy)
+        self._log_text.bind("<Control-a>", lambda e: None)
+        self._log_text.bind("<Control-A>", lambda e: None)
+        self._log_text.bind("<Control-c>", lambda e: None)
+        self._log_text.bind("<Control-C>", lambda e: None)
+        # Give focus on click so native mousewheel works
+        self._log_text.bind("<ButtonPress-1>", self._log_text.focus_set)
+        # Detect user scroll direction for auto-scroll pause
+        self._user_scrolled = False
+        self._log_text.bind("<MouseWheel>", self._on_mousewheel)
+        self._log_text.bind("<Button-4>", self._on_mousewheel)
+        self._log_text.bind("<Button-5>", self._on_mousewheel)
+        # Also bind on scrollbar
+        self._log_scrollbar.bind("<MouseWheel>", self._on_mousewheel)
+        self._log_scrollbar.bind("<Button-4>", self._on_mousewheel)
+        self._log_scrollbar.bind("<Button-5>", self._on_mousewheel)
 
         self._log_text.tag_configure("TIME", foreground=self.TEXT3)
         self._log_text.tag_configure("LEVEL_INFO", foreground=self.ACCENT)
@@ -450,9 +463,7 @@ class DesktopGUI:
 
     def _clear_logs(self):
         self._total_lines = 0
-        self._log_text.configure(state="normal")
         self._log_text.delete("1.0", "end")
-        self._log_text.configure(state="disabled")
         self._log_count.configure(text="0 записей")
 
     def _poll_logs(self):
@@ -469,7 +480,6 @@ class DesktopGUI:
                 continue
 
             try:
-                self._log_text.configure(state="normal")
                 self._log_text.insert("end", f" {entry['time']} ", "TIME")
                 tag = f"LEVEL_{level}"
                 if tag not in ("LEVEL_INFO", "LEVEL_WARNING", "LEVEL_ERROR", "LEVEL_DEBUG"):
@@ -483,27 +493,42 @@ class DesktopGUI:
                 # Auto-scroll only if user hasn't manually scrolled up
                 if not self._user_scrolled:
                     self._log_text.see("end")
-                self._log_text.configure(state="disabled")
                 self._log_count.configure(text=f"{self._total_lines} записей")
             except Exception:
                 pass
 
-    def _on_mousewheel(self, event):
-        """Scroll logs when Логи tab is active, otherwise let other widgets handle it."""
-        try:
-            current_tab = self.notebook.get()
-            if current_tab != "Логи":
-                return  # Don't consume — let settings CTkScrollableFrame scroll
-        except Exception:
+    def _block_typing(self, event):
+        """Block keyboard input but allow Ctrl+A/C and navigation."""
+        # Allow modifier keys, function keys, navigation, and Ctrl combos
+        if event.keysym in ("Control_L", "Control_R", "Shift_L", "Shift_R",
+                             "Alt_L", "Alt_R", "Super_L", "Super_R",
+                             "Caps_Lock", "Tab",
+                             "Left", "Right", "Up", "Down",
+                             "Home", "End", "Next", "Prior",
+                             "F1", "F2", "F3", "F4", "F5", "F6",
+                             "F7", "F8", "F9", "F10", "F11", "F12",
+                             "Insert", "Delete",
+                             "Control_a", "Control_A",
+                             "Control_c", "Control_C"):
             return
+        if event.state & 0x4:  # Ctrl held
+            return  # Allow all Ctrl combos
+        if event.state & 0x1:  # Shift held
+            return  # Allow Shift combos
+        return "break"  # Block everything else
 
+    def _on_mousewheel(self, event):
+        """Detect user scroll direction to pause/resume auto-scroll."""
         try:
-            # Windows: event.delta is ±120; Linux: event.num 4/5
-            if event.num == 4 or (hasattr(event, 'delta') and event.delta > 0):
-                self._log_text.yview_scroll(-3, "units")
+            if hasattr(event, 'delta') and event.delta > 0:
                 self._user_scrolled = True
-            elif event.num == 5 or (hasattr(event, 'delta') and event.delta < 0):
-                self._log_text.yview_scroll(3, "units")
+            elif hasattr(event, 'delta') and event.delta < 0:
+                yview = self._log_text.yview()
+                if yview[1] >= 1.0:
+                    self._user_scrolled = False
+            elif event.num == 4:
+                self._user_scrolled = True
+            elif event.num == 5:
                 yview = self._log_text.yview()
                 if yview[1] >= 1.0:
                     self._user_scrolled = False
