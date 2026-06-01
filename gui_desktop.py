@@ -79,6 +79,11 @@ class DesktopGUI:
         self._build_tabs()
         self._load_and_fill_config()
 
+        # Setup log scrolling AFTER CTkTabview has finished internal setup.
+        # Must use after() because CTkTabview configures its internal canvas
+        # bindings lazily during the first mainloop iteration.
+        self.root.after(200, self._setup_log_scroll)
+
         # Log polling thread
         threading.Thread(target=self._poll_logs, daemon=True).start()
 
@@ -339,13 +344,8 @@ class DesktopGUI:
         self._log_text.bind("<Control-C>", lambda e: None)
         self._log_text.bind("<ButtonPress-1>", self._log_text.focus_set)
 
-        # Detect user scroll direction for auto-scroll pause
-        self._user_scrolled = False
-        # Recursively bind mousewheel to EVERY widget inside the logs tab.
-        # CTkTabview has an internal canvas that captures MouseWheel, so binding
-        # only on tk.Text is not enough — the event never reaches it.
-        # This is exactly how CTkScrollableFrame does it for the settings tab.
-        self._bind_scroll_recursive(self._logs_tab_frame)
+        # _setup_log_scroll is called via after(200) in run() after
+        # CTkTabview finishes its internal setup.
 
         self._log_text.tag_configure("TIME", foreground=self.TEXT3)
         self._log_text.tag_configure("LEVEL_INFO", foreground=self.ACCENT)
@@ -514,19 +514,53 @@ class DesktopGUI:
             return  # Allow Shift combos
         return "break"  # Block everything else
 
+    def _setup_log_scroll(self):
+        """Set up mousewheel scrolling for the log tab.
+        Called via after(200) after CTkTabview finishes internal setup.
+        Binds at EVERY possible level to ensure scroll works on Windows."""
+        self._user_scrolled = False
+
+        # Level 1: CTkTabview's internal canvas — this is where MouseWheel
+        # events actually arrive on Windows when cursor is over tab content
+        try:
+            tabview_canvas = self.notebook._canvas
+            tabview_canvas.bind("<MouseWheel>", self._scroll_logs_global)
+            tabview_canvas.bind("<Button-4>", self._scroll_logs_global)
+            tabview_canvas.bind("<Button-5>", self._scroll_logs_global)
+        except Exception:
+            pass
+
+        # Level 2: Bind on the notebook widget itself
+        self.notebook.bind("<MouseWheel>", self._scroll_logs_global)
+        self.notebook.bind("<Button-4>", self._scroll_logs_global)
+        self.notebook.bind("<Button-5>", self._scroll_logs_global)
+
+        # Level 3: Recursive bind on all children of the logs tab frame
+        self._bind_scroll_recursive(self._logs_tab_frame)
+
+        # Level 4: Nuclear — bind_all with add=+ so it doesn't replace existing
+        self.root.bind_all("<MouseWheel>", self._scroll_logs_global, add="+")
+        self.root.bind_all("<Button-4>", self._scroll_logs_global, add="+")
+        self.root.bind_all("<Button-5>", self._scroll_logs_global, add="+")
+
     def _bind_scroll_recursive(self, widget):
-        """Bind mousewheel to widget and all its children recursively.
-        This is the same approach CTkScrollableFrame uses internally."""
-        widget.bind("<MouseWheel>", self._scroll_logs)
-        widget.bind("<Button-4>", self._scroll_logs)
-        widget.bind("<Button-5>", self._scroll_logs)
+        """Bind mousewheel to widget and all its children recursively."""
+        widget.bind("<MouseWheel>", self._scroll_logs_global)
+        widget.bind("<Button-4>", self._scroll_logs_global)
+        widget.bind("<Button-5>", self._scroll_logs_global)
         for child in widget.winfo_children():
             self._bind_scroll_recursive(child)
 
-    def _scroll_logs(self, event):
-        """Actually scroll the log text and track user scroll direction."""
+    def _scroll_logs_global(self, event):
+        """Handle mousewheel — only scroll when Логи tab is active."""
         try:
-            # Windows: event.delta is ±120 per notch
+            current_tab = self.notebook.get()
+            if current_tab != "Логи":
+                return  # Don't interfere with other tabs
+        except Exception:
+            return
+
+        try:
             if event.num == 4 or (hasattr(event, 'delta') and event.delta > 0):
                 self._log_text.yview_scroll(-3, "units")
                 self._user_scrolled = True
