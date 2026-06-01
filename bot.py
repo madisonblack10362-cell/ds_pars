@@ -18,7 +18,7 @@ from database import Database
 
 # Web Panel integration (опционально — нужен httpx)
 try:
-    from web_app_integration import setup_web_app_button, send_to_web_panel, check_publish_queue, mark_published_on_panel
+    from web_app_integration import setup_web_app_button, setup_commands, send_to_web_panel, check_publish_queue, mark_published_on_panel
     HAS_WEB_PANEL = True
 except ImportError:
     HAS_WEB_PANEL = False
@@ -141,14 +141,15 @@ class DayZNewsMonitor:
             )
             logger.info("Publisher инициализирован (канал: %s)", channel_id)
 
-            # Кнопка Web App в меню бота
+            # Кнопка Web App в меню бота + команды
             if HAS_WEB_PANEL and self.web_panel_url:
                 try:
                     bot_for_web = self.publisher.bot
                     await setup_web_app_button(bot_for_web, self.web_panel_url)
-                    logger.info("Кнопка панели управления добавлена в меню бота")
+                    await setup_commands(bot_for_web)
+                    logger.info("Кнопка панели управления и команды добавлены")
                 except Exception as e:
-                    logger.warning("Не удалось установить кнопку панели: %s", e)
+                    logger.warning("Не удалось установить кнопку/команды панели: %s", e)
         else:
             logger.warning("Publisher отключён: не указан токен Telegram-бота")
 
