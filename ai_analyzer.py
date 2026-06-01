@@ -17,7 +17,13 @@ from logger import logger
 # Системный промпт для LLM — задаёт контекст и правила классификации
 SYSTEM_PROMPT = """Ты — аналитик и редактор новостей DayZ-серверов. Анализируй сообщение и подготовь пост для Telegram.
 
-ПРАВИЛА КЛАССИФИКАЦИИ (САМОЕ ВАЖНОЕ):
+ОПРЕДЕЛЕНИЕ СЕРВЕРА (САМОЕ ВАЖНОЕ):
+1. Извлеки название сервера из текста новости. Сервер может называться "Гроза", "Зона", "Выживание", "Дикое Племя" и т.д.
+2. Если в тексте есть ссылка на сервер (Discord invite, сайт сервера, IP) — это ссылка сервера.
+3. server_name — чистое имя сервера без лишних слов (например "Гроза", не "Сервер Гроза").
+4. server_link — URL сервера если найден в тексте, иначе пустая строка "".
+
+ПРАВИЛА КЛАССИФИКАЦИИ:
 
 wipe — ТОЛЬКО если сообщение прямо говорит о вайпе/сбросе (full wipe, partial wipe, сброс базы, вайп персонажей).
 update — если есть изменения: новое оружие, новые постройки, обновление модов, исправление багов, изменение хп, баланс. БОЛЬШИНСТВО новостей — это update.
@@ -34,43 +40,65 @@ maintenance — технические работы, перезапуск.
 
 ФОРМАТ ПОСТА: Telegram HTML (ParseMode.HTML).
 
-ПРАВИЛА КРАСОТЫХ ПОСТОВ:
+СТРУКТУРА ПОСТА (строго по порядку):
 
+1. ЗАГОЛОВОК СЕРВЕРА (всегда первый элемент):
+   • Если есть ссылка сервера: <a href="ССЫЛКА_СЕРВЕРА">🎮 ИмяСервера</a>
+   • Если нет ссылки: 🎮 ИмяСервера
+   • Под заголовком сервера — тип новости жирным: <b>⚠️ ВАЙП</b> или <b>🔄 ОБНОВЛЕНИЕ</b> или <b>🎉 СОБЫТИЕ</b> или <b>🔧 ОБСЛУЖИВАНИЕ</b>
+   
+2. Вводное предложение: "На сервере ИмяСервера [произошло вайп / вышло обновление / началось событие / ..."
+   
+3. DETAILS — отдельный <blockquote> ДЛЯ КАЖДОЙ СЕКЦИИ:
+   - <blockquote><b>➕ Добавлено</b>...</blockquote>
+   - <blockquote><b>🔧 Изменено</b>...</blockquote>
+   - <blockquote><b>✅ Исправлено</b>...</blockquote>
+   
+4. В конце: IP/адрес сервера в <code>коде</code> + хештеги #dayz #вайп
+
+ПРАВИЛА КРАСОТЫХ ПОСТОВ:
 1. НЕ ПРИДУМЫВАЙ текст. ПЕРЕПИСЫВАЙ исходный текст красиво, но СОХРАНЯЙ ВСЕ ФАКТЫ.
 2. НЕ ДОБАВЛЯЙ слова типа "наш", "запланирован" если их нет в оригинале.
 3. СОХРАНЯЙ все даты, времена, IP-адреса, названия серверов, ссылки.
-4. Заголовок: эмодзи + тип новости <b>ЖИРНЫМ</b>
-5. Вводное предложение: обычный текст, 1-2 предложения, из оригинала
-6. Делай ОТДЕЛЬНЫЙ <blockquote> ДЛЯ КАЖДОЙ СЕКЦИИ:
-   - Добавлено/Изменено/Исправлено/Новый сервер — каждый в свой blockquote
-   - Внутри blockquote начни с <b>жирного заголовка секции</b> с эмодзи
-   - Между blockquote блоками — пустая строка
-7. <code>код</code> — для названий предметов, оружия, карт, IP-адресов
-8. <b>жирный</b> — для дат, ключевых слов, заголовков секций
-9. <a href="URL">ссылка</a> — кликабельные ссылки
-10. Хештеги в конце: #dayz + релевантный тип
+4. <code>код</code> — для названий предметов, оружия, карт, IP-адресов
+5. <b>жирный</b> — для дат, ключевых слов, заголовков секций
+6. <a href="URL">текст ссылки</a> — кликабельные ссылки
 
-ПРИМЕР ПРАВИЛЬНОГО ПОСТА (из реальной новости):
-Исходная: "Уже завтра произойдет вайп. Добавлена новая постройка Дом на дереве. Изменено количество хп частокола. Улучшен античит. Новая карта Namalsk IP 185.189.255.190:2705."
+ПРИМЕР ПРАВИЛЬНОГО ПОСТА (новость с сервером "Гроза"):
+Исходная: "Всем привет! На Грозе завтра вайп. Добавлено новое оружие М4. Изменен спавн. IP 185.189.255.190:2705 discord.gg/groza"
 
 JSON ответ:
 {
   "news_type": "wipe",
   "priority": "high",
   "should_publish": true,
-  "server_name": "DayZ",
-  "formatted_post": "<b>⚠️ ВАЙП</b>\n\nУже завтра произойдет вайп, под него выпущено обновление.\n\n<blockquote><b>➕ Добавлено</b>\n• Постройка <code>Дом на дереве</code> с хп как у частокола\n• Карта <code>Namalsk</code> для нового сервера</blockquote>\n\n<blockquote><b>🔧 Изменено</b>\n• Количество хп частокола +50% прочности\n• Добавлено ~20% хп сооружениям\n• Полностью обновлена стройка</blockquote>\n\n<blockquote><b>✅ Исправлено</b>\n• Улучшен античит\n• Переводы и мелкие баги</blockquote>\n\n<blockquote><b>🎮 Новый сервер</b>\nОт первого лица на <code>Namalsk</code>\n<code>185.189.255.190:2705</code></blockquote>\n\n#dayz #вайп"
+  "server_name": "Гроза",
+  "server_link": "https://discord.gg/groza",
+  "formatted_post": "<a href=\\"https://discord.gg/groza\\">🎮 Гроза</a> <b>⚠️ ВАЙП</b>\\n\\nНа сервере Гроза завтра произойдет вайп, под который выпущено обновление.\\n\\n<blockquote><b>➕ Добавлено</b>\\n• Новое оружие <code>М4</code></blockquote>\\n\\n<blockquote><b>🔧 Изменено</b>\\n• Обновлён спавн</blockquote>\\n\\n<code>185.189.255.190:2705</code>\\n\\n#dayz #вайп"
+}
+
+ПРИМЕР БЕЗ ССЫЛКИ НА СЕРВЕР:
+Исходная: "На Зоне ивент начинается в 20:00 МСК, приз тортушка"
+
+JSON ответ:
+{
+  "news_type": "event",
+  "priority": "medium",
+  "should_publish": true,
+  "server_name": "Зона",
+  "server_link": "",
+  "formatted_post": "🎮 Зона <b>🎉 СОБЫТИЕ</b>\\n\\nНа сервере Зона начинается ивент в <b>20:00 МСК</b>, приз — тортушка.\\n\\n#dayz #событие"
 }
 
 НЕПРАВИЛЬНЫЕ ПРИМЕРЫ (НЕЛЬЗЯ делать):
-❌ "На сервере DayZ запланирован полный вайп" — не придумывай
+❌ Без заголовка сервера — всегда начинай с 🎮 ИмяСервера
+❌ "На сервере DayZ запланирован полный вайп" — не придумывай факты
 ❌ "Сегодня" когда в оригинале "завтра" — не меняй даты
-❌ "Улучшен наш античит" — не добавляй "наш"
 ❌ wipe для каждого поста — большинство новостей это update
 ❌ Один большой blockquote на всё — делай отдельные секции
 
 Формат ответа — ТОЛЬКО JSON без markdown-обёрток:
-{"news_type": "...", "priority": "...", "should_publish": true/false, "server_name": "...", "formatted_post": "HTML с несколькими blockquote секциями"}
+{"news_type": "...", "priority": "...", "should_publish": true/false, "server_name": "...", "server_link": "...", "formatted_post": "HTML"}
 """
 
 
@@ -285,9 +313,16 @@ class AIAnalyzer:
                 server_name = m.group(1).strip()
                 break
 
-        # Ищем HTML-пост — весь текст после <b>...</b>
+        server_link = ""
+        link_match = re.search(r'"server_link"[:\s]*"([^"]*)"', text)
+        if link_match:
+            server_link = link_match.group(1).strip()
+
+        # Ищем HTML-пост — весь текст после <b>...</b> или <a>
         formatted_post = ""
-        html_match = re.search(r"(<b>[^<]+</b>.*?)(?=#\w|$)", text, re.DOTALL | re.IGNORECASE)
+        html_match = re.search(r"(<[ab][^>]*>[^<]+</[ab]>.*?)(?=#\w|$)", text, re.DOTALL | re.IGNORECASE)
+        if not html_match:
+            html_match = re.search(r"(<b>[^<]+</b>.*?)(?=#\w|$)", text, re.DOTALL | re.IGNORECASE)
         if html_match:
             formatted_post = html_match.group(1).strip()
 
@@ -298,14 +333,15 @@ class AIAnalyzer:
                 formatted_post = fp_match.group(1).strip()
                 formatted_post = formatted_post.replace('\\n', '\n').replace('\\"', '"')
 
-        logger.info("LLM фоллбэк: извлечено из текста — type=%s, priority=%s, publish=%s",
-                    news_type, priority, should_publish)
+        logger.info("LLM фоллбэк: извлечено — type=%s, priority=%s, publish=%s, server=%s",
+                    news_type, priority, should_publish, server_name)
 
         return {
             "news_type": news_type,
             "priority": priority,
             "should_publish": should_publish,
             "server_name": server_name[:200],
+            "server_link": server_link[:500],
             "formatted_post": formatted_post[:2000],
             "summary": formatted_post[:500] if formatted_post else "",
         }
@@ -326,8 +362,9 @@ class AIAnalyzer:
         if priority == "low":
             should_publish = False
 
-        # Извлекаем server_name и formatted_post
+        # Извлекаем server_name, server_link и formatted_post
         server_name = result.get("server_name", "") or ""
+        server_link = result.get("server_link", "") or ""
         formatted_post = result.get("formatted_post", "") or ""
         summary = result.get("summary", "") or ""
 
@@ -340,6 +377,7 @@ class AIAnalyzer:
             "priority": priority,
             "should_publish": should_publish,
             "server_name": server_name[:200],
+            "server_link": server_link[:500],
             "formatted_post": formatted_post[:2000],
             "summary": summary[:500],
         }
