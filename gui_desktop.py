@@ -79,11 +79,6 @@ class DesktopGUI:
         self._build_tabs()
         self._load_and_fill_config()
 
-        # Setup log scrolling AFTER CTkTabview has finished internal setup.
-        # Must use after() because CTkTabview configures its internal canvas
-        # bindings lazily during the first mainloop iteration.
-        self.root.after(200, self._setup_log_scroll)
-
         # Log polling thread
         threading.Thread(target=self._poll_logs, daemon=True).start()
 
@@ -145,8 +140,7 @@ class DesktopGUI:
 
         self._build_dashboard(self.notebook.add("Дашборд"))
         self._build_settings(self.notebook.add("Настройки"))
-        self._logs_tab_frame = self.notebook.add("Логи")
-        self._build_logs(self._logs_tab_frame)
+        self._build_logs(self.notebook.add("Логи"))
 
     # === Dashboard ===
 
@@ -315,37 +309,28 @@ class DesktopGUI:
                       fg_color=self.BG3, hover_color=self.RED,
                       command=self._clear_logs).pack(side="right", padx=3, pady=6)
 
-        # Log area with scrollbar
-        log_frame = ctk.CTkFrame(parent, fg_color=self.INPUT_BG)
-        log_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
-
-        self._log_scrollbar = tk.Scrollbar(log_frame, bg=self.BG2, troughcolor=self.INPUT_BG,
-                                           activebackground=self.ACCENT)
-        self._log_scrollbar.pack(side="right", fill="y")
-
-        self._log_text = tk.Text(
-            log_frame, bg=self.INPUT_BG, fg=self.TEXT, font=("Consolas", 11),
-            insertbackground=self.TEXT, selectbackground=self.BG3,
-            borderwidth=0, highlightthickness=0, wrap="word",
-            cursor="arrow",
-            yscrollcommand=self._log_scrollbar.set,
-            takefocus=True,
+        # CTkTextbox — built on CTkScrollableFrame, handles mousewheel
+        # automatically inside CTkTabview on Windows (same as settings tab).
+        self._user_scrolled = False
+        self._log_text = ctk.CTkTextbox(
+            parent,
+            fg_color=self.INPUT_BG,
+            text_color=self.TEXT,
+            font=("Consolas", 11),
+            border_width=0,
+            state="disabled",
+            activate_scrollbars=True,
         )
-        self._log_text.pack(side="left", fill="both", expand=True)
-        self._log_scrollbar.configure(command=self._log_text.yview)
+        self._log_text.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        # CTkTextbox doesn't pass wrap to internal tk.Text, set it manually
+        self._log_text._textbox.configure(wrap="word")
 
-        # Keep text in normal state but prevent user typing.
-        # state="disabled" blocks mousewheel on Windows, so we use normal
-        # state + key blocking for read-only behaviour.
-        self._log_text.bind("<Key>", self._block_typing)
-        self._log_text.bind("<Control-a>", lambda e: None)
-        self._log_text.bind("<Control-A>", lambda e: None)
-        self._log_text.bind("<Control-c>", lambda e: None)
-        self._log_text.bind("<Control-C>", lambda e: None)
-        self._log_text.bind("<ButtonPress-1>", self._log_text.focus_set)
-
-        # _setup_log_scroll is called via after(200) in run() after
-        # CTkTabview finishes its internal setup.
+        # Bind mousewheel on CTkTextbox to detect scroll direction
+        # for auto-scroll pause feature. CTkScrollableFrame handles
+        # the actual scrolling automatically.
+        self._log_text.bind("<MouseWheel>", self._on_log_mousewheel)
+        self._log_text.bind("<Button-4>", self._on_log_mousewheel)
+        self._log_text.bind("<Button-5>", self._on_log_mousewheel)
 
         self._log_text.tag_configure("TIME", foreground=self.TEXT3)
         self._log_text.tag_configure("LEVEL_INFO", foreground=self.ACCENT)
@@ -460,7 +445,9 @@ class DesktopGUI:
 
     def _clear_logs(self):
         self._total_lines = 0
+        self._log_text.configure(state="normal")
         self._log_text.delete("1.0", "end")
+        self._log_text.configure(state="disabled")
         self._log_count.configure(text="0 записей")
 
     def _poll_logs(self):
@@ -477,6 +464,7 @@ class DesktopGUI:
                 continue
 
             try:
+                self._log_text.configure(state="normal")
                 self._log_text.insert("end", f" {entry['time']} ", "TIME")
                 tag = f"LEVEL_{level}"
                 if tag not in ("LEVEL_INFO", "LEVEL_WARNING", "LEVEL_ERROR", "LEVEL_DEBUG"):
@@ -489,84 +477,25 @@ class DesktopGUI:
                     self._total_lines -= 500
                 # Auto-scroll only if user hasn't manually scrolled up
                 if not self._user_scrolled:
-                    self._log_text.see("end")
+                    self._log_text._textbox.see("end")
+                self._log_text.configure(state="disabled")
                 self._log_count.configure(text=f"{self._total_lines} записей")
             except Exception:
                 pass
 
-    def _block_typing(self, event):
-        """Block keyboard input but allow Ctrl+A/C and navigation."""
-        # Allow modifier keys, function keys, navigation, and Ctrl combos
-        if event.keysym in ("Control_L", "Control_R", "Shift_L", "Shift_R",
-                             "Alt_L", "Alt_R", "Super_L", "Super_R",
-                             "Caps_Lock", "Tab",
-                             "Left", "Right", "Up", "Down",
-                             "Home", "End", "Next", "Prior",
-                             "F1", "F2", "F3", "F4", "F5", "F6",
-                             "F7", "F8", "F9", "F10", "F11", "F12",
-                             "Insert", "Delete",
-                             "Control_a", "Control_A",
-                             "Control_c", "Control_C"):
-            return
-        if event.state & 0x4:  # Ctrl held
-            return  # Allow all Ctrl combos
-        if event.state & 0x1:  # Shift held
-            return  # Allow Shift combos
-        return "break"  # Block everything else
-
-    def _setup_log_scroll(self):
-        """Set up mousewheel scrolling for the log tab.
-        Called via after(200) after CTkTabview finishes internal setup.
-        Binds at EVERY possible level to ensure scroll works on Windows."""
-        self._user_scrolled = False
-
-        # Level 1: CTkTabview's internal canvas — this is where MouseWheel
-        # events actually arrive on Windows when cursor is over tab content
+    def _on_log_mousewheel(self, event):
+        """Detect scroll direction to pause/resume auto-scroll."""
         try:
-            tabview_canvas = self.notebook._canvas
-            tabview_canvas.bind("<MouseWheel>", self._scroll_logs_global)
-            tabview_canvas.bind("<Button-4>", self._scroll_logs_global)
-            tabview_canvas.bind("<Button-5>", self._scroll_logs_global)
-        except Exception:
-            pass
-
-        # Level 2: Bind on the notebook widget itself
-        self.notebook.bind("<MouseWheel>", self._scroll_logs_global)
-        self.notebook.bind("<Button-4>", self._scroll_logs_global)
-        self.notebook.bind("<Button-5>", self._scroll_logs_global)
-
-        # Level 3: Recursive bind on all children of the logs tab frame
-        self._bind_scroll_recursive(self._logs_tab_frame)
-
-        # Level 4: Nuclear — bind_all with add=+ so it doesn't replace existing
-        self.root.bind_all("<MouseWheel>", self._scroll_logs_global, add="+")
-        self.root.bind_all("<Button-4>", self._scroll_logs_global, add="+")
-        self.root.bind_all("<Button-5>", self._scroll_logs_global, add="+")
-
-    def _bind_scroll_recursive(self, widget):
-        """Bind mousewheel to widget and all its children recursively."""
-        widget.bind("<MouseWheel>", self._scroll_logs_global)
-        widget.bind("<Button-4>", self._scroll_logs_global)
-        widget.bind("<Button-5>", self._scroll_logs_global)
-        for child in widget.winfo_children():
-            self._bind_scroll_recursive(child)
-
-    def _scroll_logs_global(self, event):
-        """Handle mousewheel — only scroll when Логи tab is active."""
-        try:
-            current_tab = self.notebook.get()
-            if current_tab != "Логи":
-                return  # Don't interfere with other tabs
-        except Exception:
-            return
-
-        try:
-            if event.num == 4 or (hasattr(event, 'delta') and event.delta > 0):
-                self._log_text.yview_scroll(-3, "units")
+            if hasattr(event, 'delta') and event.delta > 0:
                 self._user_scrolled = True
-            elif event.num == 5 or (hasattr(event, 'delta') and event.delta < 0):
-                self._log_text.yview_scroll(3, "units")
-                yview = self._log_text.yview()
+            elif hasattr(event, 'delta') and event.delta < 0:
+                yview = self._log_text._textbox.yview()
+                if yview[1] >= 1.0:
+                    self._user_scrolled = False
+            elif event.num == 4:
+                self._user_scrolled = True
+            elif event.num == 5:
+                yview = self._log_text._textbox.yview()
                 if yview[1] >= 1.0:
                     self._user_scrolled = False
         except Exception:
