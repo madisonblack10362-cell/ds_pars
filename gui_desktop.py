@@ -332,12 +332,13 @@ class DesktopGUI:
         self._log_text.bind("<Button-4>", self._on_log_mousewheel)
         self._log_text.bind("<Button-5>", self._on_log_mousewheel)
 
-        self._log_text.tag_configure("TIME", foreground=self.TEXT3)
-        self._log_text.tag_configure("LEVEL_INFO", foreground=self.ACCENT)
-        self._log_text.tag_configure("LEVEL_WARNING", foreground=self.YELLOW)
-        self._log_text.tag_configure("LEVEL_ERROR", foreground=self.RED)
-        self._log_text.tag_configure("LEVEL_DEBUG", foreground=self.TEXT3)
-        self._log_text.tag_configure("MSG", foreground=self.TEXT)
+        tb = self._log_text._textbox
+        tb.tag_configure("TIME", foreground=self.TEXT3)
+        tb.tag_configure("LEVEL_INFO", foreground=self.ACCENT)
+        tb.tag_configure("LEVEL_WARNING", foreground=self.YELLOW)
+        tb.tag_configure("LEVEL_ERROR", foreground=self.RED)
+        tb.tag_configure("LEVEL_DEBUG", foreground=self.TEXT3)
+        tb.tag_configure("MSG", foreground=self.TEXT)
         self._total_lines = 0
         self._filter_level = "ALL"
 
@@ -446,7 +447,7 @@ class DesktopGUI:
     def _clear_logs(self):
         self._total_lines = 0
         self._log_text.configure(state="normal")
-        self._log_text.delete("1.0", "end")
+        self._log_text._textbox.delete("1.0", "end")
         self._log_text.configure(state="disabled")
         self._log_count.configure(text="0 записей")
 
@@ -464,20 +465,21 @@ class DesktopGUI:
                 continue
 
             try:
+                tb = self._log_text._textbox
                 self._log_text.configure(state="normal")
-                self._log_text.insert("end", f" {entry['time']} ", "TIME")
+                tb.insert("end", f" {entry['time']} ", "TIME")
                 tag = f"LEVEL_{level}"
                 if tag not in ("LEVEL_INFO", "LEVEL_WARNING", "LEVEL_ERROR", "LEVEL_DEBUG"):
                     tag = "MSG"
-                self._log_text.insert("end", f"{level:>8} ", tag)
-                self._log_text.insert("end", f"{entry['message']}\n", "MSG")
+                tb.insert("end", f"{level:>8} ", tag)
+                tb.insert("end", f"{entry['message']}\n", "MSG")
                 self._total_lines += 1
                 if self._total_lines > 2000:
-                    self._log_text.delete("1.0", "500 lines")
+                    tb.delete("1.0", "500 lines")
                     self._total_lines -= 500
                 # Auto-scroll only if user hasn't manually scrolled up
                 if not self._user_scrolled:
-                    self._log_text._textbox.see("end")
+                    tb.see("end")
                 self._log_text.configure(state="disabled")
                 self._log_count.configure(text=f"{self._total_lines} записей")
             except Exception:
