@@ -1,37 +1,30 @@
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
-
-# Database
-database/*.db
-database/*.db-wal
-database/*.db-shm
-database/*.session
-database/*.session-journal
-
-# Images
-images/
-
-# Logs
-logs/
-*.log
+*.egg-info/
+dist/
+build/
+*.spec
+*.exe
 
 # Environment
 .env
-venv/
-.venv/
-env/
+config.json
 
 # IDE
-.vscode/
 .idea/
+.vscode/
 *.swp
-*.swo
-*~
 
 # OS
-.DS_Store
 Thumbs.db
+.DS_Store
 
-# Config with real tokens (never commit!)
-config.json
+# Node / other projects
+node_modules/
+.next/
+package-lock.json
+dayz-monitor-web/
+download/
+upload/
+skills/
