@@ -481,21 +481,29 @@ class DayZNewsMonitor:
 
             for item in queue:
                 news_id = item.get('id', '')
-                text = item.get('formatted_post', '') or item.get('summary', '')
-                images = item.get('images', '[]')
-                if isinstance(images, str):
+                formatted_post = item.get('formattedPost', '') or item.get('formatted_post', '')
+                summary = item.get('summary', '') or item.get('content', '')
+                text = formatted_post or summary
+
+                images_raw = item.get('images', '[]')
+                if isinstance(images_raw, str):
                     try:
-                        images = json.loads(images)
+                        images = json.loads(images_raw)
                     except (json.JSONDecodeError, TypeError):
                         images = []
-                url_images = [img for img in images if isinstance(img, str) and img.startswith('http')]
+                else:
+                    images = images_raw if isinstance(images_raw, list) else []
+
+                # Передаём ВСЕ картинки — publisher сам разберётся
+                # (http URL скачивает, data: URI декодирует в файл)
+                valid_images = [img for img in images if isinstance(img, str) and (img.startswith('http') or img.startswith('data:'))]
 
                 if text:
                     # Рассылка всем подписчикам
                     result = await self.publisher.broadcast_to_users(
                         text=text,
                         users=subscribers,
-                        image_urls=url_images if url_images else None,
+                        image_urls=valid_images if valid_images else None,
                     )
 
                     # Отмечаем заблокировавших бота
@@ -503,8 +511,8 @@ class DayZNewsMonitor:
                         await self.db.mark_user_blocked(blocked_uid)
 
                     logger.info(
-                        'Рассылка с панели: %s (отправлено=%d, заблокировано=%d)',
-                        news_id, result.get("sent", 0), len(result.get("blocked", [])),
+                        'Рассылка с панели: %s (отправлено=%d, заблокировано=%d, images=%d)',
+                        news_id, result.get("sent", 0), len(result.get("blocked", [])), len(valid_images),
                     )
 
                     # Отмечаем новость как опубликованную на панели
@@ -513,6 +521,8 @@ class DayZNewsMonitor:
                         web_app_url=self.web_panel_url,
                         bot_api_key=self.web_panel_api_key,
                     )
+                else:
+                    logger.warning('Пропуск публикации: id=%s — пустой текст', news_id)
         except Exception as exc:
             logger.error('Ошибка рассылки с панели: %s', exc)
 
