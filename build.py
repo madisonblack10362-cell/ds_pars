@@ -113,7 +113,8 @@ def main():
     datas_str = '\n'.join(datas_lines) if datas_lines else ''
 
     spec_content = SPEC_TEMPLATE.replace("{datas_lines}", datas_str)
-    spec_path = Path("dayz_monitor_win.spec")
+    spec_path = Path("build/dayz_monitor_win.spec")
+    spec_path.parent.mkdir(parents=True, exist_ok=True)
     spec_path.write_text(spec_content.strip(), encoding="utf-8")
     print(f"\n  Spec записан: {spec_path} (datas: {len(datas_lines)} файлов)")
 
@@ -123,7 +124,7 @@ def main():
     print("=" * 60)
     result = run([
         sys.executable, "-m", "PyInstaller",
-        "dayz_monitor_win.spec",
+        str(spec_path),
         "--distpath", "dist",
         "--workpath", "build",
         "--clean", "-y",
