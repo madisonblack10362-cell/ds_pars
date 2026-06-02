@@ -40,7 +40,9 @@ a = Analysis(
     ['bot.py'],
     pathex=[str(PROJECT_DIR)],
     binaries=[],
-    datas=[{datas}],
+    datas=[
+{datas_lines}
+    ],
     hiddenimports=[
         'bot', 'logger', 'database', 'ai_analyzer', 'deduplicator',
         'publisher', 'scheduler', 'discord_monitor', 'telegram_monitor',
@@ -104,18 +106,16 @@ def main():
     run([sys.executable, "-m", "pip", "install", *REQUIRED, "--quiet"])
 
     # 2) Собираем datas — только те файлы которые реально существуют
-    datas = []
+    datas_lines = []
     for fname in ("config.example.json", "icon.ico"):
         if Path(fname).exists():
-            datas.append(f"('{fname}', '.')")
-    if not datas:
-        datas = []
-    datas_str = str(datas) if datas else "[]"
+            datas_lines.append(f"        ('{fname}', '.'),")
+    datas_str = '\n'.join(datas_lines) if datas_lines else ''
 
-    spec_content = SPEC_TEMPLATE.replace("{datas}", datas_str)
+    spec_content = SPEC_TEMPLATE.replace("{datas_lines}", datas_str)
     spec_path = Path("dayz_monitor_win.spec")
     spec_path.write_text(spec_content.strip(), encoding="utf-8")
-    print(f"\n  Spec записан: {spec_path} (datas: {datas_str})")
+    print(f"\n  Spec записан: {spec_path} (datas: {len(datas_lines)} файлов)")
 
     # 3) Сборка
     print("\n" + "=" * 60)
