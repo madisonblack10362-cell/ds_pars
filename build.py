@@ -37,7 +37,7 @@ block_cipher = None
 PROJECT_DIR = Path(SPECPATH)
 
 a = Analysis(
-    ['gui_desktop.py'],
+    ['bot.py'],
     pathex=[str(PROJECT_DIR)],
     binaries=[],
     datas=[
