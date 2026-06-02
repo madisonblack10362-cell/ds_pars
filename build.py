@@ -38,7 +38,7 @@ PROJECT_DIR = Path(SPECPATH)
 
 a = Analysis(
     ['bot.py'],
-    pathex=[str(PROJECT_DIR.parent)],
+    pathex=[str(PROJECT_DIR)],
     binaries=[],
     datas=[
 {datas_lines}
@@ -113,8 +113,7 @@ def main():
     datas_str = '\n'.join(datas_lines) if datas_lines else ''
 
     spec_content = SPEC_TEMPLATE.replace("{datas_lines}", datas_str)
-    spec_path = Path("build/dayz_monitor_win.spec")
-    spec_path.parent.mkdir(parents=True, exist_ok=True)
+    spec_path = Path("dayz_monitor_win.spec")
     spec_path.write_text(spec_content.strip(), encoding="utf-8")
     print(f"\n  Spec записан: {spec_path} (datas: {len(datas_lines)} файлов)")
 
@@ -124,7 +123,7 @@ def main():
     print("=" * 60)
     result = run([
         sys.executable, "-m", "PyInstaller",
-        str(spec_path),
+        "dayz_monitor_win.spec",
         "--distpath", "dist",
         "--workpath", "build",
         "--clean", "-y",
@@ -132,6 +131,9 @@ def main():
     if result.returncode != 0:
         print("\n  ОШИБКА СБОРКИ!")
         sys.exit(1)
+
+    # Удаляем spec после сборки
+    spec_path.unlink(missing_ok=True)
 
     # 4) Копируем config если нет
     dist_dir = Path("dist/DayZ Monitor")
