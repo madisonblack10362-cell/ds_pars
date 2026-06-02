@@ -315,8 +315,9 @@ class DayZNewsMonitor:
                         )
                         continue
 
-                # AI-анализ
-                result = await self.ai_analyzer.analyze(text)
+                # AI-анализ (передаём автора — его имя = название сервера)
+                author = msg.get("author", "") or msg.get("server_name", "")
+                result = await self.ai_analyzer.analyze(text, author=author)
 
                 if result:
                     # Всегда сохраняем с should_publish=False в локальной БД,
@@ -347,7 +348,7 @@ class DayZNewsMonitor:
                                 success = await send_to_web_panel(
                                     news_data={
                                         "externalId": str(msg_id),
-                                        "serverName": result.get("server_name", ""),
+                                        "serverName": result.get("server_name", "") or author,
                                         "content": text,
                                         "summary": result.get("summary", ""),
                                         "formattedPost": result.get("formatted_post", ""),

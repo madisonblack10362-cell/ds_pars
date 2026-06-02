@@ -18,10 +18,11 @@ from logger import logger
 SYSTEM_PROMPT = """Ты — аналитик и редактор новостей DayZ-серверов. Анализируй сообщение и подготовь пост для Telegram.
 
 ОПРЕДЕЛЕНИЕ СЕРВЕРА (САМОЕ ВАЖНОЕ):
-1. Извлеки название сервера из текста новости. Сервер может называться "Гроза", "Зона", "Выживание", "Дикое Племя" и т.д.
-2. Если в тексте есть ссылка на сервер (Discord invite, сайт сервера, IP) — это ссылка сервера.
-3. server_name — чистое имя сервера без лишних слов (например "Гроза", не "Сервер Гроза").
-4. server_link — URL сервера если найден в тексте, иначе пустая строка "".
+1. В запросе будет указан автор новости в формате [АВТОР: Имя]. Это имя автора ВСЕГДА является названием сервера. Используй его как server_name.
+2. НЕ придумывай название сервера из текста — используй то что дано в [АВТОР: ...].
+3. server_name — чистое имя из поля [АВТОР] без лишних слов.
+4. Если в тексте есть ссылка на сервер (Discord invite, сайт сервера, IP) — это server_link.
+5. server_link — URL сервера если найден в тексте, иначе пустая строка "".
 
 ПРАВИЛА КЛАССИФИКАЦИИ:
 
@@ -124,12 +125,13 @@ class AIAnalyzer:
         self.max_retries = max_retries
         self.timeout = aiohttp.ClientTimeout(total=timeout)
 
-    async def analyze(self, text: str) -> Optional[dict]:
+    async def analyze(self, text: str, author: str = "") -> Optional[dict]:
         """
         Анализирует текст новости через LLM API.
 
         Args:
             text: Текст новости для анализа.
+            author: Имя автора поста (это и есть название сервера).
 
         Returns:
             Словарь с полями news_type, priority, should_publish, summary
@@ -148,7 +150,7 @@ class AIAnalyzer:
 
         for attempt in range(1, self.max_retries + 1):
             try:
-                result = await self._call_api(truncated)
+                result = await self._call_api(truncated, author)
                 if result:
                     return self._validate_result(result)
                 # result is None — LLM вернул что-то нечитаемое, пробуем ещё
@@ -166,7 +168,7 @@ class AIAnalyzer:
         logger.error("Не удалось проанализировать новость через LLM после %d попыток", self.max_retries)
         return None
 
-    async def _call_api(self, text: str) -> Optional[dict]:
+    async def _call_api(self, text: str, author: str = "") -> Optional[dict]:
         """Выполняет запрос к OpenAI-совместимому API."""
         url = f"{self.base_url}/chat/completions"
         headers = {
@@ -177,7 +179,7 @@ class AIAnalyzer:
             "model": self.model,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"Проанализируй новость:\n\n{text}"},
+                {"role": "user", "content": f"Проанализируй новость:{f'\n[АВТОР: {author}]' if author else ''}\n\n{text}"},
             ],
             "temperature": 0.3,
             "max_tokens": 2048,
