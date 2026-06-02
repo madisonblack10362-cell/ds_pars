@@ -29,7 +29,7 @@ REQUIRED = [
     "pyinstaller>=6.0.0",
 ]
 
-SPEC = r"""
+SPEC_TEMPLATE = r"""
 # -*- mode: python ; coding: utf-8 -*-
 import sys
 from pathlib import Path
@@ -40,10 +40,7 @@ a = Analysis(
     ['bot.py'],
     pathex=[str(PROJECT_DIR)],
     binaries=[],
-    datas=[
-        ('config.example.json', '.'),
-        ('icon.ico', '.'),
-    ],
+    datas=[{datas}],
     hiddenimports=[
         'bot', 'logger', 'database', 'ai_analyzer', 'deduplicator',
         'publisher', 'scheduler', 'discord_monitor', 'telegram_monitor',
@@ -106,10 +103,19 @@ def main():
     print("=" * 60)
     run([sys.executable, "-m", "pip", "install", *REQUIRED, "--quiet"])
 
-    # 2) Записываем spec
+    # 2) Собираем datas — только те файлы которые реально существуют
+    datas = []
+    for fname in ("config.example.json", "icon.ico"):
+        if Path(fname).exists():
+            datas.append(f"('{fname}', '.')")
+    if not datas:
+        datas = []
+    datas_str = str(datas) if datas else "[]"
+
+    spec_content = SPEC_TEMPLATE.replace("{datas}", datas_str)
     spec_path = Path("dayz_monitor_win.spec")
-    spec_path.write_text(SPEC.strip(), encoding="utf-8")
-    print(f"\n  Spec записан: {spec_path}")
+    spec_path.write_text(spec_content.strip(), encoding="utf-8")
+    print(f"\n  Spec записан: {spec_path} (datas: {datas_str})")
 
     # 3) Сборка
     print("\n" + "=" * 60)
@@ -130,8 +136,13 @@ def main():
     dist_dir = Path("dist/DayZ Monitor")
     cfg = dist_dir / "config.json"
     if not cfg.exists():
-        shutil.copy("config.example.json", cfg)
-        print(f"\n  config.json скопирован в {dist_dir}")
+        for src in ("config.example.json", "config.json"):
+            if Path(src).exists():
+                shutil.copy(src, cfg)
+                print(f"\n  {src} скопирован в {dist_dir}")
+                break
+        else:
+            print(f"\n  [!] config.json не найден — создай его вручную в {dist_dir}")
 
     print("\n" + "=" * 60)
     print("  ГОТОВО!")
