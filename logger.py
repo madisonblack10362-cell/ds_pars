@@ -1,7 +1,7 @@
 """
 Модуль логирования проекта DayZ News Monitor.
-Настраивает ежедневную ротацию файлов логов (отдельный файл на каждый день).
-Текущий день — logs/app.log, предыдущие дни — logs/app-YYYY-MM-DD.log
+Создаёт отдельный файл логов на каждый запуск с датой и временем в имени.
+Файлы: logs/2025-06-02_14-30-00.log
 """
 
 import asyncio
@@ -9,24 +9,22 @@ import logging
 import os
 import sys
 import traceback
-from logging.handlers import TimedRotatingFileHandler
+from datetime import datetime
 
 
 def setup_logger(
     log_dir: str = "logs",
     log_level: int = logging.INFO,
-    backup_count: int = 30,
 ) -> logging.Logger:
     """
     Создаёт и возвращает настроенный логгер проекта.
-    Каждый день в полночь текущий лог переименовывается в app-YYYY-MM-DD.log,
-    и начинается запись в новый app.log.
-    Хранятся последние backup_count дней (по умолчанию 30).
+    Каждый запуск создаёт новый файл логов с датой и временем:
+      logs/2025-06-02_14-30-00.log
+    Старые файлы не удаляются автоматически.
 
     Args:
         log_dir: Директория для хранения файлов логов.
         log_level: Уровень логирования.
-        backup_count: Количество хранимых дневных файлов логов.
 
     Returns:
         Настроенный экземпляр logging.Logger.
@@ -44,35 +42,17 @@ def setup_logger(
     # Форматирование логов
     formatter = logging.Formatter(
         fmt="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
+        datefmt="%H:%M:%S",
     )
 
-    # --- Обработчик: файл (ротация каждый день в полночь) ---
-    log_file = os.path.join(log_dir, "app.log")
+    # --- Обработчик: файл с датой и временем в имени ---
+    now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    log_file = os.path.join(log_dir, f"{now}.log")
 
-    file_handler = TimedRotatingFileHandler(
+    file_handler = logging.FileHandler(
         filename=log_file,
-        when="midnight",
-        interval=1,
-        backupCount=backup_count,
         encoding="utf-8",
     )
-
-    # Переименовываем rotated-файлы: app.log.2025-06-01 → app-2025-06-01.log
-    def _namer(default_name: str) -> str:
-        dir_name = os.path.dirname(default_name)
-        base = os.path.basename(default_name)
-        # default_name: "logs/app.log.2025-06-01"
-        date_str = base.split(".")[-1]  # "2025-06-01"
-        return os.path.join(dir_name, f"app-{date_str}.log")
-
-    def _rotator(source: str, dest: str) -> None:
-        if os.path.exists(source):
-            os.rename(source, dest)
-
-    file_handler.namer = _namer
-    file_handler.rotator = _rotator
-
     file_handler.setLevel(log_level)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
@@ -83,7 +63,7 @@ def setup_logger(
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-    logger.info("Логгер инициализирован. Файл логов: %s (хранение %d дней)", log_file, backup_count)
+    logger.info("Логгер инициализирован. Файл логов: %s", log_file)
     return logger
 
 
