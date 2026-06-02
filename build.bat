@@ -11,6 +11,16 @@ echo    DayZ News Monitor — Сборка .exe
 echo  =====================================================
 echo.
 
+:: Проверяем что бот не запущен
+tasklist /FI "IMAGENAME eq DayZ Monitor.exe" 2>nul | find /I "DayZ Monitor.exe" >nul
+if not errorlevel 1 (
+    echo  [ОШИБКА] DayZ Monitor.exe УЖЕ ЗАПУЩЕН!
+    echo  Закрой бота перед сборкой, иначе файлы заблокированы.
+    echo.
+    pause
+    exit /b 1
+)
+
 :: Проверяем Python
 where python >nul 2>&1
 if errorlevel 1 (
