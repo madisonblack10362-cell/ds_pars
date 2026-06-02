@@ -37,8 +37,9 @@ async def setup_web_app_button(bot: Bot, web_app_url: str):
 async def setup_commands(bot: Bot):
     """Устанавливает команды бота."""
     commands = [
-        BotCommand(command="start", description="Запустить бота"),
-        BotCommand(command="panel", description="Открыть панель управления"),
+        BotCommand(command="start", description="Запустить бота и подписаться"),
+        BotCommand(command="subscribe", description="Включить рассылку"),
+        BotCommand(command="unsubscribe", description="Отключить рассылку"),
         BotCommand(command="status", description="Статус мониторинга"),
         BotCommand(command="help", description="Помощь"),
     ]

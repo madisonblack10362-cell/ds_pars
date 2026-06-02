@@ -15,6 +15,11 @@ from typing import Optional
 
 from logger import logger, add_web_panel_handler
 from database import Database
+from aiogram import Router, F
+from aiogram.filters import CommandStart, Command
+from aiogram.types import Message
+from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
 
 # Web Panel integration (опционально — нужен httpx)
 try:
@@ -157,6 +162,9 @@ class DayZNewsMonitor:
                     logger.info("Кнопка панели управления и команды добавлены")
                 except Exception as e:
                     logger.warning("Не удалось установить кнопку/команды панели: %s", e)
+
+            # Регистрируем роутер для обработки команд бота
+            self._setup_bot_commands()
         else:
             logger.warning("Publisher отключён: не указан токен Telegram-бота")
 
@@ -446,14 +454,31 @@ class DayZNewsMonitor:
             )
 
     async def _task_publish_from_panel(self) -> None:
-        """Публикует новости из очереди веб-панели по расписанию."""
-        if not self.publisher or not self.web_panel_url:
+        """Публикует новости из очереди веб-панели по расписанию — рассылает юзерам."""
+        if not self.publisher or not self.web_panel_url or not self.db:
             return
         try:
             queue = await check_publish_queue(
                 web_app_url=self.web_panel_url,
                 bot_api_key=self.web_panel_api_key,
             )
+            if not queue:
+                return
+
+            # Получаем список активных подписчиков
+            subscribers = await self.db.get_all_subscribers()
+            if not subscribers:
+                logger.info("Рассылка отменена: нет подписчиков")
+                # Всё равно отмечаем как опубликованные
+                for item in queue:
+                    news_id = item.get('id', '')
+                    await mark_published_on_panel(
+                        news_id=news_id,
+                        web_app_url=self.web_panel_url,
+                        bot_api_key=self.web_panel_api_key,
+                    )
+                return
+
             for item in queue:
                 news_id = item.get('id', '')
                 text = item.get('formatted_post', '') or item.get('summary', '')
@@ -466,19 +491,30 @@ class DayZNewsMonitor:
                 url_images = [img for img in images if isinstance(img, str) and img.startswith('http')]
 
                 if text:
-                    tg_msg_id = await self.publisher.publish_message(
+                    # Рассылка всем подписчикам
+                    result = await self.publisher.broadcast_to_users(
                         text=text,
+                        users=subscribers,
                         image_urls=url_images if url_images else None,
                     )
-                    if tg_msg_id:
-                        await mark_published_on_panel(
-                            news_id=news_id,
-                            web_app_url=self.web_panel_url,
-                            bot_api_key=self.web_panel_api_key,
-                        )
-                        logger.info('Опубликовано с панели: %s', news_id)
+
+                    # Отмечаем заблокировавших бота
+                    for blocked_uid in result.get("blocked", []):
+                        await self.db.mark_user_blocked(blocked_uid)
+
+                    logger.info(
+                        'Рассылка с панели: %s (отправлено=%d, заблокировано=%d)',
+                        news_id, result.get("sent", 0), len(result.get("blocked", [])),
+                    )
+
+                    # Отмечаем новость как опубликованную на панели
+                    await mark_published_on_panel(
+                        news_id=news_id,
+                        web_app_url=self.web_panel_url,
+                        bot_api_key=self.web_panel_api_key,
+                    )
         except Exception as exc:
-            logger.debug('Очередь панели: %s', exc)
+            logger.error('Ошибка рассылки с панели: %s', exc)
 
     async def _task_daily_summary(self) -> None:
         """Публикует ежедневную сводку."""
@@ -507,6 +543,91 @@ class DayZNewsMonitor:
 
         except Exception as exc:
             logger.error("Ошибка публикации ежедневной сводки: %s", exc)
+
+    def _setup_bot_commands(self) -> None:
+        """Настраивает aiogram роутер для обработки команд от юзеров бота."""
+        from aiogram import Dispatcher
+        self._dp = Dispatcher()
+        self._bot_router = Router()
+        self._dp.include_router(self._bot_router)
+
+        @self._bot_router.message(CommandStart())
+        async def cmd_start(message: Message):
+            user = message.from_user
+            if not user:
+                return
+            await self.db.register_bot_user(
+                user_id=user.id,
+                username=user.username or "",
+                first_name=user.first_name or "",
+            )
+            sub_count = await self.db.get_subscriber_count()
+            await message.answer(
+                f"Привет, <b>{user.first_name}</b>!\n\n"
+                f"Я бот мониторинга DayZ новостей.\n"
+                f"После модерации новости будут приходить прямо тебе в личку.\n\n"
+                f"Ты автоматически подписан на рассылку.\n"
+                f"Подписчиков: {sub_count}\n\n"
+                f"<b>Команды:</b>\n"
+                f"/subscribe — включить рассылку\n"
+                f"/unsubscribe — отключить рассылку\n"
+                f"/help — помощь\n"
+                f"/status — статус мониторинга",
+                parse_mode=ParseMode.HTML,
+            )
+
+        @self._bot_router.message(Command("subscribe"))
+        async def cmd_subscribe(message: Message):
+            user = message.from_user
+            if not user:
+                return
+            await self.db.register_bot_user(user.id, user.username or "", user.first_name or "")
+            await self.db.subscribe_user(user.id)
+            await message.answer(
+                "Рассылка включена. Новость будет приходить тебе в личку после модерации."
+            )
+
+        @self._bot_router.message(Command("unsubscribe"))
+        async def cmd_unsubscribe(message: Message):
+            user = message.from_user
+            if not user:
+                return
+            await self.db.register_bot_user(user.id, user.username or "", user.first_name or "")
+            await self.db.unsubscribe_user(user.id)
+            await message.answer("Рассылка отключена.")
+
+        @self._bot_router.message(Command("help"))
+        async def cmd_help(message: Message):
+            await message.answer(
+                "<b>DayZ News Monitor</b>\n\n"
+                "<b>Команды:</b>\n"
+                "/start — запуск бота и подписка\n"
+                "/subscribe — включить рассылку\n"
+                "/unsubscribe — отключить рассылку\n"
+                "/help — эта справка\n"
+                "/status — статус мониторинга\n\n"
+                "Новости собираются из Discord, проходят AI-анализ и модерацию, "
+                "затем приходят тебе в личку по расписанию.",
+                parse_mode=ParseMode.HTML,
+            )
+
+        @self._bot_router.message(Command("status"))
+        async def cmd_status(message: Message):
+            if not self.db or not self.publisher:
+                await message.answer("Бот не полностью инициализирован.")
+                return
+            sub_count = await self.db.get_subscriber_count()
+            is_sub = await self.db.is_user_subscribed(message.from_user.id if message.from_user else 0)
+            status_text = (
+                f"<b>Статус мониторинга</b>\n\n"
+                f"Подписчиков: {sub_count}\n"
+                f"Ты: {'подписан' if is_sub else 'не подписан'}\n"
+                f"Discord: {'работает' if self._discord_enabled else 'выключен'}\n"
+                f"AI: {'работает' if self.ai_analyzer else 'выключен'}\n"
+            )
+            await message.answer(status_text, parse_mode=ParseMode.HTML)
+
+        logger.info("Обработчики команд бота зарегистрированы (/start, /subscribe, /unsubscribe, /help, /status)")
 
     async def _task_cleanup(self) -> None:
         """Очищает старые записи из базы данных."""
@@ -573,6 +694,10 @@ class DayZNewsMonitor:
         # Запускаем планировщик
         await self.scheduler.start()
 
+        # Запускаем Telegram polling для обработки команд юзеров
+        if self.publisher and hasattr(self, '_dp'):
+            asyncio.create_task(self._run_bot_polling())
+
         # Запускаем Discord-монитор в фоне
         if self._discord_enabled:
             asyncio.create_task(self._run_discord_monitor())
@@ -605,6 +730,14 @@ class DayZNewsMonitor:
         )
         logger.info("Получен сигнал %s. Завершение работы...", sig_name)
         self._shutdown_event.set()
+
+    async def _run_bot_polling(self) -> None:
+        """Запускает aiogram polling для обработки команд бота (/start, /subscribe и т.д.)."""
+        try:
+            logger.info("Telegram polling запущен — бот принимает команды юзеров")
+            await self._dp.start_polling(self.publisher.bot)
+        except Exception as exc:
+            logger.error("Telegram polling остановлен с ошибкой: %s", exc)
 
     async def _cleanup(self) -> None:
         """Освобождает ресурсы при завершении."""
@@ -666,6 +799,10 @@ def _run_bot_thread(monitor, gui=None):
             monitor.gui = gui
 
             await monitor.scheduler.start()
+
+            # Запускаем Telegram polling для команд юзеров
+            if monitor.publisher and hasattr(monitor, '_dp'):
+                asyncio.create_task(monitor._run_bot_polling())
 
             if monitor._discord_enabled:
                 asyncio.create_task(monitor._run_discord_monitor())

@@ -1,0 +1,49 @@
+{
+  "_comment": "DayZ News Monitor — Discord (один канал) + VK + публикация в Telegram",
+
+  "telegram_bot_token": "YOUR_BOT_TOKEN_HERE",
+  "telegram_channel_id": "@your_channel",
+
+  "openai_api_key": "YOUR_OPENAI_API_KEY_HERE",
+  "openai_base_url": "https://api.openai.com/v1",
+  "openai_model": "gpt-4o-mini",
+
+  "discord_token": "YOUR_DISCORD_TOKEN_HERE",
+
+  "vk_access_token": "YOUR_VK_ACCESS_TOKEN_HERE",
+  "vk_api_version": "5.199",
+
+  "check_interval_minutes": 5,
+  "daily_summary_hour": 10,
+  "daily_summary_minute": 0,
+  "min_message_length": 20,
+  "similarity_threshold": 0.85,
+  "max_retries": 3,
+  "retry_delay_seconds": 10,
+  "request_timeout_seconds": 30,
+  "images_dir": "images",
+  "database_path": "database/dayz_news.db",
+  "log_file": "logs/app.log",
+  "publish_high_priority": true,
+  "publish_medium_priority": true,
+  "publish_low_priority": false,
+
+  "web_panel_url": "https://dayz-monitor-web.vercel.app",
+  "web_panel_api_key": "YOUR_BOT_API_KEY_HERE",
+  "max_images_per_post": 10,
+
+  "sources": {
+    "discord": {
+      "guild_id": "000000000000000000",
+      "channel_id": "000000000000000000",
+      "channel_name": "dayz-news"
+    },
+
+    "vk": [
+      {
+        "server": "Example DayZ Server",
+        "group_id": "-00000000"
+      }
+    ]
+  }
+}

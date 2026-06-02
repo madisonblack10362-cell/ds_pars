@@ -110,6 +110,28 @@ class Database:
                 created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
             );
 
+            -- Таблица подписчиков бота
+            CREATE TABLE IF NOT EXISTS bot_users (
+                user_id       INTEGER PRIMARY KEY,
+                username      TEXT    DEFAULT '',
+                first_name    TEXT    DEFAULT '',
+                subscribed    INTEGER DEFAULT 1,   -- 1 = подписан, 0 = отписан
+                blocked       INTEGER DEFAULT 0,   -- 1 = бот заблокирован юзером
+                started_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+                updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+            );
+
+            -- Таблица подписчиков бота
+            CREATE TABLE IF NOT EXISTS bot_users (
+                user_id       INTEGER PRIMARY KEY,
+                username      TEXT    DEFAULT '',
+                first_name    TEXT    DEFAULT '',
+                subscribed    INTEGER DEFAULT 1,   -- 1 = подписан, 0 = отписан
+                blocked       INTEGER DEFAULT 0,   -- 1 = бот заблокирован юзером
+                started_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+                updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+            );
+
             -- Индексы для ускорения запросов
             CREATE INDEX IF NOT EXISTS idx_messages_source ON messages(source_type, source_id);
             CREATE INDEX IF NOT EXISTS idx_messages_collected ON messages(collected_at);
@@ -363,6 +385,76 @@ class Database:
             (f"-{hours} hours",),
         )
         return [dict(row) for row in await cursor.fetchall()]
+
+    # -------------------------------------------------------------------------
+    # Подписчики бота
+    # -------------------------------------------------------------------------
+
+    async def register_bot_user(self, user_id: int, username: str = "", first_name: str = "") -> None:
+        """Регистрирует юзера бота. Если уже есть — обновляет username/first_name."""
+        await self._connection.execute(
+            """INSERT INTO bot_users (user_id, username, first_name)
+               VALUES (?, ?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                 username = excluded.username,
+                 first_name = excluded.first_name,
+                 updated_at = datetime('now')""",
+            (user_id, username or "", first_name or ""),
+        )
+        await self._connection.commit()
+
+    async def subscribe_user(self, user_id: int) -> bool:
+        """Включает подписку юзеру. Возвращает True если юзер существовал."""
+        cursor = await self._connection.execute(
+            """UPDATE bot_users SET subscribed = 1, blocked = 0, updated_at = datetime('now')
+               WHERE user_id = ?""",
+            (user_id,),
+        )
+        await self._connection.commit()
+        return cursor.rowcount > 0
+
+    async def unsubscribe_user(self, user_id: int) -> bool:
+        """Отключает подписку."""
+        cursor = await self._connection.execute(
+            """UPDATE bot_users SET subscribed = 0, updated_at = datetime('now')
+               WHERE user_id = ?""",
+            (user_id,),
+        )
+        await self._connection.commit()
+        return cursor.rowcount > 0
+
+    async def mark_user_blocked(self, user_id: int) -> None:
+        """Отмечает юзера как заблокировавший бота."""
+        await self._connection.execute(
+            """UPDATE bot_users SET blocked = 1, subscribed = 0, updated_at = datetime('now')
+               WHERE user_id = ?""",
+            (user_id,),
+        )
+        await self._connection.commit()
+
+    async def get_all_subscribers(self) -> list[dict]:
+        """Возвращает всех активных подписчиков (не заблокированных)."""
+        cursor = await self._connection.execute(
+            """SELECT user_id, username, first_name FROM bot_users
+               WHERE subscribed = 1 AND blocked = 0"""
+        )
+        return [dict(row) for row in await cursor.fetchall()]
+
+    async def get_subscriber_count(self) -> int:
+        """Возвращает количество активных подписчиков."""
+        cursor = await self._connection.execute(
+            "SELECT COUNT(*) as cnt FROM bot_users WHERE subscribed = 1 AND blocked = 0"
+        )
+        row = await cursor.fetchone()
+        return row["cnt"] if row else 0
+
+    async def is_user_subscribed(self, user_id: int) -> bool:
+        """Проверяет, подписан ли юзер."""
+        cursor = await self._connection.execute(
+            "SELECT subscribed FROM bot_users WHERE user_id = ?", (user_id,)
+        )
+        row = await cursor.fetchone()
+        return bool(row and row["subscribed"])
 
     # -------------------------------------------------------------------------
     # Логи в БД

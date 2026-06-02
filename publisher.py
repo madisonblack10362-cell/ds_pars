@@ -9,6 +9,8 @@ import re
 from datetime import datetime
 from typing import Optional
 
+import asyncio
+
 from aiogram import Bot, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -648,6 +650,81 @@ class Publisher:
                     logger.warning("Не удалось скачать изображение %s: %s", url, exc)
 
         return downloaded
+
+    async def broadcast_to_users(
+        self,
+        text: str,
+        users: list[dict],
+        image_paths: list[str] | None = None,
+        image_urls: list[str] | None = None,
+    ) -> dict:
+        """
+        Рассылает сообщение всем подписчикам бота в личку.
+        При ошибке отправки (бот заблокирован, юзер удалён и т.д.)
+        возвращает список user_id, которых нужно отметить как blocked.
+
+        Returns:
+            {"sent": int, "blocked": list[int], "failed": int}
+        """
+        sent = 0
+        blocked = []
+        failed = 0
+
+        # Скачиваем изображения один раз для всех юзеров
+        local_images: list[str] = list(image_paths or [])
+        if image_urls:
+            for url in image_urls:
+                path = await self._resolve_media_url(url)
+                if path:
+                    local_images.append(path)
+        local_images = local_images[:self.max_images_per_post]
+
+        for user in users:
+            user_id = user["user_id"]
+            try:
+                if local_images:
+                    # Одно фото — с подписью, несколько — медиагруппа
+                    media_group = []
+                    for img_path in local_images:
+                        try:
+                            if os.path.exists(img_path) and os.path.isfile(img_path):
+                                media_group.append(InputMediaPhoto(media=FSInputFile(img_path)))
+                        except Exception:
+                            pass
+
+                    if len(media_group) == 1:
+                        await self.bot.send_photo(
+                            chat_id=user_id,
+                            photo=media_group[0].media,
+                            caption=text,
+                        )
+                    elif len(media_group) > 1:
+                        media_group[0].caption = text
+                        media_group[0].parse_mode = ParseMode.HTML
+                        await self.bot.send_media_group(
+                            chat_id=user_id, media=media_group
+                        )
+                    else:
+                        await self.bot.send_message(chat_id=user_id, text=text)
+                else:
+                    await self.bot.send_message(chat_id=user_id, text=text)
+
+                sent += 1
+            except Exception as exc:
+                err_msg = str(exc).lower()
+                if "bot was blocked" in err_msg or "blocked" in err_msg:
+                    blocked.append(user_id)
+                elif "user not found" in err_msg or "deleted" in err_msg:
+                    blocked.append(user_id)
+                else:
+                    logger.warning("Рассылка: ошибка отправки юзеру %d: %s", user_id, exc)
+                    failed += 1
+                # Задержка между отправками чтобы не упереться в rate limit
+                await asyncio.sleep(0.05)
+
+        logger.info("Рассылка завершена: отправлено=%d, заблокировали=%d, ошибки=%d",
+                     sent, len(blocked), failed)
+        return {"sent": sent, "blocked": blocked, "failed": failed}
 
     async def publish_daily_summary(
         self,
