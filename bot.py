@@ -454,31 +454,14 @@ class DayZNewsMonitor:
             )
 
     async def _task_publish_from_panel(self) -> None:
-        """Публикует новости из очереди веб-панели по расписанию — рассылает юзерам."""
-        if not self.publisher or not self.web_panel_url or not self.db:
+        """Публикует новости из очереди веб-панели по расписанию."""
+        if not self.publisher or not self.web_panel_url:
             return
         try:
             queue = await check_publish_queue(
                 web_app_url=self.web_panel_url,
                 bot_api_key=self.web_panel_api_key,
             )
-            if not queue:
-                return
-
-            # Получаем список активных подписчиков
-            subscribers = await self.db.get_all_subscribers()
-            if not subscribers:
-                logger.info("Рассылка отменена: нет подписчиков")
-                # Всё равно отмечаем как опубликованные
-                for item in queue:
-                    news_id = item.get('id', '')
-                    await mark_published_on_panel(
-                        news_id=news_id,
-                        web_app_url=self.web_panel_url,
-                        bot_api_key=self.web_panel_api_key,
-                    )
-                return
-
             for item in queue:
                 news_id = item.get('id', '')
                 formatted_post = item.get('formattedPost', '') or item.get('formatted_post', '')
@@ -494,37 +477,28 @@ class DayZNewsMonitor:
                 else:
                     images = images_raw if isinstance(images_raw, list) else []
 
-                # Передаём ВСЕ картинки — publisher сам разберётся
-                # (http URL скачивает, data: URI декодирует в файл)
                 valid_images = [img for img in images if isinstance(img, str) and (img.startswith('http') or img.startswith('data:'))]
 
                 if text:
-                    # Рассылка всем подписчикам
-                    result = await self.publisher.broadcast_to_users(
+                    logger.info('Публикация с панели: id=%s, images=%d, text_len=%d',
+                                news_id, len(valid_images), len(text))
+                    tg_msg_id = await self.publisher.publish_message(
                         text=text,
-                        users=subscribers,
                         image_urls=valid_images if valid_images else None,
                     )
-
-                    # Отмечаем заблокировавших бота
-                    for blocked_uid in result.get("blocked", []):
-                        await self.db.mark_user_blocked(blocked_uid)
-
-                    logger.info(
-                        'Рассылка с панели: %s (отправлено=%d, заблокировано=%d, images=%d)',
-                        news_id, result.get("sent", 0), len(result.get("blocked", [])), len(valid_images),
-                    )
-
-                    # Отмечаем новость как опубликованную на панели
-                    await mark_published_on_panel(
-                        news_id=news_id,
-                        web_app_url=self.web_panel_url,
-                        bot_api_key=self.web_panel_api_key,
-                    )
+                    if tg_msg_id:
+                        await mark_published_on_panel(
+                            news_id=news_id,
+                            web_app_url=self.web_panel_url,
+                            bot_api_key=self.web_panel_api_key,
+                        )
+                        logger.info('Опубликовано с панели: %s', news_id)
+                    else:
+                        logger.error('Ошибка публикации с панели: %s — Telegram не вернул msg_id', news_id)
                 else:
                     logger.warning('Пропуск публикации: id=%s — пустой текст', news_id)
         except Exception as exc:
-            logger.error('Ошибка рассылки с панели: %s', exc)
+            logger.error('Ошибка публикации из очереди панели: %s', exc)
 
     async def _task_daily_summary(self) -> None:
         """Публикует ежедневную сводку."""
