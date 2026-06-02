@@ -38,7 +38,7 @@ PROJECT_DIR = Path(SPECPATH)
 
 a = Analysis(
     ['bot.py'],
-    pathex=[str(PROJECT_DIR)],
+    pathex=[str(PROJECT_DIR.parent)],
     binaries=[],
     datas=[
 {datas_lines}
