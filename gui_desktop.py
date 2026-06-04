@@ -238,7 +238,8 @@ class DesktopGUI:
             ]),
             ("Telegram", [
                 ("telegram_bot_token", "Bot Token", "Токен от @BotFather"),
-                ("telegram_channel_id", "Channel ID", "-100xxxxxxxxxx"),
+                ("telegram_channel_id", "Channel ID (Сводки)", "-100xxxxxxxxxx"),
+                ("telegram_news_channel_id", "Channel ID (Новости)", "-100xxxxxxxxxx (пусто = как сводки)"),
             ]),
             ("AI / NVIDIA API", [
                 ("openai_api_key", "API Key", "nvapi-..."),
@@ -406,6 +407,7 @@ class DesktopGUI:
 
         simple_keys = [
             "discord_token", "telegram_bot_token", "telegram_channel_id",
+            "telegram_news_channel_id",
             "openai_api_key", "openai_base_url", "openai_model",
             "vk_access_token", "check_interval_minutes",
             "daily_summary_hour", "min_message_length", "similarity_threshold",
@@ -437,6 +439,7 @@ class DesktopGUI:
 
         simple_keys = [
             "discord_token", "telegram_bot_token", "telegram_channel_id",
+            "telegram_news_channel_id",
             "openai_api_key", "openai_base_url", "openai_model",
             "vk_access_token", "check_interval_minutes",
             "daily_summary_hour", "min_message_length", "similarity_threshold",

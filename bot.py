@@ -144,14 +144,17 @@ class DayZNewsMonitor:
         # -----------------------------------------------------------------
         bot_token = cfg.get("telegram_bot_token", "")
         channel_id = cfg.get("telegram_channel_id", "")
+        news_channel_id = cfg.get("telegram_news_channel_id", "")
         if bot_token and bot_token != "YOUR_BOT_TOKEN_HERE":
             self.publisher = Publisher(
                 bot_token=bot_token,
                 channel_id=channel_id,
+                news_channel_id=news_channel_id,
                 images_dir=cfg.get("images_dir", "images"),
                 max_images_per_post=cfg.get("max_images_per_post", 10),
             )
-            logger.info("Publisher инициализирован (канал: %s)", channel_id)
+            logger.info("Publisher инициализирован (сводки: %s, новости: %s)",
+                        channel_id, news_channel_id or channel_id)
 
             # Кнопка Web App в меню бота + команды
             if HAS_WEB_PANEL and self.web_panel_url:

@@ -1,8 +1,10 @@
 {
   "_comment": "DayZ News Monitor — Discord (один канал) + VK + публикация в Telegram",
+  "_comment_news_channel": "telegram_channel_id = для сводок, telegram_news_channel_id = для новостей (если пусто — используется telegram_channel_id)",
 
   "telegram_bot_token": "YOUR_BOT_TOKEN_HERE",
   "telegram_channel_id": "@your_channel",
+  "telegram_news_channel_id": "-1002254974532",
 
   "openai_api_key": "YOUR_OPENAI_API_KEY_HERE",
   "openai_base_url": "https://api.openai.com/v1",

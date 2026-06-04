@@ -156,10 +156,13 @@ class Publisher:
         self,
         bot_token: str,
         channel_id: str,
+        news_channel_id: str = "",
         images_dir: str = "images",
         max_images_per_post: int = 10,
     ):
         self.channel_id = channel_id
+        # Отдельный канал для новостей (если указан)
+        self.news_channel_id = news_channel_id or channel_id
         self.images_dir = images_dir
         self.max_images_per_post = max_images_per_post
 
@@ -169,7 +172,8 @@ class Publisher:
             token=bot_token,
             default=DefaultBotProperties(parse_mode=ParseMode.HTML),
         )
-        logger.info("Publisher инициализирован. Канал: %s", channel_id)
+        logger.info("Publisher инициализирован. Сводки: %s, Новости: %s",
+                     channel_id, self.news_channel_id)
 
     async def close(self) -> None:
         """Закрывает сессию бота."""
@@ -398,11 +402,11 @@ class Publisher:
                 return await self._send_with_images(text, local_images)
             else:
                 msg = await self.bot.send_message(
-                    chat_id=self.channel_id, text=text
+                    chat_id=self.news_channel_id, text=text
                 )
                 logger.info(
-                    "Сообщение опубликовано (без медиа): TG msg_id=%d",
-                    msg.message_id,
+                    "Сообщение опубликовано (без медиа): TG msg_id=%d, канал: %s",
+                    msg.message_id, self.news_channel_id,
                 )
                 return msg.message_id
         except Exception as exc:
@@ -415,7 +419,7 @@ class Publisher:
                     # Убираем ВСЕ HTML-теги и отправляем как plain text
                     clean = re.sub(r'<[^>]+>', '', text).strip()
                     msg = await self.bot.send_message(
-                        chat_id=self.channel_id, text=clean
+                        chat_id=self.news_channel_id, text=clean
                     )
                     logger.info("Опубликовано без HTML (fallback): TG msg_id=%d", msg.message_id)
                     return msg.message_id
@@ -425,7 +429,7 @@ class Publisher:
             # Для других ошибок — пробуем без медиа
             try:
                 msg = await self.bot.send_message(
-                    chat_id=self.channel_id, text=text
+                    chat_id=self.news_channel_id, text=text
                 )
                 logger.warning(
                     "Сообщение опубликовано без медиа (fallback): TG msg_id=%d",
@@ -462,14 +466,14 @@ class Publisher:
 
         if not media_group:
             # Нет валидных изображений — отправляем только текст
-            msg = await self.bot.send_message(chat_id=self.channel_id, text=text)
+            msg = await self.bot.send_message(chat_id=self.news_channel_id, text=text)
             return msg.message_id
 
         try:
             if len(media_group) == 1:
                 # Одно изображение — отправляем с подписью
                 msg = await self.bot.send_photo(
-                    chat_id=self.channel_id,
+                    chat_id=self.news_channel_id,
                     photo=media_group[0].media,
                     caption=text,
                 )
@@ -484,7 +488,7 @@ class Publisher:
                 media_group[0].caption = text
                 media_group[0].parse_mode = ParseMode.HTML
                 messages = await self.bot.send_media_group(
-                    chat_id=self.channel_id,
+                    chat_id=self.news_channel_id,
                     media=media_group,
                 )
                 logger.info(
@@ -496,7 +500,7 @@ class Publisher:
         except Exception as exc:
             logger.error("Ошибка отправки медиагруппы: %s", exc)
             # Fallback — текст без фото
-            msg = await self.bot.send_message(chat_id=self.channel_id, text=text)
+            msg = await self.bot.send_message(chat_id=self.news_channel_id, text=text)
             return msg.message_id
 
     async def _send_with_videos(
@@ -512,13 +516,13 @@ class Publisher:
                 valid_videos.append(path)
 
         if not valid_videos:
-            msg = await self.bot.send_message(chat_id=self.channel_id, text=text)
+            msg = await self.bot.send_message(chat_id=self.news_channel_id, text=text)
             return msg.message_id
 
         try:
             if len(valid_videos) == 1:
                 msg = await self.bot.send_video(
-                    chat_id=self.channel_id,
+                    chat_id=self.news_channel_id,
                     video=FSInputFile(valid_videos[0]),
                     caption=text,
                     supports_streaming=True,
@@ -537,20 +541,20 @@ class Publisher:
                         logger.warning("Не удалось прикрепить видео %s: %s", path, exc)
 
                 if not media_group:
-                    msg = await self.bot.send_message(chat_id=self.channel_id, text=text)
+                    msg = await self.bot.send_message(chat_id=self.news_channel_id, text=text)
                     return msg.message_id
 
                 media_group[0].caption = text
                 media_group[0].parse_mode = ParseMode.HTML
                 messages = await self.bot.send_media_group(
-                    chat_id=self.channel_id, media=media_group
+                    chat_id=self.news_channel_id, media=media_group
                 )
                 logger.info("Видео группа опубликована (%d): TG msg_id=%d",
                             len(media_group), messages[0].message_id)
                 return messages[0].message_id
         except Exception as exc:
             logger.error("Ошибка отправки видео: %s", exc)
-            msg = await self.bot.send_message(chat_id=self.channel_id, text=text)
+            msg = await self.bot.send_message(chat_id=self.news_channel_id, text=text)
             return msg.message_id
 
     async def _send_mixed_media(
@@ -580,14 +584,14 @@ class Publisher:
                 logger.warning("Не удалось прикрепить изображение %s: %s", path, exc)
 
         if not media_group:
-            msg = await self.bot.send_message(chat_id=self.channel_id, text=text)
+            msg = await self.bot.send_message(chat_id=self.news_channel_id, text=text)
             return msg.message_id
 
         try:
             media_group[0].caption = text
             media_group[0].parse_mode = ParseMode.HTML
             messages = await self.bot.send_media_group(
-                chat_id=self.channel_id, media=media_group
+                chat_id=self.news_channel_id, media=media_group
             )
             logger.info("Медиагруппа опубликована (%d файлов): TG msg_id=%d",
                         len(media_group), messages[0].message_id)
@@ -595,7 +599,7 @@ class Publisher:
         except Exception as exc:
             logger.error("Ошибка отправки медиагруппы: %s", exc)
             # Fallback: send text only
-            msg = await self.bot.send_message(chat_id=self.channel_id, text=text)
+            msg = await self.bot.send_message(chat_id=self.news_channel_id, text=text)
             return msg.message_id
 
     async def _resolve_media_url(self, url: str) -> Optional[str]:
