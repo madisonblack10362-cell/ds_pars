@@ -37,6 +37,49 @@ def strip_html_tags(text: str) -> str:
     return cleaned.strip()
 
 
+def _linkify_urls(text: str) -> str:
+    """
+    Находит голые URL в тексте, которые НЕ обёрнуты в <a> тег,
+    и превращает их в кликабельные <a href="URL">домен</a>.
+    Telegram ParseMode.HTML не делает авто-линковку plain URLs.
+    """
+    import re
+    # Сначала находим все <a>...</a> блоки и заменяем их плейсхолдерами,
+    # чтобы не обёрнуть уже существующие ссылки дважды
+    placeholders = []
+    def _save_link(m):
+        placeholders.append(m.group(0))
+        return f'__A_LINK_{len(placeholders) - 1}__'
+    text_protected = re.sub(r'<a\s[^>]*>.*?</a>', _save_link, text, flags=re.DOTALL)
+
+    # Теперь ищем голые URL и оборачиваем в <a>
+    from urllib.parse import urlparse
+    url_re = re.compile(r'(https?://[\w\-._~:/?#\[\]@!$&\'()*+,;=%]+)', re.IGNORECASE)
+    def _wrap_url(m):
+        url = m.group(1)
+        # Убираем trailing пунктуацию (точки, запятые, скобки в конце)
+        cleaned = url.rstrip('.,;:!?()\\]')
+        trail = url[len(cleaned):]
+        try:
+            domain = urlparse(cleaned).netloc
+            display = domain if domain else cleaned
+            # Сокращаем длинные пути для display
+            if len(cleaned) > 50:
+                path = urlparse(cleaned).path
+                if path and path != '/':
+                    display = domain + '...' if len(domain) > 30 else domain + path[:30] + '...'
+        except Exception:
+            display = cleaned
+        return f'<a href="{cleaned}">{display}</a>{trail}'
+    text_protected = url_re.sub(_wrap_url, text_protected)
+
+    # Возвращаем <a> блоки обратно
+    for i, original in enumerate(placeholders):
+        text_protected = text_protected.replace(f'__A_LINK_{i}__', original)
+
+    return text_protected
+
+
 def sanitize_html_for_telegram(text: str) -> str:
     """
     Очищает HTML-текст для безопасной отправки в Telegram.
@@ -293,6 +336,10 @@ class Publisher:
         Returns:
             ID отправленного сообщения в Telegram или None при ошибке.
         """
+        # Автоматически превращаем голые URL в кликабельные <a> ссылки
+        # Telegram ParseMode.HTML НЕ делает авто-линковку plain URLs
+        text = _linkify_urls(text)
+
         # Безопасная обработка текста перед отправкой в Telegram
         # Telegram поддерживает только ограниченный набор HTML-тегов.
         # LLM может сгенерировать теги которые TG не парсит.
