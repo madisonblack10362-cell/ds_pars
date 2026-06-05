@@ -59,7 +59,13 @@
       {
         "subreddit": "dayzsurvivaltales",
         "sort": "hot",
-        "min_score": 30,
+        "min_score": 20,
+        "limit": 15
+      },
+      {
+        "subreddit": "DayZMods",
+        "sort": "hot",
+        "min_score": 10,
         "limit": 15
       }
     ]
