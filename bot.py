@@ -34,10 +34,7 @@ from deduplicator import Deduplicator
 from publisher import Publisher
 from scheduler import Scheduler
 from vk_monitor import VKMonitor
-from deduplicator import Deduplicator
-from publisher import Publisher
-from scheduler import Scheduler
-from vk_monitor import VKMonitor
+from reddit_monitor import RedditMonitor
 
 
 class DayZNewsMonitor:
@@ -60,6 +57,7 @@ class DayZNewsMonitor:
         self.publisher: Optional[Publisher] = None
         self.scheduler: Optional[Scheduler] = None
         self.vk_monitor: Optional[VKMonitor] = None
+        self.reddit_monitor: Optional[RedditMonitor] = None
         self.web_panel_url: str = ""
         self.web_panel_api_key: str = ""
 
@@ -193,6 +191,24 @@ class DayZNewsMonitor:
             logger.info("VK-монитор отключён: не указан access token или нет групп")
 
         # -----------------------------------------------------------------
+        # Reddit мониторинг
+        # -----------------------------------------------------------------
+        reddit_sources = cfg.get("sources", {}).get("reddit", [])
+        if reddit_sources:
+            self.reddit_monitor = RedditMonitor(
+                db=self.db,
+                subreddit_configs=reddit_sources,
+                min_message_length=cfg.get("min_message_length", 20),
+                min_score=cfg.get("reddit_min_score", 50),
+                request_timeout=cfg.get("request_timeout_seconds", 30),
+                max_retries=cfg.get("max_retries", 3),
+            )
+            await self.reddit_monitor.load_initial_state()
+            logger.info("Reddit-монитор инициализирован (%d сабреддитов)", len(reddit_sources))
+        else:
+            logger.info("Reddit-монитор отключён: нет сабреддитов в настройках")
+
+        # -----------------------------------------------------------------
         # Discord мониторинг (запускается как отдельная фоновая задача)
         # -----------------------------------------------------------------
         discord_token = cfg.get("discord_token", "")
@@ -225,6 +241,15 @@ class DayZNewsMonitor:
                 func=self._task_check_vk,
                 job_id="check_vk",
                 minutes=check_interval,
+            )
+
+        # Периодическая проверка Reddit
+        if self.reddit_monitor:
+            reddit_interval = cfg.get("reddit_check_interval_minutes", 30)
+            self.scheduler.add_interval_job(
+                func=self._task_check_reddit,
+                job_id="check_reddit",
+                minutes=reddit_interval,
             )
 
         # AI-анализ необработанных сообщений
@@ -288,6 +313,17 @@ class DayZNewsMonitor:
                 logger.info("VK: обработано %d новых записей", count)
         except Exception as exc:
             logger.error("Ошибка проверки VK-групп: %s", exc)
+
+    async def _task_check_reddit(self) -> None:
+        """Периодическая проверка Reddit-сабреддитов."""
+        if not self.reddit_monitor:
+            return
+        try:
+            count = await self.reddit_monitor.check_all_subreddits()
+            if count > 0:
+                logger.info("Reddit: обработано %d новых постов", count)
+        except Exception as exc:
+            logger.error("Ошибка проверки Reddit: %s", exc)
 
     async def _task_analyze_messages(self) -> None:
         """AI-анализ необработанных сообщений + дедупликация."""

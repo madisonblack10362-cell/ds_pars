@@ -248,6 +248,8 @@ class DesktopGUI:
             ]),
             ("Расписание", [
                 ("check_interval_minutes", "Интервал проверки (мин)", "5"),
+                ("reddit_check_interval_minutes", "Reddit интервал (мин)", "30"),
+                ("reddit_min_score", "Reddit мин. рейтинг", "50"),
                 ("daily_summary_hour", "Час сводки (UTC)", "10"),
                 ("min_message_length", "Мин. длина сообщения", "20"),
                 ("similarity_threshold", "Порог похожести", "0.85"),

@@ -16,6 +16,8 @@
   "vk_api_version": "5.199",
 
   "check_interval_minutes": 5,
+  "reddit_check_interval_minutes": 30,
+  "reddit_min_score": 50,
   "daily_summary_hour": 10,
   "daily_summary_minute": 0,
   "min_message_length": 20,
@@ -45,6 +47,20 @@
       {
         "server": "Example DayZ Server",
         "group_id": "-00000000"
+      }
+    ],
+    "reddit": [
+      {
+        "subreddit": "dayz",
+        "sort": "hot",
+        "min_score": 50,
+        "limit": 25
+      },
+      {
+        "subreddit": "dayzsurvivaltales",
+        "sort": "hot",
+        "min_score": 30,
+        "limit": 15
       }
     ]
   }
