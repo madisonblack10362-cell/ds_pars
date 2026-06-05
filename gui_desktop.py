@@ -179,7 +179,7 @@ class DesktopGUI:
             ("telegram", "Telegram"),
             ("ai", "AI Анализатор"),
             ("db", "База данных"),
-            ("vk", "VK"),
+            ("reddit", "Reddit"),
         ]:
             card = ctk.CTkFrame(status_frame, fg_color=self.BG2, width=160)
             card.pack(side="left", padx=4, pady=6, fill="y", expand=True)
@@ -251,11 +251,17 @@ class DesktopGUI:
                 ("reddit_check_interval_minutes", "Reddit интервал (мин)", "30"),
                 ("reddit_min_score", "Reddit мин. рейтинг", "50"),
                 ("daily_summary_hour", "Час сводки (UTC)", "10"),
+                ("daily_summary_minute", "Минута сводки (UTC)", "0"),
                 ("min_message_length", "Мин. длина сообщения", "20"),
                 ("similarity_threshold", "Порог похожести", "0.85"),
+                ("max_retries", "Макс. попыток", "3"),
+                ("retry_delay_seconds", "Задержка между попытками (сек)", "10"),
+                ("request_timeout_seconds", "Таймаут запроса (сек)", "30"),
+                ("max_images_per_post", "Макс. фото в посте", "10"),
             ]),
-            ("VK (опционально)", [
-                ("vk_access_token", "VK Access Token", "Пусто = выключено"),
+            ("Веб-панель", [
+                ("web_panel_url", "URL панели", "https://dayz-monitor-web.vercel.app"),
+                ("web_panel_api_key", "API ключ панели", "Ключ для авторизации бота"),
             ]),
         ]
 
@@ -411,8 +417,12 @@ class DesktopGUI:
             "discord_token", "telegram_bot_token", "telegram_channel_id",
             "telegram_news_channel_id",
             "openai_api_key", "openai_base_url", "openai_model",
-            "vk_access_token", "check_interval_minutes",
-            "daily_summary_hour", "min_message_length", "similarity_threshold",
+            "check_interval_minutes", "reddit_check_interval_minutes", "reddit_min_score",
+            "daily_summary_hour", "daily_summary_minute",
+            "min_message_length", "similarity_threshold",
+            "max_retries", "retry_delay_seconds", "request_timeout_seconds",
+            "max_images_per_post",
+            "web_panel_url", "web_panel_api_key",
         ]
         for key in simple_keys:
             entry = self._entries.get(key)
@@ -443,14 +453,20 @@ class DesktopGUI:
             "discord_token", "telegram_bot_token", "telegram_channel_id",
             "telegram_news_channel_id",
             "openai_api_key", "openai_base_url", "openai_model",
-            "vk_access_token", "check_interval_minutes",
-            "daily_summary_hour", "min_message_length", "similarity_threshold",
+            "check_interval_minutes", "reddit_check_interval_minutes", "reddit_min_score",
+            "daily_summary_hour", "daily_summary_minute",
+            "min_message_length", "similarity_threshold",
+            "max_retries", "retry_delay_seconds", "request_timeout_seconds",
+            "max_images_per_post",
+            "web_panel_url", "web_panel_api_key",
         ]
         for key in simple_keys:
             entry = self._entries.get(key)
             if entry:
                 val = entry.get()
-                if key in ("check_interval_minutes", "daily_summary_hour", "min_message_length"):
+                if key in ("check_interval_minutes", "reddit_check_interval_minutes", "daily_summary_hour", "daily_summary_minute",
+                            "min_message_length", "max_retries", "retry_delay_seconds",
+                            "request_timeout_seconds", "max_images_per_post", "reddit_min_score"):
                     try: val = int(val)
                     except ValueError: pass
                 elif key == "similarity_threshold":

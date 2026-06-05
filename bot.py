@@ -820,6 +820,8 @@ def _run_bot_thread(monitor, gui=None):
                     gui.update_status("telegram", False, "Токен не указан")
                 if monitor.vk_monitor:
                     gui.update_status("vk", True)
+                if monitor.reddit_monitor:
+                    gui.update_status("reddit", True)
                 if monitor._discord_enabled:
                     gui.update_status("discord", False, "Подключение...")
                 else:
