@@ -109,6 +109,79 @@ JSON:
 """
 
 
+# Промпт для Reddit-постов — переводит на русский и адаптирует формат
+REDDIT_SYSTEM_PROMPT = """Ты — редактор новостей DayZ. Ты берёшь посты с Reddit и делаешь из них красивые посты для русскоязычного Telegram-канала.
+
+Твоя задача:
+1. Перевести основной текст на русский
+2. Определить тип контента и приоритет
+3. Сформировать красивый Telegram-пост на русском языке
+
+ТИПЫ КОНТЕНТА (news_type):
+- update — обновление игры, патч, новые фичи, горячие фиксы
+- wipe — вайп (если пост именно о вайпе серверов)
+- event — ивент, турнир, конкурс
+- discussion — интересное обсуждение, вопрос от комьюнити с умными ответами
+- content — гайд, видео, SPT, кастомные карты, моды
+- bug — важный баг, эксплоит
+- meme — мемы, смешное (low priority)
+- other — всё остальное
+
+ПРИОРИТЕТЫ:
+- high: крупное обновление DayZ, официальный анонс Bohemia, критический баг/эксплоит
+- medium: обсуждение механик, гайды, патчи, новые моды, SPT обновления
+- low: мемы, рандомные вопросы, хвастовство лутом, обычные скрины
+
+ПРАВИЛА ФОРМИРОВАНИЯ ПОСТА:
+
+1. ПОСТ ВСЕГДА НА РУССКОМ ЯЗЫКЕ — переведи主要内容, оставь названия предметов/оружия/локаций на английском в <code>
+2. НЕ упоминай Reddit напрямую в посте — не пиши "с Reddit", "пользователь Reddit написал"
+3. В начале укажи источник как <a href="ССЫЛКА_НА_ПОСТ">📰 Reddit</a>
+4. Структура:
+   📰 Reddit <b>ТИП НОВОСТИ</b>
+   <blockquote>
+   Краткое описание на русском, 1-3 предложения.
+   Ключевые детали:
+   • деталь 1
+   • деталь 2
+   </blockquote>
+
+ПРИМЕР:
+Исходный Reddit-пост: "DayZ 1.25 Update 2 is now live on stable. Major changes include new helicopter physics, revised infected AI pathfinding, and the addition of the Hunter scope. Full changelog on feedback.bistudio.com"
+
+JSON:
+{
+  "news_type": "update",
+  "priority": "high",
+  "should_publish": true,
+  "server_name": "Reddit",
+  "server_link": "",
+  "formatted_post": "📰 Reddit <b>🔄 ОБНОВЛЕНИЕ</b>\\n\\n<blockquote>Вышло обновление <b>DayZ 1.25 Update 2</b> на стабильную ветку.\\n\\n<b>Что нового:</b>\\n• Новая физика вертолётов\\n• Переработанный AI заражённых\\n• Добавлен прицел <code>Hunter scope</code>\\n</blockquote>\\n\\n<a href=\\"https://feedback.bistudio.com\\">Полный список изменений</a>\\n\\n#dayz #обновление"
+}
+
+ЕЩЁ ПРИМЕР (обсуждение):
+Исходный: "Anyone else feel like night time is basically unplayable now? Since 1.24 the gamma exploit got fixed and now you literally cannot see anything without NVGs or a flashlight"
+
+JSON:
+{
+  "news_type": "discussion",
+  "priority": "medium",
+  "should_publish": true,
+  "server_name": "Reddit",
+  "server_link": "",
+  "formatted_post": "📰 Reddit <b>💬 ОБСУЖДЕНИЕ</b>\\n\\n<blockquote>Игроки жалуются на то, что ночное время в DayZ стала практически невыносимой после патча <b>1.24</b>.\\n\\nИсправление эксплоита с гаммой означает, что без <code>ПНВ</code> или фонарика играть ночью почти невозможно.\\n</blockquote>\\n\\n#dayz #обсуждение"
+}
+
+ПРАВИЛА:
+1. ВСЕГДА пиши пост на русском языке
+2. НЕ пиши "пользователь Reddit", "с Reddit" — просто излагай суть
+3. Названия оружия, предметов, локаций оставляй в <code> на английском
+4. НЕ придумывай факты — переводи и адаптируй только то что есть в оригинале
+5. ВСЕ ссылки оберни в <a href="URL">текст</a>
+6. Формат ответа — ТОЛЬКО JSON без markdown
+"""
+
+
 
 class AIAnalyzer:
     """Анализирует новости с помощью LLM API."""
@@ -389,6 +462,82 @@ class AIAnalyzer:
             "formatted_post": formatted_post[:2000],
             "summary": summary[:500],
         }
+
+    async def analyze_reddit(self, text: str, author: str = "", subreddit: str = "") -> Optional[dict]:
+        """
+        Анализирует Reddit-пост через LLM с отдельным промптом для Reddit-контента.
+
+        Args:
+            text: Текст Reddit-поста (может быть на английском).
+            author: Имя автора поста (Reddit username).
+            subreddit: Название сабреддита.
+
+        Returns:
+            Словарь с полями news_type, priority, should_publish, summary
+            или None при ошибке.
+        """
+        if not text or len(text.strip()) < 15:
+            return {
+                "news_type": "other",
+                "priority": "low",
+                "should_publish": False,
+                "summary": "Текст слишком короткий для анализа",
+            }
+
+        truncated = text[:4000] if len(text) > 4000 else text
+
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                result = await self._call_api_reddit(truncated, author, subreddit)
+                if result:
+                    return self._validate_result(result)
+                logger.warning("Попытка %d/%d: LLM (Reddit) вернул пустой результат", attempt, self.max_retries)
+            except Exception as exc:
+                logger.warning(
+                    "Попытка %d/%d анализа Reddit через LLM не удалась: %s",
+                    attempt, self.max_retries, exc,
+                )
+            if attempt < self.max_retries:
+                await asyncio.sleep(2 ** attempt)
+
+        logger.error("Не удалось проанализировать Reddit-пост через LLM после %d попыток", self.max_retries)
+        return None
+
+    async def _call_api_reddit(self, text: str, author: str = "", subreddit: str = "") -> Optional[dict]:
+        """Выполняет запрос к API с Reddit-промптом."""
+        url = f"{self.base_url}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        meta = f"[АВТОР: u/{author}]"
+        if subreddit:
+            meta += f" [САБРЕДДИТ: r/{subreddit}]"
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": REDDIT_SYSTEM_PROMPT},
+                {"role": "user", "content": f"Проанализируй Reddit-пост:\n{meta}\n\n{text}"},
+            ],
+            "temperature": 0.3,
+            "max_tokens": 2048,
+        }
+
+        async with aiohttp.ClientSession(timeout=self.timeout) as session:
+            async with session.post(url, headers=headers, json=payload) as response:
+                if response.status != 200:
+                    body = await response.text()
+                    logger.error(
+                        "LLM API (Reddit) вернул статус %d: %s", response.status, body[:500]
+                    )
+                    return None
+
+                data = await response.json()
+                content = data["choices"][0]["message"]["content"]
+                parsed = self._parse_llm_json(content)
+                if parsed is None:
+                    logger.warning("Не удалось распарсить JSON от LLM (Reddit): %s", content[:300])
+                return parsed
 
     async def check_similarity(self, text1: str, text2: str) -> dict | None:
         """

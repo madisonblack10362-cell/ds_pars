@@ -354,9 +354,15 @@ class DayZNewsMonitor:
                         )
                         continue
 
-                # AI-анализ (передаём автора — его имя = название сервера)
+                # AI-анализ
                 author = msg.get("author", "") or msg.get("server_name", "")
-                result = await self.ai_analyzer.analyze(text, author=author)
+                source_type = msg.get("source_type", "")
+
+                if source_type == "reddit":
+                    subreddit = msg.get("channel_name", "")
+                    result = await self.ai_analyzer.analyze_reddit(text, author=author, subreddit=subreddit)
+                else:
+                    result = await self.ai_analyzer.analyze(text, author=author)
 
                 if result:
                     # Всегда сохраняем с should_publish=False в локальной БД,
