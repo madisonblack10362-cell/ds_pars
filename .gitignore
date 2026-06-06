@@ -31,3 +31,5 @@ dayz-monitor-web/
 download/
 upload/
 skills/
+logs/
+*.log
