@@ -297,7 +297,23 @@ class DayZNewsMonitor:
         )
 
         logger.info("Все компоненты инициализированы")
-        logger.info("Зарегистрированные задачи: %s", self.scheduler.get_jobs_info())
+
+        # Красивый вывод задач планировщика
+        jobs = self.scheduler.get_jobs_info()
+        logger.info("─── Планировщик задач ───")
+        task_names = {
+            "check_discord": "Discord мониторинг",
+            "check_vk": "VK мониторинг",
+            "check_reddit": "Reddit мониторинг",
+            "analyze_messages": "AI-анализ сообщений",
+            "publish_from_panel": "Публикация с панели",
+            "daily_summary": "Ежедневная сводка",
+            "cleanup": "Очистка базы данных",
+        }
+        for job_id, schedule in jobs.items():
+            name = task_names.get(job_id, job_id)
+            logger.info("  ⏱  %-28s %s", name, schedule)
+        logger.info("──────────────────────────")
 
     # =====================================================================
     # Задачи планировщика
@@ -713,11 +729,16 @@ class DayZNewsMonitor:
     # Жизненный цикл
     # =====================================================================
 
+    BANNER = r"""
+  ╔══════════════════════════════════════════════╗
+  ║        🧟  DayZ News Monitor  v2.0            ║
+  ║     Новости DayZ → AI → Telegram + Web Panel    ║
+  ╚══════════════════════════════════════════════╝
+"""
+
     async def run(self) -> None:
         """Запускает приложение."""
-        logger.info("=" * 60)
-        logger.info("DayZ News Monitor запускается...")
-        logger.info("=" * 60)
+        print(self.BANNER)
 
         await self.initialize()
 
@@ -743,10 +764,7 @@ class DayZNewsMonitor:
             except NotImplementedError:
                 pass
 
-        logger.info("=" * 60)
-        logger.info("DayZ News Monitor запущен и работает")
-        logger.info("Нажмите Ctrl+C для остановки")
-        logger.info("=" * 60)
+        logger.info("Bot is running. Нажмите Ctrl+C для остановки.")
 
         await self._shutdown_event.wait()
         await self._cleanup()
