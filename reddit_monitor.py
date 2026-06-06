@@ -102,16 +102,15 @@ class RedditMonitor:
             limit = min(cfg.get("limit", 25), 100)
             min_score = cfg.get("min_score", self.min_score)
 
-            count = await self._check_subreddit(subreddit, sort_type, limit, min_score)
-            total_new += count
-
-            # Лимит постов за одну проверку — чтобы не спамить
-            if total_new >= self.max_posts_per_check:
+            remaining = self.max_posts_per_check - total_new
+            if remaining <= 0:
                 logger.info(
                     "RedditMonitor: достигнут лимит %d постов за проверку, останавливаемся",
                     self.max_posts_per_check,
                 )
                 break
+            count = await self._check_subreddit(subreddit, sort_type, limit, min_score, budget=remaining)
+            total_new += count
 
         if total_new > 0:
             logger.info(
@@ -121,7 +120,7 @@ class RedditMonitor:
         return total_new
 
     async def _check_subreddit(
-        self, subreddit: str, sort_type: str, limit: int, min_score: int
+        self, subreddit: str, sort_type: str, limit: int, min_score: int, budget: int = 100
     ) -> int:
         """Проверяет один сабреддит через RSS."""
         rss_url = REDDIT_RSS_URL.format(subreddit=subreddit, sort=sort_type, limit=limit)
@@ -153,6 +152,12 @@ class RedditMonitor:
                         entries = list(reversed(feed.entries))
 
                         for entry in entries:
+                            if new_count >= budget:
+                                logger.info(
+                                    "RedditMonitor: r/%s — достигнут лимит %d за проверку, останавливаемся",
+                                    subreddit, budget,
+                                )
+                                break
                             saved = await self._process_entry(
                                 entry, subreddit, min_score
                             )

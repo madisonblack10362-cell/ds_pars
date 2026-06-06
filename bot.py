@@ -432,37 +432,16 @@ class DayZNewsMonitor:
             pending = status.get("pending", 0)
 
             if pending > 0 and pending > self._last_pending_count:
-                # Формируем список ожидающих новостей
+                # Отправляем отдельное уведомление по каждой новой новости
                 items = status.get("items", [])
-                type_names = {
-                    "update": "🔄", "wipe": "⚠️", "patch": "🔧", "event": "📅",
-                    "maintenance": "🛠️", "bug": "🐛", "mod": "🔧", "content": "💡",
-                    "discussion": "💬", "story": "📖", "meme": "😂", "other": "📰",
-                }
-                lines = [f"📬 <b>Ожидают модерации: {pending}</b>\n"]
-                for item in items[:5]:
-                    ntype = item.get("newsType", item.get("news_type", "other"))
-                    icon = type_names.get(ntype, "📰")
-                    summary = item.get("summary", item.get("content", ""))[:60]
-                    if summary:
-                        lines.append(f"{icon} {summary}...")
-                    else:
-                        lines.append(f"{icon} Новость ({ntype})")
-                if pending > 5:
-                    lines.append(f"\n...и ещё {pending - 5}")
-                lines.append(f"\n🔗 <a href=\"{self.web_panel_url}/dashboard/moderation\">Открыть модерацию</a>")
-
-                text = "\n".join(lines)
+                new_items = items[:pending - self._last_pending_count]
                 admin_ids = await self._get_admin_chat_ids()
-                for chat_id in admin_ids:
-                    try:
-                        await self.publisher.bot.send_message(
-                            chat_id=chat_id,
-                            text=text,
-                            parse_mode=ParseMode.HTML,
-                        )
-                    except Exception as exc:
-                        logger.warning("Не удалось отправить уведомление chat_id=%d: %s", chat_id, exc)
+                for item in new_items:
+                    title = item.get("summary", item.get("content", "Без описания"))[:80]
+                    news_type = item.get("newsType", item.get("news_type", "other"))
+                    priority = item.get("priority", "medium")
+                    source = item.get("source", item.get("source_type", "unknown"))
+                    await self._notify_moderation(title, news_type, priority, source)
             self._last_pending_count = pending
         except Exception as exc:
             logger.debug("Ошибка проверки модерации: %s", exc)
