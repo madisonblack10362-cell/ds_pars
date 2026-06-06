@@ -118,7 +118,7 @@ async def get_moderation_status(
     bot_api_key: str = "",
     timeout: float = 5.0,
 ) -> dict:
-    """Проверяет количество ожидающих модерацию новостей."""
+    """Проверяет количество ожидающих модерацию новостей и их список."""
     try:
         headers = {}
         if bot_api_key:
@@ -126,16 +126,18 @@ async def get_moderation_status(
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.get(
-                f"{web_app_url}/api/news?status=pending&limit=1",
+                f"{web_app_url}/api/news?status=pending&limit=10",
                 headers=headers,
             )
             if response.status_code == 200:
                 data = response.json()
-                return {"pending": data.get("total", 0), "total_pages": data.get("totalPages", 0)}
-            return {"pending": 0, "total_pages": 0}
+                total = data.get("total", 0)
+                items = data.get("items", data.get("news", []))
+                return {"pending": total, "items": items}
+            return {"pending": 0, "items": []}
     except Exception as e:
         logger.debug("Веб-панель: ошибка проверки статуса: %s", e)
-        return {"pending": 0, "total_pages": 0}
+        return {"pending": 0, "items": []}
 
 
 async def check_publish_queue(

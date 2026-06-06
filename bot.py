@@ -432,11 +432,27 @@ class DayZNewsMonitor:
             pending = status.get("pending", 0)
 
             if pending > 0 and pending > self._last_pending_count:
-                text = (
-                    f"📬 <b>Ожидают модерации: {pending}</b>\n\n"
-                    f"На веб-панели есть новости, ожидающие проверки.\n"
-                    f"🔗 <a href=\"{self.web_panel_url}/dashboard/moderation\">Открыть модерацию</a>"
-                )
+                # Формируем список ожидающих новостей
+                items = status.get("items", [])
+                type_names = {
+                    "update": "🔄", "wipe": "⚠️", "patch": "🔧", "event": "📅",
+                    "maintenance": "🛠️", "bug": "🐛", "mod": "🔧", "content": "💡",
+                    "discussion": "💬", "story": "📖", "meme": "😂", "other": "📰",
+                }
+                lines = [f"📬 <b>Ожидают модерации: {pending}</b>\n"]
+                for item in items[:5]:
+                    ntype = item.get("newsType", item.get("news_type", "other"))
+                    icon = type_names.get(ntype, "📰")
+                    summary = item.get("summary", item.get("content", ""))[:60]
+                    if summary:
+                        lines.append(f"{icon} {summary}...")
+                    else:
+                        lines.append(f"{icon} Новость ({ntype})")
+                if pending > 5:
+                    lines.append(f"\n...и ещё {pending - 5}")
+                lines.append(f"\n🔗 <a href=\"{self.web_panel_url}/dashboard/moderation\">Открыть модерацию</a>")
+
+                text = "\n".join(lines)
                 admin_ids = await self._get_admin_chat_ids()
                 for chat_id in admin_ids:
                     try:
@@ -456,10 +472,12 @@ class DayZNewsMonitor:
         if not self.ai_analyzer or not self.db:
             return
         try:
-            messages = await self.db.get_unprocessed_messages(limit=5)
+            # Берём максимум 3 за раз — чтобы не спамить пачками
+            messages = await self.db.get_unprocessed_messages(limit=3)
             if not messages:
                 return
 
+            processed_count = 0
             for msg in messages:
                 msg_id = msg["id"]
                 text = msg.get("text", "")
