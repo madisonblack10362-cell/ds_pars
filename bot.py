@@ -80,7 +80,7 @@ class DayZNewsMonitor:
 
             # Web Panel URL и API ключ
             self.web_panel_url = self.config.get("web_panel_url", "")
-            self.web_panel_api_key = self.config.get("bot_api_key", "")
+            self.web_panel_api_key = self.config.get("web_panel_api_key", "")
             if self.web_panel_url:
                 logger.info("Веб-панель: %s", self.web_panel_url)
         except Exception as e:
