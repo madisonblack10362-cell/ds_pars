@@ -297,15 +297,12 @@ class RedditMonitor:
                 if not preview_url.endswith("/self") and not preview_url.endswith("/default"):
                     images.append(preview_url)
 
-        # Ссылки
+        # Ссылки — НЕ добавляем ссылки на Reddit, только внешние
         links = []
-        if link:
-            links.append(link)
-
-        # Reddit crosspost-ссылки из текста
+        # Reddit crosspost-ссылки из текста — только не Reddit
         text_links = re.findall(r"https?://[^\s<>\"'\)]+", text)
         for tl in text_links:
-            if tl not in links and "redd.it" not in tl and "reddit.com/r/" not in tl:
+            if "redd.it" not in tl and "reddit.com" not in tl:
                 links.append(tl)
 
         # Дата публикации

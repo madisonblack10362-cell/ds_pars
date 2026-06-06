@@ -471,9 +471,18 @@ class DayZNewsMonitor:
                     except (json.JSONDecodeError, TypeError):
                         images = []
 
+                    # Для Reddit — более строгая дедупликация (порог 0.65 вместо 0.85)
+                    old_threshold = self.deduplicator.similarity_threshold
+                    if msg.get("source_type") == "reddit":
+                        self.deduplicator.similarity_threshold = 0.65
+
                     duplicate_of = await self.deduplicator.is_duplicate(
                         msg_id, text, images
                     )
+
+                    # Возвращаем порог обратно
+                    self.deduplicator.similarity_threshold = old_threshold
+
                     if duplicate_of:
                         await self.deduplicator.mark_as_duplicate(
                             duplicate_of, msg_id
