@@ -60,6 +60,7 @@ class DayZNewsMonitor:
         self.reddit_monitor: Optional[RedditMonitor] = None
         self.web_panel_url: str = ""
         self.web_panel_api_key: str = ""
+        self.notify_chat_id: str = ""
         self.moderation_notifications: bool = True
         self._last_pending_count: int = 0
 
@@ -83,9 +84,12 @@ class DayZNewsMonitor:
             # Web Panel URL и API ключ
             self.web_panel_url = self.config.get("web_panel_url", "")
             self.web_panel_api_key = self.config.get("web_panel_api_key", "")
+            self.notify_chat_id = str(self.config.get("telegram_notify_chat_id", ""))
             self.moderation_notifications = self.config.get("moderation_notifications", True)
             if self.web_panel_url:
                 logger.info("Веб-панель: %s", self.web_panel_url)
+            if self.notify_chat_id:
+                logger.info("Уведомления будут отправляться в чат %s", self.notify_chat_id)
         except Exception as e:
             print(f"[BOT] Ошибка чтения конфига: {e}")
             logger.error("Ошибка чтения конфига: %s", e)
@@ -281,12 +285,12 @@ class DayZNewsMonitor:
                 minutes=1,
             )
 
-        # Проверка ожидающих модерацию новостей на веб-панели
-        if HAS_WEB_PANEL and self.web_panel_url:
+        # Проверка ожидающих модерацию новостей
+        if HAS_WEB_PANEL and self.web_panel_url and self.moderation_notifications and self.notify_chat_id:
             self.scheduler.add_interval_job(
                 func=self._task_check_pending_moderation,
                 job_id="check_pending_moderation",
-                minutes=3,
+                minutes=5,
             )
 
         # Ежедневная сводка
@@ -355,35 +359,11 @@ class DayZNewsMonitor:
         except Exception as exc:
             logger.error("Ошибка проверки Reddit: %s", exc)
 
-    async def _task_check_pending_moderation(self) -> None:
-        """Периодически проверяет веб-панель на наличие ожидающих модерацию новостей."""
-        if not self.moderation_notifications or not self.web_panel_url or not HAS_WEB_PANEL:
-            return
-        try:
-            status = await get_moderation_status(
-                self.web_panel_url,
-                bot_api_key=self.web_panel_api_key,
-            )
-            pending = status.get("pending", 0)
-
-            # Уведомляем только если появилось что-то новое
-            if pending > 0 and pending > self._last_pending_count:
-                panel_link = self.web_panel_url
-                text = (
-                    f"📬 <b>Ожидают модерации: {pending}</b>\n\n"
-                    f"На веб-панели есть новости, ожидающие проверки.\n"
-                    f"🔗 <a href=\"{panel_link}/dashboard/moderation\">Открыть модерацию</a>"
-                )
-                await self._send_telegram_notification(text)
-            self._last_pending_count = pending
-        except Exception as exc:
-            logger.debug("Ошибка проверки модерации: %s", exc)
-
     async def _notify_moderation(
         self, title: str, news_type: str, priority: str, source: str
     ) -> None:
-        """Отправляет уведомление о новой новости на модерации в Telegram."""
-        if not self.moderation_notifications:
+        """Отправляет уведомление о новой новости на модерации в личку админа."""
+        if not self.moderation_notifications or not self.notify_chat_id or not self.publisher:
             return
 
         type_icons = {
@@ -406,23 +386,52 @@ class DayZNewsMonitor:
             f"🔗 <a href=\"{self.web_panel_url}/dashboard/moderation\">Открыть модерацию</a>"
         )
 
-        await self._send_telegram_notification(text)
+        try:
+            await self.publisher.bot.send_message(
+                chat_id=int(self.notify_chat_id),
+                text=text,
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception as exc:
+            logger.warning("Не удалось отправить уведомление о модерации: %s", exc)
 
-    async def _send_telegram_notification(self, text: str) -> None:
-        """Отправляет текстовое уведомление в основной канал через Publisher."""
-        if not self.publisher:
+    async def _task_check_pending_moderation(self) -> None:
+        """Периодически проверяет веб-панель на наличие ожидающих модерацию новостей."""
+        if not self.moderation_notifications or not self.web_panel_url or not HAS_WEB_PANEL:
+            return
+        if not self.notify_chat_id or not self.publisher:
             return
         try:
-            await self.publisher.publish_message(text=text)
+            status = await get_moderation_status(
+                self.web_panel_url,
+                bot_api_key=self.web_panel_api_key,
+            )
+            pending = status.get("pending", 0)
+
+            if pending > 0 and pending > self._last_pending_count:
+                text = (
+                    f"📬 <b>Ожидают модерации: {pending}</b>\n\n"
+                    f"На веб-панели есть новости, ожидающие проверки.\n"
+                    f"🔗 <a href=\"{self.web_panel_url}/dashboard/moderation\">Открыть модерацию</a>"
+                )
+                try:
+                    await self.publisher.bot.send_message(
+                        chat_id=int(self.notify_chat_id),
+                        text=text,
+                        parse_mode=ParseMode.HTML,
+                    )
+                except Exception as exc:
+                    logger.warning("Не удалось отправить уведомление: %s", exc)
+            self._last_pending_count = pending
         except Exception as exc:
-            logger.warning("Не удалось отправить уведомление: %s", exc)
+            logger.debug("Ошибка проверки модерации: %s", exc)
 
     async def _task_analyze_messages(self) -> None:
         """AI-анализ необработанных сообщений + дедупликация."""
         if not self.ai_analyzer or not self.db:
             return
         try:
-            messages = await self.db.get_unprocessed_messages(limit=20)
+            messages = await self.db.get_unprocessed_messages(limit=5)
             if not messages:
                 return
 
@@ -504,6 +513,7 @@ class DayZNewsMonitor:
                                         source=result.get("server_name", "") or author,
                                     )
                                 else:
+                                elif not success:
                                     logger.error("Веб-панель: не удалось отправить новость #%d", msg_id)
                             except Exception as web_err:
                                 logger.error("Веб-панель: исключение при отправке #%d: %s", msg_id, web_err)
