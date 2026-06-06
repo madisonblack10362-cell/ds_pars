@@ -366,13 +366,20 @@ class Publisher:
         # Возвращаем разрешённые теги обратно
         for i, tag in enumerate(placeholders):
             text = text.replace(f'__TAG_{i}__', tag)
-        # Проверяем баланс blockquote — если не сбалансированы, удаляем все
+        # Проверяем баланс blockquote — если не сбалансированы, автозакрываем
         bq_open = len(re.findall(r'<blockquote>', text, re.IGNORECASE))
         bq_close = len(re.findall(r'</blockquote>', text, re.IGNORECASE))
         if bq_open != bq_close:
-            text = re.sub(r'</?blockquote>', '', text, flags=re.IGNORECASE)
-            text = text.strip()
-            logger.warning('Убраны несбалансированные blockquote-теги из текста перед отправкой')
+            diff = bq_open - bq_close
+            if diff > 0:
+                # Не хватает закрывающих — добавляем в конец
+                text = text.rstrip() + ('</blockquote>' * diff)
+                logger.info('Автозакрыто %d незакрытых blockquote-тегов', diff)
+            else:
+                # Лишние закрывающие — убираем
+                for _ in range(-diff):
+                    text = re.sub(r'</blockquote>\s*', '', text, count=1, flags=re.IGNORECASE)
+                logger.info('Убрано %d лишних закрывающих blockquote-тегов', -diff)
 
         # Собираем изображения для отправки
         local_images: list[str] = list(image_paths or [])
