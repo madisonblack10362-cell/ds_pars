@@ -272,6 +272,17 @@ class DesktopGUI:
             ctk.CTkLabel(frame, text=section_title, font=("Segoe UI", 13, "bold"),
                         text_color=self.ACCENT).pack(anchor="w", padx=12, pady=(10, 4))
 
+            # Переключатели для секции Веб-панель
+            if section_title == "Веб-панель":
+                tf = ctk.CTkFrame(frame, fg_color="transparent")
+                tf.pack(fill="x", padx=12, pady=(4, 6))
+                var = tk.BooleanVar(value=True)
+                ctk.CTkCheckBox(tf, text="Уведомления о модерации в Telegram",
+                               variable=var, font=("Segoe UI", 11),
+                               text_color=self.TEXT2, fg_color=self.INPUT_BORDER,
+                               hover_color=self.ACCENT).pack(anchor="w")
+                self._toggles["moderation_notifications"] = var
+
             for key, label, hint in fields:
                 row = ctk.CTkFrame(frame, fg_color="transparent")
                 row.pack(fill="x", padx=12, pady=2)
@@ -440,7 +451,8 @@ class DesktopGUI:
                 entry.insert(0, str(discord.get(cfg_key, "")))
 
         for key, var in self._toggles.items():
-            var.set(cfg.get(key, False))
+            default = True if key == "moderation_notifications" else False
+            var.set(cfg.get(key, default))
 
     def _save_config(self):
         try:
