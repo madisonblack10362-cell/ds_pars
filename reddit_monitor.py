@@ -128,6 +128,7 @@ class RedditMonitor:
                             return 0
 
                         new_count = 0
+                        seen_count = 0
                         # Обрабатываем от старых к новым
                         entries = list(reversed(feed.entries))
 
@@ -137,7 +138,13 @@ class RedditMonitor:
                             )
                             if saved:
                                 new_count += 1
+                            else:
+                                seen_count += 1
 
+                        logger.info(
+                            "RedditMonitor: r/%s — %d записей в RSS, %d новых, %d уже видели",
+                            subreddit, len(entries), new_count, seen_count,
+                        )
                         return new_count
 
             except asyncio.TimeoutError:
@@ -183,23 +190,11 @@ class RedditMonitor:
         if external_id in self._seen_post_ids:
             return None
 
-        # Рейтинг (Reddit RSS включает тег <score>)
-        score = 0
-        # feedparser хранит расширения в entry.tags или entry.get()
-        # Reddit RSS включает ups как элемент
-        for tag in entry.get("tags", []):
-            if tag.get("term", "").startswith("ups="):
-                try:
-                    score = int(tag["term"].split("=")[1])
-                except (ValueError, IndexError):
-                    pass
-        # Альтернативно — через entry.get("score") или из link
-        if not score:
-            # Пробуем извлечь из entrysummary или author
-            score = self._extract_score(entry)
+        # Рейтинг (Reddit RSS не содержит score — ставим 0 и пропускаем фильтр)
+        score = self._extract_score(entry)
 
-        # Фильтрация по рейтингу
-        if score < min_score:
+        # Фильтрация по рейтингу — только если score удалось определить
+        if score > 0 and score < min_score:
             return None
 
         # Заголовок
