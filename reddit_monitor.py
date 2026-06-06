@@ -28,6 +28,16 @@ class RedditMonitor:
     извлекает текст, self-post контент, изображения и ссылки.
     """
 
+    # Ключевые слова для фильтрации нежелательных постов (нижний регистр)
+    BLACKLIST_KEYWORDS = [
+        # PlayStation / консоли
+        "playstation", "ps4", "ps5", "psn", "play station", "ps5 pro",
+        "плойка", "плойке", "плойку", "плойкой",
+        "консоль", "консоли", "консольная версия", "console",
+        # Другие платформы (если нужно — раскомментировать)
+        # "xbox", "xbox series", "game pass",
+    ]
+
     def __init__(
         self,
         db: Database,
@@ -37,6 +47,7 @@ class RedditMonitor:
         request_timeout: int = 30,
         max_retries: int = 3,
         user_agent: str | None = None,
+        max_posts_per_check: int = 5,
     ):
         """
         Args:
@@ -55,6 +66,7 @@ class RedditMonitor:
         self.min_score = min_score
         self.timeout = aiohttp.ClientTimeout(total=request_timeout)
         self.max_retries = max_retries
+        self.max_posts_per_check = max_posts_per_check
         self.user_agent = user_agent or (
             "DayZNewsMonitor/1.0 (https://github.com/madisonblack10362-cell/dayz-monitor-web)"
         )
@@ -92,6 +104,14 @@ class RedditMonitor:
 
             count = await self._check_subreddit(subreddit, sort_type, limit, min_score)
             total_new += count
+
+            # Лимит постов за одну проверку — чтобы не спамить
+            if total_new >= self.max_posts_per_check:
+                logger.info(
+                    "RedditMonitor: достигнут лимит %d постов за проверку, останавливаемся",
+                    self.max_posts_per_check,
+                )
+                break
 
         if total_new > 0:
             logger.info(
@@ -227,6 +247,17 @@ class RedditMonitor:
                             clean = full_text
             if clean and len(clean) > len(title):
                 text = clean
+
+        # Фильтрация по чёрному списку (PlayStation, консоли и т.д.)
+        check_text = f"{title} {text}".lower()
+        for keyword in self.BLACKLIST_KEYWORDS:
+            if keyword in check_text:
+                self._seen_post_ids[external_id] = external_id  # помечаем как виденный
+                logger.info(
+                    "RedditMonitor: пост пропущен (blacklist '%s'): %s",
+                    keyword, title[:60],
+                )
+                return None
 
         # Фильтрация по длине
         if len(text) < self.min_message_length:

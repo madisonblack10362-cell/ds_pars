@@ -209,6 +209,7 @@ class DayZNewsMonitor:
                 min_score=cfg.get("reddit_min_score", 50),
                 request_timeout=cfg.get("request_timeout_seconds", 30),
                 max_retries=cfg.get("max_retries", 3),
+                max_posts_per_check=cfg.get("reddit_max_posts_per_check", 5),
             )
             await self.reddit_monitor.load_initial_state()
             logger.info("Reddit-монитор инициализирован (%d сабреддитов)", len(reddit_sources))
@@ -359,12 +360,32 @@ class DayZNewsMonitor:
         except Exception as exc:
             logger.error("Ошибка проверки Reddit: %s", exc)
 
+    async def _get_admin_chat_ids(self) -> list[int]:
+        """Возвращает список chat_id всех зарегистрированных пользователей бота."""
+        if not self.db:
+            return []
+        try:
+            users = await self.db.get_all_subscribers()
+            return [u["user_id"] for u in users if u.get("user_id")]
+        except Exception as exc:
+            logger.warning("Не удалось получить список пользователей: %s", exc)
+            return []
+
     async def _notify_moderation(
         self, title: str, news_type: str, priority: str, source: str
     ) -> None:
-        """Отправляет уведомление о новой новости на модерации в личку админа."""
-        if not self.moderation_notifications or not self.notify_chat_id or not self.publisher:
+        """Отправляет уведомление о новой новости на модерацию всем админам бота."""
+        if not self.moderation_notifications or not self.publisher:
             return
+
+        # Получаем список chat_id из базы бота
+        admin_ids = await self._get_admin_chat_ids()
+        if not admin_ids:
+            # Фоллбэк: если в базе никого нет — берём из config
+            if self.notify_chat_id:
+                admin_ids = [int(self.notify_chat_id)]
+            else:
+                return
 
         type_icons = {
             "update": "🎮", "wipe": "🔄", "patch": "🔧", "event": "📅",
@@ -386,20 +407,22 @@ class DayZNewsMonitor:
             f"🔗 <a href=\"{self.web_panel_url}/dashboard/moderation\">Открыть модерацию</a>"
         )
 
-        try:
-            await self.publisher.bot.send_message(
-                chat_id=int(self.notify_chat_id),
-                text=text,
-                parse_mode=ParseMode.HTML,
-            )
-        except Exception as exc:
-            logger.warning("Не удалось отправить уведомление о модерации: %s", exc)
+        for chat_id in admin_ids:
+            try:
+                await self.publisher.bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    parse_mode=ParseMode.HTML,
+                )
+                logger.debug("Уведомление о модерации отправлено: chat_id=%d", chat_id)
+            except Exception as exc:
+                logger.warning("Не удалось отправить уведомление chat_id=%d: %s", chat_id, exc)
 
     async def _task_check_pending_moderation(self) -> None:
         """Периодически проверяет веб-панель на наличие ожидающих модерацию новостей."""
         if not self.moderation_notifications or not self.web_panel_url or not HAS_WEB_PANEL:
             return
-        if not self.notify_chat_id or not self.publisher:
+        if not self.publisher:
             return
         try:
             status = await get_moderation_status(
@@ -414,14 +437,16 @@ class DayZNewsMonitor:
                     f"На веб-панели есть новости, ожидающие проверки.\n"
                     f"🔗 <a href=\"{self.web_panel_url}/dashboard/moderation\">Открыть модерацию</a>"
                 )
-                try:
-                    await self.publisher.bot.send_message(
-                        chat_id=int(self.notify_chat_id),
-                        text=text,
-                        parse_mode=ParseMode.HTML,
-                    )
-                except Exception as exc:
-                    logger.warning("Не удалось отправить уведомление: %s", exc)
+                admin_ids = await self._get_admin_chat_ids()
+                for chat_id in admin_ids:
+                    try:
+                        await self.publisher.bot.send_message(
+                            chat_id=chat_id,
+                            text=text,
+                            parse_mode=ParseMode.HTML,
+                        )
+                    except Exception as exc:
+                        logger.warning("Не удалось отправить уведомление chat_id=%d: %s", chat_id, exc)
             self._last_pending_count = pending
         except Exception as exc:
             logger.debug("Ошибка проверки модерации: %s", exc)
@@ -512,7 +537,6 @@ class DayZNewsMonitor:
                                         priority=result.get("priority", "low"),
                                         source=result.get("server_name", "") or author,
                                     )
-                                else:
                                 elif not success:
                                     logger.error("Веб-панель: не удалось отправить новость #%d", msg_id)
                             except Exception as web_err:
