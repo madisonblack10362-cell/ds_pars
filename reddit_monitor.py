@@ -3,8 +3,9 @@
 Парсит сабреддиты через Reddit JSON API (с score),
 фильтрует по рейтингу, извлекает текст, изображения и ссылки.
 
-Использует системный curl как основной метод (надёжнее всего),
-curl_cffi и urllib как фоллбэки.
+Использует системный curl с полным набором браузерных заголовков
+(Sec-Fetch-*, Sec-Ch-Ua и т.д.), плюс curl_cffi как фоллбэк.
+Пробует old.reddit.com и www.reddit.com.
 """
 
 import asyncio
@@ -27,8 +28,9 @@ except ImportError:
     HAS_CURL_CFFI = False
 
 
-# Reddit JSON API — возвращает посты с реальным score
-REDDIT_JSON_URL = "https://www.reddit.com/r/{subreddit}/{sort}.json?limit={limit}&raw_json=1"
+# Reddit JSON API — old.reddit.com надёжнее (реже блокирует JSON)
+REDDIT_JSON_URL_OLD = "https://old.reddit.com/r/{subreddit}/{sort}.json?limit={limit}&raw_json=1"
+REDDIT_JSON_URL_NEW = "https://www.reddit.com/r/{subreddit}/{sort}.json?limit={limit}&raw_json=1"
 
 # Пул потоков
 _thread_pool = ThreadPoolExecutor(max_workers=4)
@@ -36,75 +38,123 @@ _thread_pool = ThreadPoolExecutor(max_workers=4)
 # Лог первой ошибки каждого метода
 _first_error_logged: set[str] = set()
 
+# Заголовки полного браузера Chrome 131 (Windows)
+_BROWSER_HEADERS = [
+    "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    "-H", "Accept-Language: en-US,en;q=0.9",
+    "-H", "Accept-Encoding: gzip, deflate, br",
+    "-H", "Connection: keep-alive",
+    "-H", "Sec-Fetch-Dest: document",
+    "-H", "Sec-Fetch-Mode: navigate",
+    "-H", "Sec-Fetch-Site: none",
+    "-H", "Sec-Fetch-User: ?1",
+    "-H", "Upgrade-Insecure-Requests: 1",
+    "-H", "Sec-Ch-Ua: \"Google Chrome\";v=\"131\", \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"",
+    "-H", "Sec-Ch-Ua-Mobile: ?0",
+    "-H", "Sec-Ch-Ua-Platform: \"Windows\"",
+]
+
+
+def _is_html(text: str) -> bool:
+    """Проверяет что ответ — HTML, а не JSON."""
+    return text.strip().startswith(("<", "<!DOCTYPE", "<html"))
+
 
 def _do_request_system_curl(url: str, timeout: int, proxy: str = "") -> dict | str:
-    """Запрос через системный curl (самый надёжный метод)."""
+    """
+    Запрос через системный curl с полным набором браузерных заголовков.
+    Без флага -f (чтобы видеть что именно вернул Reddit).
+    """
     try:
         cmd = [
-            "curl", "-s", "-f",
-            "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-            "-H", "Accept: application/json, text/plain, */*",
-            "-H", "Accept-Language: en-US,en;q=0.5",
+            "curl", "-s",
             "--max-time", str(timeout),
             "--compressed",
-        ]
+            "-L",
+            "--max-redirs", "5",
+        ] + list(_BROWSER_HEADERS)
         if proxy:
             cmd.extend(["--proxy", proxy])
         cmd.append(url)
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 5)
-        if result.returncode == 0 and result.stdout.strip():
-            return json.loads(result.stdout)
-        if result.returncode == 22:
-            return f"curl HTTP 403/404"
-        stderr = result.stderr.strip()[:200] if result.stderr else f"exit code {result.returncode}"
-        return f"curl ошибка: {stderr}"
+        stdout = result.stdout.strip()
+
+        if not stdout:
+            stderr = result.stderr.strip()[:200] if result.stderr else "пустой ответ"
+            return f"curl: {stderr}"
+
+        if _is_html(stdout):
+            preview = stdout[:200].replace("\n", " ")
+            return f"curl вернул HTML (не JSON): {preview}"
+
+        try:
+            return json.loads(stdout)
+        except json.JSONDecodeError as e:
+            return f"curl JSON ошибка: {e}"
+
     except FileNotFoundError:
         return "curl не найден"
     except subprocess.TimeoutExpired:
         return "curl таймаут"
-    except json.JSONDecodeError as e:
-        return f"curl JSON ошибка: {e}"
     except Exception as e:
         return f"curl ошибка: {type(e).__name__}: {e}"
 
 
 def _do_request_curl_cffi(url: str, timeout: int, proxy: str = "") -> dict | str | None:
-    """Запрос через curl_cffi."""
+    """Запрос через curl_cffi (TLS имперсонация Chrome 131)."""
     try:
         kwargs = dict(
             url=url,
             headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-                "Accept": "application/json, text/plain, */*",
-                "Accept-Language": "en-US,en;q=0.5",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-User": "?1",
+                "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+                "Sec-Ch-Ua-Mobile": "?0",
+                "Sec-Ch-Ua-Platform": '"Windows"',
             },
             timeout=timeout,
-            impersonate="chrome",
+            impersonate="chrome131",
         )
         if proxy:
             kwargs["proxies"] = {"https": proxy, "http": proxy}
         resp = curl_requests.get(**kwargs)
+
         if resp.status_code == 200:
-            return resp.json()
+            text = resp.text
+            if _is_html(text):
+                return f"curl_cffi вернул HTML (не JSON)"
+            try:
+                return resp.json()
+            except Exception:
+                return "curl_cffi JSON ошибка"
         return f"curl_cffi HTTP {resp.status_code}"
     except Exception as e:
         return f"curl_cffi ошибка: {type(e).__name__}: {e}"
 
 
 def _do_request_urllib(url: str, timeout: int, proxy: str = "") -> dict | str:
-    """Запрос через urllib (фоллбэк)."""
+    """Запрос через urllib (последний фоллбэк)."""
     try:
         req = urllib.request.Request(url, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         })
         if proxy:
             req.set_proxy(proxy, "https")
         ctx = create_default_context()
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
             if resp.status == 200:
-                return json.loads(resp.read())
+                text = resp.read().decode("utf-8", errors="replace")
+                if _is_html(text):
+                    return f"urllib вернул HTML (не JSON)"
+                return json.loads(text)
             return f"urllib HTTP {resp.status}"
     except urllib.error.HTTPError as e:
         return f"urllib HTTP {e.code}"
@@ -254,68 +304,73 @@ class RedditMonitor:
         self, subreddit: str, sort_type: str, limit: int, min_score: int, budget: int = 100
     ) -> int:
         """Парсит сабреддит через Reddit JSON API."""
-        url = REDDIT_JSON_URL.format(subreddit=subreddit, sort=sort_type, limit=limit)
+        # Пробуем old.reddit.com сначала (надёжнее), потом www.reddit.com
+        urls = [
+            REDDIT_JSON_URL_OLD.format(subreddit=subreddit, sort=sort_type, limit=limit),
+            REDDIT_JSON_URL_NEW.format(subreddit=subreddit, sort=sort_type, limit=limit),
+        ]
 
-        for attempt in range(1, self.max_retries + 1):
-            try:
-                loop = asyncio.get_running_loop()
-                data = await loop.run_in_executor(_thread_pool, self._fetch_reddit, url)
+        for url in urls:
+            for attempt in range(1, self.max_retries + 1):
+                try:
+                    loop = asyncio.get_running_loop()
+                    data = await loop.run_in_executor(_thread_pool, self._fetch_reddit, url)
 
-                if data is None:
-                    logger.warning(
-                        "RedditMonitor: r/%s — не удалось (попытка %d/%d)",
-                        subreddit, attempt, self.max_retries,
-                    )
-                    if attempt < self.max_retries:
-                        await asyncio.sleep(2 ** attempt)
-                    continue
-
-                posts = data.get("data", {}).get("children", [])
-                if not posts:
-                    return 0
-
-                new_count = 0
-                skipped_score = 0
-                skipped_seen = 0
-                skipped_blacklist = 0
-
-                for child in posts:
-                    if new_count >= budget:
-                        break
-
-                    post_data = child.get("data", {})
-                    if not post_data or child.get("kind") != "t3":
+                    if data is None:
+                        logger.warning(
+                            "RedditMonitor: r/%s — не удалось (%s, попытка %d/%d)",
+                            subreddit, url, attempt, self.max_retries,
+                        )
+                        if attempt < self.max_retries:
+                            await asyncio.sleep(2 ** attempt)
                         continue
 
-                    result = await self._process_json_post(
-                        post_data, subreddit, min_score
+                    posts = data.get("data", {}).get("children", [])
+                    if not posts:
+                        return 0
+
+                    new_count = 0
+                    skipped_score = 0
+                    skipped_seen = 0
+                    skipped_blacklist = 0
+
+                    for child in posts:
+                        if new_count >= budget:
+                            break
+
+                        post_data = child.get("data", {})
+                        if not post_data or child.get("kind") != "t3":
+                            continue
+
+                        result = await self._process_json_post(
+                            post_data, subreddit, min_score
+                        )
+
+                        if result == "saved":
+                            new_count += 1
+                        elif result == "seen":
+                            skipped_seen += 1
+                        elif result == "score":
+                            skipped_score += 1
+                        elif result == "blacklist":
+                            skipped_blacklist += 1
+
+                    logger.info(
+                        "RedditMonitor: r/%s — %d постов, %d новых, "
+                        "%d по score, %d видели, %d blacklist",
+                        subreddit, len(posts), new_count,
+                        skipped_score, skipped_seen, skipped_blacklist,
+                    )
+                    return new_count
+
+                except Exception as exc:
+                    logger.warning(
+                        "RedditMonitor: ошибка r/%s (попытка %d/%d): %s",
+                        subreddit, attempt, self.max_retries, exc,
                     )
 
-                    if result == "saved":
-                        new_count += 1
-                    elif result == "seen":
-                        skipped_seen += 1
-                    elif result == "score":
-                        skipped_score += 1
-                    elif result == "blacklist":
-                        skipped_blacklist += 1
-
-                logger.info(
-                    "RedditMonitor: r/%s — %d постов, %d новых, "
-                    "%d по score, %d видели, %d blacklist",
-                    subreddit, len(posts), new_count,
-                    skipped_score, skipped_seen, skipped_blacklist,
-                )
-                return new_count
-
-            except Exception as exc:
-                logger.warning(
-                    "RedditMonitor: ошибка r/%s (попытка %d/%d): %s",
-                    subreddit, attempt, self.max_retries, exc,
-                )
-
-            if attempt < self.max_retries:
-                await asyncio.sleep(2 ** attempt)
+                if attempt < self.max_retries:
+                    await asyncio.sleep(2 ** attempt)
 
         return 0
 
