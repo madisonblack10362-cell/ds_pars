@@ -17,7 +17,7 @@ from logger import logger
 
 
 # Reddit JSON API — возвращает посты с реальным score
-REDDIT_JSON_URL = "https://www.reddit.com/r/{subreddit}/{sort}.json?limit={limit}&raw_json=1"
+REDDIT_JSON_URL = "https://old.reddit.com/r/{subreddit}/{sort}.json?limit={limit}&raw_json=1"
 
 
 class RedditMonitor:
@@ -76,7 +76,8 @@ class RedditMonitor:
         self.max_retries = max_retries
         self.max_posts_per_check = max_posts_per_check
         self.user_agent = user_agent or (
-            "DayZNewsMonitor/1.0 (https://github.com/madisonblack10362-cell/dayz-monitor-web)"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
         )
 
         # Кэш обработанных post_id
@@ -133,9 +134,15 @@ class RedditMonitor:
         for attempt in range(1, self.max_retries + 1):
             try:
                 async with aiohttp.ClientSession(timeout=self.timeout) as session:
+                    headers = {
+                        "User-Agent": self.user_agent,
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        "Accept-Language": "en-US,en;q=0.5",
+                        "Connection": "keep-alive",
+                    }
                     async with session.get(
                         url,
-                        headers={"User-Agent": self.user_agent},
+                        headers=headers,
                     ) as response:
                         if response.status == 429:
                             # Rate limited — ждём дольше
