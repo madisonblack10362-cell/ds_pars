@@ -2,22 +2,90 @@
 Модуль мониторинга Reddit для DayZ News Monitor.
 Парсит сабреддиты через Reddit JSON API (с score),
 фильтрует по рейтингу, извлекает текст, изображения и ссылки.
+
+Использует curl_cffi для имперсонации Chrome TLS-отпечатка,
+чтобы обойти 403 блокировку Reddit.
 """
 
 import asyncio
 import hashlib
+import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Optional
-
-import aiohttp
 
 from database import Database
 from logger import logger
 
+try:
+    from curl_cffi import requests as curl_requests
+    HAS_CURL_CFFI = True
+except ImportError:
+    HAS_CURL_CFFI = False
+
+try:
+    import cloudscraper
+    HAS_CLOUDSCRAPER = True
+except ImportError:
+    HAS_CLOUDSCRAPER = False
+
 
 # Reddit JSON API — возвращает посты с реальным score
-REDDIT_JSON_URL = "https://old.reddit.com/r/{subreddit}/{sort}.json?limit={limit}&raw_json=1"
+REDDIT_JSON_URL = "https://www.reddit.com/r/{subreddit}/{sort}.json?limit={limit}&raw_json=1"
+
+# Браузерные заголовки
+BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Sec-CH-UA": '"Not/A)Brand";v="99", "Google Chrome";v="125", "Chromium";v="125"',
+    "Sec-CH-UA-Mobile": "?0",
+    "Sec-CH-UA-Platform": '"Windows"',
+}
+
+# Пул потоков для синхронных HTTP-библиотек
+_thread_pool = ThreadPoolExecutor(max_workers=4)
+
+
+def _fetch_with_curl_cffi(url: str, timeout: int) -> dict | None:
+    """Запрос через curl_cffi (имперсонация Chrome TLS)."""
+    try:
+        resp = curl_requests.get(
+            url,
+            headers=BROWSER_HEADERS,
+            timeout=timeout,
+            impersonate="chrome",
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        return None
+    except Exception:
+        return None
+
+
+def _fetch_with_cloudscraper(url: str, timeout: int) -> dict | None:
+    """Запрос через cloudscraper (обход Cloudflare)."""
+    try:
+        scraper = cloudscraper.create_scraper(
+            browser={"browser": "chrome", "platform": "windows", "desktop": True}
+        )
+        resp = scraper.get(url, headers=BROWSER_HEADERS, timeout=timeout)
+        if resp.status_code == 200:
+            return resp.json()
+        return None
+    except Exception:
+        return None
 
 
 class RedditMonitor:
@@ -72,13 +140,24 @@ class RedditMonitor:
         self.subreddit_configs = subreddit_configs
         self.min_message_length = min_message_length
         self.min_score = min_score
-        self.timeout = aiohttp.ClientTimeout(total=request_timeout)
+        self.timeout = request_timeout
         self.max_retries = max_retries
         self.max_posts_per_check = max_posts_per_check
-        self.user_agent = user_agent or (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-        )
+        self.user_agent = user_agent or BROWSER_HEADERS["User-Agent"]
+
+        # Выбираем метод запроса
+        if HAS_CURL_CFFI:
+            self._fetch_method = "curl_cffi"
+            logger.info("RedditMonitor: используем curl_cffi (Chrome TLS)")
+        elif HAS_CLOUDSCRAPER:
+            self._fetch_method = "cloudscraper"
+            logger.info("RedditMonitor: используем cloudscraper (Cloudflare bypass)")
+        else:
+            self._fetch_method = "none"
+            logger.warning(
+                "RedditMonitor: НЕ УСТАНОВЛЕНО ни curl_cffi ни cloudscraper! "
+                "Reddit будет возвращать 403. Установи: pip install curl_cffi"
+            )
 
         # Кэш обработанных post_id
         self._seen_post_ids: dict[str, str] = {}
@@ -125,6 +204,14 @@ class RedditMonitor:
             )
         return total_new
 
+    def _fetch_reddit(self, url: str) -> dict | None:
+        """Синхронный запрос к Reddit (вызывается через ThreadPool)."""
+        if self._fetch_method == "curl_cffi":
+            return _fetch_with_curl_cffi(url, self.timeout)
+        elif self._fetch_method == "cloudscraper":
+            return _fetch_with_cloudscraper(url, self.timeout)
+        return None
+
     async def _check_subreddit_json(
         self, subreddit: str, sort_type: str, limit: int, min_score: int, budget: int = 100
     ) -> int:
@@ -133,77 +220,63 @@ class RedditMonitor:
 
         for attempt in range(1, self.max_retries + 1):
             try:
-                async with aiohttp.ClientSession(timeout=self.timeout) as session:
-                    headers = {
-                        "User-Agent": self.user_agent,
-                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                        "Accept-Language": "en-US,en;q=0.5",
-                        "Connection": "keep-alive",
-                    }
-                    async with session.get(
-                        url,
-                        headers=headers,
-                    ) as response:
-                        if response.status == 429:
-                            # Rate limited — ждём дольше
-                            logger.warning(
-                                "RedditMonitor: rate limit на r/%s, ждём 60с",
-                                subreddit,
-                            )
-                            await asyncio.sleep(60)
-                            continue
+                if self._fetch_method == "none":
+                    logger.error(
+                        "RedditMonitor: curl_cffi не установлен! "
+                        "Выполни: pip install curl_cffi"
+                    )
+                    return 0
 
-                        if response.status != 200:
-                            logger.warning(
-                                "RedditMonitor: JSON API r/%s вернул статус %d",
-                                subreddit, response.status,
-                            )
-                            return 0
+                loop = asyncio.get_event_loop()
+                data = await loop.run_in_executor(_thread_pool, self._fetch_reddit, url)
 
-                        data = await response.json()
-                        posts = data.get("data", {}).get("children", [])
-                        if not posts:
-                            return 0
+                if data is None:
+                    logger.warning(
+                        "RedditMonitor: r/%s — не удалось получить данные (попытка %d/%d)",
+                        subreddit, attempt, self.max_retries,
+                    )
+                    if attempt < self.max_retries:
+                        await asyncio.sleep(2 ** attempt)
+                    continue
 
-                        new_count = 0
-                        skipped_score = 0
-                        skipped_seen = 0
-                        skipped_blacklist = 0
+                posts = data.get("data", {}).get("children", [])
+                if not posts:
+                    return 0
 
-                        for child in posts:
-                            if new_count >= budget:
-                                break
+                new_count = 0
+                skipped_score = 0
+                skipped_seen = 0
+                skipped_blacklist = 0
 
-                            post_data = child.get("data", {})
-                            if not post_data or child.get("kind") != "t3":
-                                continue
+                for child in posts:
+                    if new_count >= budget:
+                        break
 
-                            result = await self._process_json_post(
-                                post_data, subreddit, min_score
-                            )
+                    post_data = child.get("data", {})
+                    if not post_data or child.get("kind") != "t3":
+                        continue
 
-                            if result == "saved":
-                                new_count += 1
-                            elif result == "seen":
-                                skipped_seen += 1
-                            elif result == "score":
-                                skipped_score += 1
-                            elif result == "blacklist":
-                                skipped_blacklist += 1
+                    result = await self._process_json_post(
+                        post_data, subreddit, min_score
+                    )
 
-                        logger.info(
-                            "RedditMonitor: r/%s — %d постов, %d новых, "
-                            "%d по score, %d видели, %d blacklist",
-                            subreddit, len(posts), new_count,
-                            skipped_score, skipped_seen, skipped_blacklist,
-                        )
-                        return new_count
+                    if result == "saved":
+                        new_count += 1
+                    elif result == "seen":
+                        skipped_seen += 1
+                    elif result == "score":
+                        skipped_score += 1
+                    elif result == "blacklist":
+                        skipped_blacklist += 1
 
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "RedditMonitor: таймаут JSON r/%s (попытка %d/%d)",
-                    subreddit, attempt, self.max_retries,
+                logger.info(
+                    "RedditMonitor: r/%s — %d постов, %d новых, "
+                    "%d по score, %d видели, %d blacklist",
+                    subreddit, len(posts), new_count,
+                    skipped_score, skipped_seen, skipped_blacklist,
                 )
+                return new_count
+
             except Exception as exc:
                 logger.warning(
                     "RedditMonitor: ошибка JSON r/%s (попытка %d/%d): %s",
