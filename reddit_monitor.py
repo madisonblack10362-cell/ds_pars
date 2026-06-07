@@ -3,15 +3,14 @@
 Парсит сабреддиты через Reddit JSON API (с score),
 фильтрует по рейтингу, извлекает текст, изображения и ссылки.
 
-Использует несколько методов для обхода блокировок:
-1. curl_cffi (Chrome TLS имперсонация)
-2. cloudscraper (обход Cloudflare)
-3. urllib + browser headers (фоллбэк)
+Использует системный curl как основной метод (надёжнее всего),
+curl_cffi и urllib как фоллбэки.
 """
 
 import asyncio
 import json
 import re
+import subprocess
 import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
@@ -27,41 +26,59 @@ try:
 except ImportError:
     HAS_CURL_CFFI = False
 
-try:
-    import cloudscraper
-    HAS_CLOUDSCRAPER = True
-except ImportError:
-    HAS_CLOUDSCRAPER = False
-
 
 # Reddit JSON API — возвращает посты с реальным score
 REDDIT_JSON_URL = "https://www.reddit.com/r/{subreddit}/{sort}.json?limit={limit}&raw_json=1"
 
-# Браузерные заголовки
-BROWSER_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
-}
-
-# Пул потоков для синхронных HTTP-библиотек
+# Пул потоков
 _thread_pool = ThreadPoolExecutor(max_workers=4)
 
-# Лог первого результата каждого метода (чтобы не спамить логи)
+# Лог первой ошибки каждого метода
 _first_error_logged: set[str] = set()
 
 
+def _do_request_system_curl(url: str, timeout: int, proxy: str = "") -> dict | str:
+    """Запрос через системный curl (самый надёжный метод)."""
+    try:
+        cmd = [
+            "curl", "-s", "-f",
+            "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "-H", "Accept: application/json, text/plain, */*",
+            "-H", "Accept-Language: en-US,en;q=0.5",
+            "--max-time", str(timeout),
+            "--compressed",
+        ]
+        if proxy:
+            cmd.extend(["--proxy", proxy])
+        cmd.append(url)
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 5)
+        if result.returncode == 0 and result.stdout.strip():
+            return json.loads(result.stdout)
+        if result.returncode == 22:
+            return f"curl HTTP 403/404"
+        stderr = result.stderr.strip()[:200] if result.stderr else f"exit code {result.returncode}"
+        return f"curl ошибка: {stderr}"
+    except FileNotFoundError:
+        return "curl не найден"
+    except subprocess.TimeoutExpired:
+        return "curl таймаут"
+    except json.JSONDecodeError as e:
+        return f"curl JSON ошибка: {e}"
+    except Exception as e:
+        return f"curl ошибка: {type(e).__name__}: {e}"
+
+
 def _do_request_curl_cffi(url: str, timeout: int, proxy: str = "") -> dict | str | None:
-    """Запрос через curl_cffi (имперсонация Chrome TLS)."""
+    """Запрос через curl_cffi."""
     try:
         kwargs = dict(
             url=url,
-            headers=BROWSER_HEADERS,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "en-US,en;q=0.5",
+            },
             timeout=timeout,
             impersonate="chrome",
         )
@@ -70,49 +87,27 @@ def _do_request_curl_cffi(url: str, timeout: int, proxy: str = "") -> dict | str
         resp = curl_requests.get(**kwargs)
         if resp.status_code == 200:
             return resp.json()
-        error = f"HTTP {resp.status_code}"
-        if resp.status_code == 403:
-            error += " (Reddit блокирует)"
-        elif resp.status_code == 429:
-            error += " (Rate limit)"
-        return error
+        return f"curl_cffi HTTP {resp.status_code}"
     except Exception as e:
         return f"curl_cffi ошибка: {type(e).__name__}: {e}"
 
 
-def _do_request_cloudscraper(url: str, timeout: int, proxy: str = "") -> dict | str | None:
-    """Запрос через cloudscraper."""
-    try:
-        scraper = cloudscraper.create_scraper(
-            browser={"browser": "chrome", "platform": "windows", "desktop": True}
-        )
-        if proxy:
-            scraper.proxies = {"https": proxy, "http": proxy}
-        resp = scraper.get(url, headers=BROWSER_HEADERS, timeout=timeout)
-        if resp.status_code == 200:
-            return resp.json()
-        return f"cloudscraper HTTP {resp.status_code}"
-    except Exception as e:
-        return f"cloudscraper ошибка: {type(e).__name__}: {e}"
-
-
 def _do_request_urllib(url: str, timeout: int, proxy: str = "") -> dict | str:
-    """Запрос через стандартный urllib (всегда доступен, фоллбэк)."""
+    """Запрос через urllib (фоллбэк)."""
     try:
-        req = urllib.request.Request(url, headers=BROWSER_HEADERS)
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+        })
         if proxy:
             req.set_proxy(proxy, "https")
         ctx = create_default_context()
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
             if resp.status == 200:
-                raw = resp.read()
-                return json.loads(raw)
+                return json.loads(resp.read())
             return f"urllib HTTP {resp.status}"
     except urllib.error.HTTPError as e:
-        error = f"urllib HTTP {e.code}"
-        if e.code == 403:
-            error += " (Reddit блокирует запрос)"
-        return error
+        return f"urllib HTTP {e.code}"
     except Exception as e:
         return f"urllib ошибка: {type(e).__name__}: {e}"
 
@@ -173,33 +168,18 @@ class RedditMonitor:
         self.timeout = request_timeout
         self.max_retries = max_retries
         self.max_posts_per_check = max_posts_per_check
-        self.user_agent = user_agent or BROWSER_HEADERS["User-Agent"]
         self.proxy = proxy
 
-        # Доступные методы (в порядке приоритета)
-        self._methods: list[tuple[str, callable]] = []
+        # Методы в порядке приоритета
+        self._methods: list[tuple[str, callable]] = [
+            ("curl", _do_request_system_curl),
+        ]
         if HAS_CURL_CFFI:
             self._methods.append(("curl_cffi", _do_request_curl_cffi))
-            logger.info("RedditMonitor: curl_cffi доступен")
-        else:
-            logger.warning("RedditMonitor: curl_cffi НЕ установлен (pip install curl_cffi)")
-        if HAS_CLOUDSCRAPER:
-            self._methods.append(("cloudscraper", _do_request_cloudscraper))
-            logger.info("RedditMonitor: cloudscraper доступен")
-        else:
-            logger.warning("RedditMonitor: cloudscraper НЕ установлен (pip install cloudscraper)")
-        # urllib — всегда доступен как последний фоллбэк
         self._methods.append(("urllib", _do_request_urllib))
 
-        if not HAS_CURL_CFFI and not HAS_CLOUDSCRAPER:
-            logger.warning(
-                "RedditMonitor: только urllib — Reddit может блокировать. "
-                "Рекомендуется: pip install curl_cffi"
-            )
-        if proxy:
-            logger.info("RedditMonitor: используем прокси %s***", proxy[:20])
-        else:
-            logger.info("RedditMonitor: БЕЗ прокси — если Reddit блокирует IP, добавь 'proxy' в config.json")
+        methods_str = ", ".join(m[0] for m in self._methods)
+        logger.info("RedditMonitor: методы запроса: %s", methods_str)
 
         # Кэш обработанных post_id
         self._seen_post_ids: dict[str, str] = {}
@@ -248,8 +228,8 @@ class RedditMonitor:
 
     def _fetch_reddit(self, url: str) -> dict | None:
         """
-        Пробует все доступные методы по порядку.
-        Возвращает dict с данными или None если все методы упали.
+        Пробует все методы по порядку.
+        Возвращает dict с данными или None если все упали.
         """
         errors: list[str] = []
 
@@ -257,26 +237,23 @@ class RedditMonitor:
             result = func(url, self.timeout, proxy=self.proxy)
 
             if isinstance(result, dict):
-                # Успех!
                 if errors:
-                    logger.info("RedditMonitor: %s сработал (предыдущие: %s)", method_name, "; ".join(errors))
+                    logger.info("RedditMonitor: %s сработал (пред.: %s)", method_name, "; ".join(errors))
                 return result
 
             if isinstance(result, str):
                 errors.append(f"{method_name}: {result}")
-                # Логируем ошибку метода только один раз за сессию
                 if method_name not in _first_error_logged:
                     _first_error_logged.add(method_name)
                     logger.warning("RedditMonitor: %s не работает — %s", method_name, result)
 
-        # Все методы упали
-        logger.error("RedditMonitor: ВСЕ методы запроса упали: %s", " | ".join(errors))
+        logger.error("RedditMonitor: ВСЕ методы упали: %s", " | ".join(errors))
         return None
 
     async def _check_subreddit_json(
         self, subreddit: str, sort_type: str, limit: int, min_score: int, budget: int = 100
     ) -> int:
-        """Парсит сабреддит через Reddit JSON API (с реальным score)."""
+        """Парсит сабреддит через Reddit JSON API."""
         url = REDDIT_JSON_URL.format(subreddit=subreddit, sort=sort_type, limit=limit)
 
         for attempt in range(1, self.max_retries + 1):
@@ -286,7 +263,7 @@ class RedditMonitor:
 
                 if data is None:
                     logger.warning(
-                        "RedditMonitor: r/%s — не удалось получить данные (попытка %d/%d)",
+                        "RedditMonitor: r/%s — не удалось (попытка %d/%d)",
                         subreddit, attempt, self.max_retries,
                     )
                     if attempt < self.max_retries:
@@ -333,7 +310,7 @@ class RedditMonitor:
 
             except Exception as exc:
                 logger.warning(
-                    "RedditMonitor: ошибка JSON r/%s (попытка %d/%d): %s",
+                    "RedditMonitor: ошибка r/%s (попытка %d/%d): %s",
                     subreddit, attempt, self.max_retries, exc,
                 )
 
@@ -355,54 +332,41 @@ class RedditMonitor:
 
         external_id = f"reddit_{subreddit}_{post_id}"
 
-        # Кэш
         if external_id in self._seen_post_ids:
             return "seen"
 
-        # БД
         if await self.db.is_message_processed("reddit", subreddit, external_id):
             self._seen_post_ids[external_id] = external_id
             return "seen"
 
-        # Score — РЕАЛЬНЫЙ из JSON API
         score = post.get("score", 0)
         upvote_ratio = post.get("upvote_ratio", 1.0)
 
-        # Фильтр по score — posts ниже порога — мусор
         if score < min_score:
             logger.debug(
-                "RedditMonitor: r/%s пост '%s' score=%d < %d — пропущен",
+                "RedditMonitor: r/%s '%s' score=%d < %d",
                 subreddit, post.get("title", "")[:40], score, min_score,
             )
             return "score"
 
-        # Фильтр: низкий upvote_ratio — вероятно мусор
         if upvote_ratio < 0.7 and score < min_score * 2:
             return "score"
 
-        # Заголовок
         title = post.get("title", "").strip()
         if not title:
             return "skip"
 
-        # Автор
         author = post.get("author", "")
         if author.startswith("u/"):
             author = author[2:]
 
-        # Текст поста
         selftext = post.get("selftext", "")
-        # Очищаем от HTML и markdown
         selftext = re.sub(r"<[^>]+>", "", selftext)
         selftext = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", selftext)
         selftext = selftext.strip()
 
         text = selftext if len(selftext) > len(title) else title
 
-        # URL поста (для ссылок на Reddit — НЕ сохраняем)
-        permalink = post.get("permalink", "")
-
-        # Фильтр blacklist
         check_text = f"{title} {text}".lower()
         for keyword in self.BLACKLIST_KEYWORDS:
             if keyword in check_text:
@@ -413,7 +377,6 @@ class RedditMonitor:
                 )
                 return "blacklist"
 
-        # Фильтр мнений
         title_lower = title.lower()
         selftext_lower = selftext.lower()
         for pattern in self.OPINION_PATTERNS:
@@ -425,19 +388,15 @@ class RedditMonitor:
                 )
                 return "blacklist"
 
-        # Фильтр длины
         if len(text) < self.min_message_length:
             return "skip"
 
-        # Изображения
         images = []
 
-        # URL изображения (для image posts)
         image_url = post.get("url", "")
         if image_url and image_url.startswith("https://i.redd.it/"):
             images.append(image_url)
 
-        # Preview images
         preview = post.get("preview", {})
         if preview and isinstance(preview, dict):
             images_list = preview.get("images", [])
@@ -448,23 +407,19 @@ class RedditMonitor:
                     if img_url and img_url not in images:
                         images.append(img_url)
 
-        # Изображения из текста
         img_urls = re.findall(r"https?://i\.redd\.it/\S+", text)
         for img_url in img_urls:
             if img_url not in images:
                 images.append(img_url)
 
-        # Очистка URL от amp;
         images = [url.replace("&amp;", "&") for url in images]
 
-        # Ссылки (НЕ Reddit)
         links = []
         all_links = re.findall(r"https?://[^\s<>\"'\)]+", text)
         for tl in all_links:
             if "redd.it" not in tl and "reddit.com" not in tl:
                 links.append(tl)
 
-        # Дата
         created_utc = post.get("created_utc")
         published_at = None
         if created_utc:
@@ -474,10 +429,8 @@ class RedditMonitor:
             except (ValueError, OSError, TypeError):
                 pass
 
-        # Num comments — для контекста
         num_comments = post.get("num_comments", 0)
 
-        # Сохраняем score в extra
         server_name = f"r/{subreddit}"
         await self.db.register_source(
             source_type="reddit",
@@ -486,7 +439,6 @@ class RedditMonitor:
             extra={"min_score": min_score},
         )
 
-        # Сохраняем в БД
         msg_id = await self.db.save_message(
             external_id=external_id,
             source_type="reddit",
