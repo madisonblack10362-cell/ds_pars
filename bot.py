@@ -5,6 +5,7 @@ AI-анализ, дедупликацию и публикацию в Telegram-к
 """
 
 import asyncio
+import html as html_module
 import json
 import os
 import signal
@@ -397,13 +398,19 @@ class DayZNewsMonitor:
         icon = type_icons.get(news_type, "📰")
         prio = priority_labels.get(priority, priority)
 
+        # Экранируем динамические данные для Telegram HTML
+        safe_title = html_module.escape(title[:80])
+        safe_source = html_module.escape(source)
+        safe_type = html_module.escape(news_type)
+        safe_prio = html_module.escape(prio)
+
         text = (
             f"{icon} <b>Новость на модерации</b>\n"
             f"━━━━━━━━━━━━━━━━━\n"
-            f"📌 <b>Тип:</b> {news_type}\n"
-            f"⚡ <b>Приоритет:</b> {prio}\n"
-            f"📡 <b>Источник:</b> {source}\n\n"
-            f"💬 <i>{title}</i>\n\n"
+            f"📌 <b>Тип:</b> {safe_type}\n"
+            f"⚡ <b>Приоритет:</b> {safe_prio}\n"
+            f"📡 <b>Источник:</b> {safe_source}\n\n"
+            f"💬 <i>{safe_title}</i>\n\n"
             f"🔗 <a href=\"{self.web_panel_url}/dashboard/moderation\">Открыть модерацию</a>"
         )
 
@@ -732,7 +739,7 @@ class DayZNewsMonitor:
             )
             sub_count = await self.db.get_subscriber_count()
             await message.answer(
-                f"Привет, <b>{user.first_name}</b>!\n\n"
+                f"Привет, <b>{html_module.escape(user.first_name or '')}</b>!\n\n"
                 f"Я бот мониторинга DayZ новостей.\n"
                 f"После модерации новости будут приходить прямо тебе в личку.\n\n"
                 f"Ты автоматически подписан на рассылку.\n"
