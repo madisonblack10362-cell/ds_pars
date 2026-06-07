@@ -1,7 +1,7 @@
 """
 Модуль мониторинга Reddit для DayZ News Monitor.
-Парсит сабреддиты через Reddit RSS, фильтрует по рейтингу,
-извлекает текст, изображения и ссылки.
+Парсит сабреддиты через Reddit JSON API (с score),
+фильтрует по рейтингу, извлекает текст, изображения и ссылки.
 """
 
 import asyncio
@@ -11,31 +11,27 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import aiohttp
-import feedparser
 
 from database import Database
 from logger import logger
 
 
-# Reddit RSS URL для сабреддита (hot, new, rising)
-REDDIT_RSS_URL = "https://www.reddit.com/r/{subreddit}/{sort}.rss?limit={limit}"
+# Reddit JSON API — возвращает посты с реальным score
+REDDIT_JSON_URL = "https://www.reddit.com/r/{subreddit}/{sort}.json?limit={limit}&raw_json=1"
 
 
 class RedditMonitor:
     """
     Монитор сабреддитов Reddit.
-    Парсит RSS-ленту, фильтрует по минимальному рейтингу,
+    Парсит JSON API, фильтрует по минимальному рейтингу,
     извлекает текст, self-post контент, изображения и ссылки.
     """
 
     # Ключевые слова для фильтрации нежелательных постов (нижний регистр)
     BLACKLIST_KEYWORDS = [
-        # PlayStation / консоли
         "playstation", "ps4", "ps5", "psn", "play station", "ps5 pro",
         "плойка", "плойке", "плойку", "плойкой",
         "консоль", "консоли", "консольная версия", "console",
-        # Другие платформы (если нужно — раскомментировать)
-        # "xbox", "xbox series", "game pass",
     ]
 
     # Паттерны мнений/предложений — отсекаем до AI-анализа
@@ -54,6 +50,11 @@ class RedditMonitor:
         "devs don't care", "developers don't",
         "fix this", "broken game", "waste of money",
         "not worth it", "refunded", "refund",
+        "is dayz worth", "is dayz fun", "is dayz dead",
+        "should i buy", "should i play",
+        "how do i", "where can i", "can someone",
+        "looking for group", "lfg", "lfm",
+        "server looking", "recruiting",
     ]
 
     def __init__(
@@ -67,17 +68,6 @@ class RedditMonitor:
         user_agent: str | None = None,
         max_posts_per_check: int = 5,
     ):
-        """
-        Args:
-            db: Экземпляр Database.
-            subreddit_configs: Список конфигов сабреддитов:
-                [{"subreddit": "dayz", "sort": "hot", "min_score": 50, "limit": 25}]
-            min_message_length: Минимальная длина текста для сохранения.
-            min_score: Минимальный рейтинг поста (ups) по умолчанию.
-            request_timeout: Таймаут HTTP-запросов в секундах.
-            max_retries: Макс. количество попыток при ошибках.
-            user_agent: User-Agent для запросов к Reddit.
-        """
         self.db = db
         self.subreddit_configs = subreddit_configs
         self.min_message_length = min_message_length
@@ -90,7 +80,7 @@ class RedditMonitor:
         )
 
         # Кэш обработанных post_id
-        self._seen_post_ids: dict[str, str] = {}  # post_id -> external_id
+        self._seen_post_ids: dict[str, str] = {}
 
     async def load_initial_state(self) -> None:
         """Предзагружает кэш из базы данных."""
@@ -103,12 +93,7 @@ class RedditMonitor:
         logger.info("RedditMonitor: кэш загружен (%d постов)", count)
 
     async def check_all_subreddits(self) -> int:
-        """
-        Проверяет все настроенные сабреддиты на наличие новых записей.
-
-        Returns:
-            Количество новых записей, сохранённых в БД.
-        """
+        """Проверяет все настроенные сабреддиты через JSON API."""
         total_new = 0
 
         for cfg in self.subreddit_configs:
@@ -123,11 +108,13 @@ class RedditMonitor:
             remaining = self.max_posts_per_check - total_new
             if remaining <= 0:
                 logger.info(
-                    "RedditMonitor: достигнут лимит %d постов за проверку, останавливаемся",
+                    "RedditMonitor: достигнут лимит %d постов за проверку",
                     self.max_posts_per_check,
                 )
                 break
-            count = await self._check_subreddit(subreddit, sort_type, limit, min_score, budget=remaining)
+            count = await self._check_subreddit_json(
+                subreddit, sort_type, limit, min_score, budget=remaining
+            )
             total_new += count
 
         if total_new > 0:
@@ -137,73 +124,83 @@ class RedditMonitor:
             )
         return total_new
 
-    async def _check_subreddit(
+    async def _check_subreddit_json(
         self, subreddit: str, sort_type: str, limit: int, min_score: int, budget: int = 100
     ) -> int:
-        """Проверяет один сабреддит через RSS."""
-        rss_url = REDDIT_RSS_URL.format(subreddit=subreddit, sort=sort_type, limit=limit)
+        """Парсит сабреддит через Reddit JSON API (с реальным score)."""
+        url = REDDIT_JSON_URL.format(subreddit=subreddit, sort=sort_type, limit=limit)
 
         for attempt in range(1, self.max_retries + 1):
             try:
                 async with aiohttp.ClientSession(timeout=self.timeout) as session:
                     async with session.get(
-                        rss_url,
+                        url,
                         headers={"User-Agent": self.user_agent},
                     ) as response:
+                        if response.status == 429:
+                            # Rate limited — ждём дольше
+                            logger.warning(
+                                "RedditMonitor: rate limit на r/%s, ждём 60с",
+                                subreddit,
+                            )
+                            await asyncio.sleep(60)
+                            continue
+
                         if response.status != 200:
                             logger.warning(
-                                "RedditMonitor: RSS %s вернул статус %d",
-                                rss_url,
-                                response.status,
+                                "RedditMonitor: JSON API r/%s вернул статус %d",
+                                subreddit, response.status,
                             )
                             return 0
 
-                        content = await response.text()
-                        feed = feedparser.parse(content)
-
-                        if not feed.entries:
+                        data = await response.json()
+                        posts = data.get("data", {}).get("children", [])
+                        if not posts:
                             return 0
 
                         new_count = 0
-                        seen_count = 0
-                        # Обрабатываем от старых к новым
-                        entries = list(reversed(feed.entries))
+                        skipped_score = 0
+                        skipped_seen = 0
+                        skipped_blacklist = 0
 
-                        for entry in entries:
+                        for child in posts:
                             if new_count >= budget:
-                                logger.info(
-                                    "RedditMonitor: r/%s — достигнут лимит %d за проверку, останавливаемся",
-                                    subreddit, budget,
-                                )
                                 break
-                            saved = await self._process_entry(
-                                entry, subreddit, min_score
+
+                            post_data = child.get("data", {})
+                            if not post_data or child.get("kind") != "t3":
+                                continue
+
+                            result = await self._process_json_post(
+                                post_data, subreddit, min_score
                             )
-                            if saved:
+
+                            if result == "saved":
                                 new_count += 1
-                            else:
-                                seen_count += 1
+                            elif result == "seen":
+                                skipped_seen += 1
+                            elif result == "score":
+                                skipped_score += 1
+                            elif result == "blacklist":
+                                skipped_blacklist += 1
 
                         logger.info(
-                            "RedditMonitor: r/%s — %d записей в RSS, %d новых, %d уже видели",
-                            subreddit, len(entries), new_count, seen_count,
+                            "RedditMonitor: r/%s — %d постов, %d новых, "
+                            "%d по score, %d видели, %d blacklist",
+                            subreddit, len(posts), new_count,
+                            skipped_score, skipped_seen, skipped_blacklist,
                         )
                         return new_count
 
             except asyncio.TimeoutError:
                 logger.warning(
-                    "RedditMonitor: таймаут RSS %s (попытка %d/%d)",
-                    rss_url,
-                    attempt,
-                    self.max_retries,
+                    "RedditMonitor: таймаут JSON r/%s (попытка %d/%d)",
+                    subreddit, attempt, self.max_retries,
                 )
             except Exception as exc:
                 logger.warning(
-                    "RedditMonitor: ошибка RSS %s (попытка %d/%d): %s",
-                    rss_url,
-                    attempt,
-                    self.max_retries,
-                    exc,
+                    "RedditMonitor: ошибка JSON r/%s (попытка %d/%d): %s",
+                    subreddit, attempt, self.max_retries, exc,
                 )
 
             if attempt < self.max_retries:
@@ -211,151 +208,142 @@ class RedditMonitor:
 
         return 0
 
-    async def _process_entry(
-        self, entry: dict, subreddit: str, min_score: int
-    ) -> int | None:
-        """Обрабатывает одну запись из RSS Reddit."""
-        # Извлекаем post_id из link
-        link = entry.get("link", "")
-        post_id = entry.get("id", "")
-        if not post_id and link:
-            # Reddit link: https://www.reddit.com/r/dayz/comments/1xyz...
-            match = re.search(r"/comments/([a-z0-9]+)", link)
-            if match:
-                post_id = match.group(1)
-
+    async def _process_json_post(
+        self, post: dict, subreddit: str, min_score: int
+    ) -> str:
+        """
+        Обрабатывает один пост из JSON API.
+        Returns: 'saved' | 'seen' | 'score' | 'blacklist' | 'skip'
+        """
+        post_id = post.get("id", "")
         if not post_id:
-            return None
+            return "skip"
 
         external_id = f"reddit_{subreddit}_{post_id}"
 
-        # Проверяем, не видели ли уже (in-memory кэш)
+        # Кэш
         if external_id in self._seen_post_ids:
-            return None
+            return "seen"
 
-        # Также проверяем напрямую в БД (на случай если кэш не загружен или сброшен)
+        # БД
         if await self.db.is_message_processed("reddit", subreddit, external_id):
             self._seen_post_ids[external_id] = external_id
-            return None
+            return "seen"
 
-        # Рейтинг (Reddit RSS не содержит score — ставим 0 и пропускаем фильтр)
-        score = self._extract_score(entry)
+        # Score — РЕАЛЬНЫЙ из JSON API
+        score = post.get("score", 0)
+        upvote_ratio = post.get("upvote_ratio", 1.0)
 
-        # Фильтрация по рейтингу — только если score удалось определить
-        if score > 0 and score < min_score:
-            return None
+        # Фильтр по score — posts ниже порога — мусор
+        if score < min_score:
+            logger.debug(
+                "RedditMonitor: r/%s пост '%s' score=%d < %d — пропущен",
+                subreddit, post.get("title", "")[:40], score, min_score,
+            )
+            return "score"
+
+        # Фильтр: низкий upvote_ratio — вероятно мусор
+        if upvote_ratio < 0.7 and score < min_score * 2:
+            return "score"
 
         # Заголовок
-        title = entry.get("title", "").strip()
+        title = post.get("title", "").strip()
         if not title:
-            return None
+            return "skip"
 
         # Автор
-        author = entry.get("author", "").strip()
-        if author.startswith("/u/"):
-            author = author[3:]
+        author = post.get("author", "")
+        if author.startswith("u/"):
+            author = author[2:]
 
         # Текст поста
-        text = title
-        summary = entry.get("summary", "")
-        if summary:
-            # Убираем HTML-теги
-            from bs4 import BeautifulSoup
-            clean = BeautifulSoup(summary, "lxml").get_text(strip=True)
-            # Reddit self-post: summary часто содержит краткий текст поста
-            # Полный текст в content
-            content_list = entry.get("content", [])
-            if content_list and isinstance(content_list, list):
-                for item in content_list:
-                    if item.get("value"):
-                        full_text = BeautifulSoup(
-                            item["value"], "lxml"
-                        ).get_text(strip=True)
-                        if len(full_text) > len(clean):
-                            clean = full_text
-            if clean and len(clean) > len(title):
-                text = clean
+        selftext = post.get("selftext", "")
+        # Очищаем от HTML и markdown
+        selftext = re.sub(r"<[^>]+>", "", selftext)
+        selftext = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", selftext)
+        selftext = selftext.strip()
 
-        # Фильтрация по чёрному списку (PlayStation, консоли и т.д.)
+        text = selftext if len(selftext) > len(title) else title
+
+        # URL поста (для ссылок на Reddit — НЕ сохраняем)
+        permalink = post.get("permalink", "")
+
+        # Фильтр blacklist
         check_text = f"{title} {text}".lower()
         for keyword in self.BLACKLIST_KEYWORDS:
             if keyword in check_text:
-                self._seen_post_ids[external_id] = external_id  # помечаем как виденный
-                logger.info(
-                    "RedditMonitor: пост пропущен (blacklist '%s'): %s",
-                    keyword, title[:60],
-                )
-                return None
-
-        # Фильтрация мнений/предложений (рандомные мысли, wishlist, рант)
-        # Проверяем только title — если title содержит мнение, весь пост — мусор
-        title_lower = title.lower()
-        for pattern in self.OPINION_PATTERNS:
-            if pattern in title_lower:
                 self._seen_post_ids[external_id] = external_id
                 logger.info(
-                    "RedditMonitor: пост пропущен (мнение/предложение '%s'): %s",
-                    pattern, title[:60],
+                    "RedditMonitor: пропущен (blacklist '%s'): %s",
+                    keyword, title[:60],
                 )
-                return None
+                return "blacklist"
 
-        # Фильтрация по длине
+        # Фильтр мнений
+        title_lower = title.lower()
+        selftext_lower = selftext.lower()
+        for pattern in self.OPINION_PATTERNS:
+            if pattern in title_lower or (selftext and pattern in selftext_lower[:200]):
+                self._seen_post_ids[external_id] = external_id
+                logger.info(
+                    "RedditMonitor: пропущен (мнение '%s'): %s (score=%d)",
+                    pattern, title[:60], score,
+                )
+                return "blacklist"
+
+        # Фильтр длины
         if len(text) < self.min_message_length:
-            return None
+            return "skip"
 
-        # Изображения — ищем в enclosure и в тексте
+        # Изображения
         images = []
 
-        # Media/thumbnail из RSS
-        media_thumbnail = entry.get("media_thumbnail", [])
-        if media_thumbnail and isinstance(media_thumbnail, list):
-            for thumb in media_thumbnail:
-                url = thumb.get("url", "")
-                if url and not url.endswith("/self") and not url.endswith("/default"):
-                    images.append(url)
+        # URL изображения (для image posts)
+        image_url = post.get("url", "")
+        if image_url and image_url.startswith("https://i.redd.it/"):
+            images.append(image_url)
 
-        # Links/images из enclosure
-        enclosures = entry.get("enclosures", [])
-        if enclosures:
-            for enc in enclosures:
-                enc_url = enc.get("url", "") or enc.get("href", "")
-                if enc_url:
-                    images.append(enc_url)
+        # Preview images
+        preview = post.get("preview", {})
+        if preview and isinstance(preview, dict):
+            images_list = preview.get("images", [])
+            if images_list and isinstance(images_list, list):
+                for img_data in images_list[:3]:
+                    source = img_data.get("source", {})
+                    img_url = source.get("url", "")
+                    if img_url and img_url not in images:
+                        images.append(img_url)
 
-        # Извлекаем изображения из текста (Reddit inline images)
+        # Изображения из текста
         img_urls = re.findall(r"https?://i\.redd\.it/\S+", text)
         for img_url in img_urls:
             if img_url not in images:
                 images.append(img_url)
 
-        # Извлекаем preview-изображения (обычно первые)
-        if not images and summary:
-            # Reddit часто включает preview URL в summary
-            preview_match = re.search(r'<img[^>]+src="([^"]+)"', summary)
-            if preview_match:
-                preview_url = preview_match.group(1)
-                if not preview_url.endswith("/self") and not preview_url.endswith("/default"):
-                    images.append(preview_url)
+        # Очистка URL от amp;
+        images = [url.replace("&amp;", "&") for url in images]
 
-        # Ссылки — НЕ добавляем ссылки на Reddit, только внешние
+        # Ссылки (НЕ Reddit)
         links = []
-        # Reddit crosspost-ссылки из текста — только не Reddit
-        text_links = re.findall(r"https?://[^\s<>\"'\)]+", text)
-        for tl in text_links:
+        all_links = re.findall(r"https?://[^\s<>\"'\)]+", text)
+        for tl in all_links:
             if "redd.it" not in tl and "reddit.com" not in tl:
                 links.append(tl)
 
-        # Дата публикации
+        # Дата
+        created_utc = post.get("created_utc")
         published_at = None
-        published_parsed = entry.get("published_parsed")
-        if published_parsed:
+        if created_utc:
             try:
-                dt = datetime(*published_parsed[:6], tzinfo=timezone.utc)
+                dt = datetime.fromtimestamp(float(created_utc), tz=timezone.utc)
                 published_at = dt.isoformat()
-            except (ValueError, OSError):
+            except (ValueError, OSError, TypeError):
                 pass
 
-        # Регистрируем источник
+        # Num comments — для контекста
+        num_comments = post.get("num_comments", 0)
+
+        # Сохраняем score в extra
         server_name = f"r/{subreddit}"
         await self.db.register_source(
             source_type="reddit",
@@ -373,7 +361,7 @@ class RedditMonitor:
             text=text,
             title=title,
             channel_name=subreddit,
-            author=author or f"u/{author}",
+            author=author or "unknown",
             images=images,
             links=links,
             published_at_source=published_at,
@@ -382,38 +370,10 @@ class RedditMonitor:
         if msg_id:
             self._seen_post_ids[external_id] = external_id
             logger.info(
-                "RedditMonitor: пост #%d сохранён (r/%s, автор=%s, score=%d, %d символов, %d фото)",
-                msg_id,
-                subreddit,
-                author or "unknown",
-                score,
-                len(text),
-                len(images),
+                "RedditMonitor: #%d сохранён (r/%s, score=%d, ratio=%.0f%%, comments=%d, %d симв, %d фото)",
+                msg_id, subreddit, score, upvote_ratio * 100, num_comments,
+                len(text), len(images),
             )
-            return msg_id
+            return "saved"
 
-        return None
-
-    def _extract_score(self, entry: dict) -> int:
-        """Извлекает рейтинг поста из разных полей RSS-записи Reddit."""
-        # Пробуем разные источники score
-        for key in ("score", "ups", "rank"):
-            val = entry.get(key)
-            if val is not None:
-                try:
-                    return int(val)
-                except (ValueError, TypeError):
-                    pass
-
-        # Пробуем из summary (Reddit иногда включает score в HTML)
-        summary = entry.get("summary", "")
-        if summary:
-            # Ищем паттерн типа "50 upvotes" или "score: 50"
-            match = re.search(r"(\d+)\s*(?:upvote|ups?|score)", summary, re.IGNORECASE)
-            if match:
-                try:
-                    return int(match.group(1))
-                except ValueError:
-                    pass
-
-        return 0
+        return "skip"

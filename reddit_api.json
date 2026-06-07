@@ -1,0 +1,47 @@
+[
+  {
+    "url": "https://www.reddit.com/r/redditdev/comments/a22152/reddit_json_data",
+    "name": "reddit json data : r/redditdev",
+    "snippet": "What I am trying to do: Get the top post, its title, and its top comment. How I went about it: getJson for the top post, find the permalink of ...",
+    "host_name": "www.reddit.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.reddit.com/r/redditdev/comments/1fqeo7u/how_do_i_simply_get_the_3_top_daily_posts_of_a",
+    "name": "How do I simply get the 3 top daily posts of a subreddit? : r/redditdev",
+    "snippet": "I used to just do this: fetch(https://www.reddit.com/r/worldnews/top/.json?sort=top&t=day') . But this no longer works, and I think because I need to be ...",
+    "host_name": "www.reddit.com",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://stackoverflow.com/questions/6183318/getting-new-posts-from-a-subreddit-in-json",
+    "name": "Getting NEW posts from a subreddit in JSON - Stack Overflow",
+    "snippet": "The .json modifier should be put at the end of the path component, not the entire URL. The URL you're looking for is:",
+    "host_name": "stackoverflow.com",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.reddit.com/r/redditdev/comments/1bep0oj/getting_the_top_posts_of_a_subreddit",
+    "name": "Getting the top posts of a subreddit : r/redditdev",
+    "snippet": "One way to get top posts is through the json way: https://www.reddit.com/r/funny/top.json but it not clear what top posts will it fetch?",
+    "host_name": "www.reddit.com",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://til.simonwillison.net/reddit/scraping-reddit-json",
+    "name": "Scraping Reddit via their JSON API - Simon Willison: TIL",
+    "snippet": "Reddit have long had an unofficial (I think) API where you can add .json to the end of any URL to get back the data for that page as JSON.",
+    "host_name": "til.simonwillison.net",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  }
+]
