@@ -3,17 +3,20 @@
 Парсит сабреддиты через Reddit JSON API (с score),
 фильтрует по рейтингу, извлекает текст, изображения и ссылки.
 
-Использует curl_cffi для имперсонации Chrome TLS-отпечатка,
-чтобы обойти 403 блокировку Reddit.
+Использует несколько методов для обхода блокировок:
+1. curl_cffi (Chrome TLS имперсонация)
+2. cloudscraper (обход Cloudflare)
+3. urllib + browser headers (фоллбэк)
 """
 
 import asyncio
-import hashlib
 import json
 import re
+import urllib.request
+import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from typing import Optional
+from ssl import create_default_context
 
 from database import Database
 from logger import logger
@@ -44,22 +47,19 @@ BROWSER_HEADERS = {
     "Accept-Language": "en-US,en;q=0.5",
     "Accept-Encoding": "gzip, deflate, br",
     "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-    "Sec-CH-UA": '"Not/A)Brand";v="99", "Google Chrome";v="125", "Chromium";v="125"',
-    "Sec-CH-UA-Mobile": "?0",
-    "Sec-CH-UA-Platform": '"Windows"',
 }
 
 # Пул потоков для синхронных HTTP-библиотек
 _thread_pool = ThreadPoolExecutor(max_workers=4)
 
+# Лог первого результата каждого метода (чтобы не спамить логи)
+_first_error_logged: set[str] = set()
 
-def _fetch_with_curl_cffi(url: str, timeout: int) -> dict | None:
-    """Запрос через curl_cffi (имперсонация Chrome TLS)."""
+
+def _do_request_curl_cffi(url: str, timeout: int) -> dict | str | None:
+    """Запрос через curl_cffi (имперсонация Chrome TLS).
+    Возвращает dict при успехе, строку с описанием ошибки при неудаче, None если не установлен.
+    """
     try:
         resp = curl_requests.get(
             url,
@@ -69,13 +69,18 @@ def _fetch_with_curl_cffi(url: str, timeout: int) -> dict | None:
         )
         if resp.status_code == 200:
             return resp.json()
-        return None
-    except Exception:
-        return None
+        error = f"HTTP {resp.status_code}"
+        if resp.status_code == 403:
+            error += " (Reddit блокирует — TLS отпечаток распознан)"
+        elif resp.status_code == 429:
+            error += " (Rate limit — слишком много запросов)"
+        return error
+    except Exception as e:
+        return f"curl_cffi ошибка: {type(e).__name__}: {e}"
 
 
-def _fetch_with_cloudscraper(url: str, timeout: int) -> dict | None:
-    """Запрос через cloudscraper (обход Cloudflare)."""
+def _do_request_cloudscraper(url: str, timeout: int) -> dict | str | None:
+    """Запрос через cloudscraper. Возвращает dict/str/None."""
     try:
         scraper = cloudscraper.create_scraper(
             browser={"browser": "chrome", "platform": "windows", "desktop": True}
@@ -83,9 +88,28 @@ def _fetch_with_cloudscraper(url: str, timeout: int) -> dict | None:
         resp = scraper.get(url, headers=BROWSER_HEADERS, timeout=timeout)
         if resp.status_code == 200:
             return resp.json()
-        return None
-    except Exception:
-        return None
+        return f"cloudscraper HTTP {resp.status_code}"
+    except Exception as e:
+        return f"cloudscraper ошибка: {type(e).__name__}: {e}"
+
+
+def _do_request_urllib(url: str, timeout: int) -> dict | str:
+    """Запрос через стандартный urllib (всегда доступен, фоллбэк)."""
+    try:
+        req = urllib.request.Request(url, headers=BROWSER_HEADERS)
+        ctx = create_default_context()
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+            if resp.status == 200:
+                raw = resp.read()
+                return json.loads(raw)
+            return f"urllib HTTP {resp.status}"
+    except urllib.error.HTTPError as e:
+        error = f"urllib HTTP {e.code}"
+        if e.code == 403:
+            error += " (Reddit блокирует запрос)"
+        return error
+    except Exception as e:
+        return f"urllib ошибка: {type(e).__name__}: {e}"
 
 
 class RedditMonitor:
@@ -145,18 +169,25 @@ class RedditMonitor:
         self.max_posts_per_check = max_posts_per_check
         self.user_agent = user_agent or BROWSER_HEADERS["User-Agent"]
 
-        # Выбираем метод запроса
+        # Доступные методы (в порядке приоритета)
+        self._methods: list[tuple[str, callable]] = []
         if HAS_CURL_CFFI:
-            self._fetch_method = "curl_cffi"
-            logger.info("RedditMonitor: используем curl_cffi (Chrome TLS)")
-        elif HAS_CLOUDSCRAPER:
-            self._fetch_method = "cloudscraper"
-            logger.info("RedditMonitor: используем cloudscraper (Cloudflare bypass)")
+            self._methods.append(("curl_cffi", _do_request_curl_cffi))
+            logger.info("RedditMonitor: curl_cffi доступен")
         else:
-            self._fetch_method = "none"
+            logger.warning("RedditMonitor: curl_cffi НЕ установлен (pip install curl_cffi)")
+        if HAS_CLOUDSCRAPER:
+            self._methods.append(("cloudscraper", _do_request_cloudscraper))
+            logger.info("RedditMonitor: cloudscraper доступен")
+        else:
+            logger.warning("RedditMonitor: cloudscraper НЕ установлен (pip install cloudscraper)")
+        # urllib — всегда доступен как последний фоллбэк
+        self._methods.append(("urllib", _do_request_urllib))
+
+        if not HAS_CURL_CFFI and not HAS_CLOUDSCRAPER:
             logger.warning(
-                "RedditMonitor: НЕ УСТАНОВЛЕНО ни curl_cffi ни cloudscraper! "
-                "Reddit будет возвращать 403. Установи: pip install curl_cffi"
+                "RedditMonitor: только urllib — Reddit может блокировать. "
+                "Рекомендуется: pip install curl_cffi"
             )
 
         # Кэш обработанных post_id
@@ -205,11 +236,31 @@ class RedditMonitor:
         return total_new
 
     def _fetch_reddit(self, url: str) -> dict | None:
-        """Синхронный запрос к Reddit (вызывается через ThreadPool)."""
-        if self._fetch_method == "curl_cffi":
-            return _fetch_with_curl_cffi(url, self.timeout)
-        elif self._fetch_method == "cloudscraper":
-            return _fetch_with_cloudscraper(url, self.timeout)
+        """
+        Пробует все доступные методы по порядку.
+        Логирует ошибку только первый раз для каждого метода.
+        Возвращает dict с данными или None если все методы упали.
+        """
+        errors: list[str] = []
+
+        for method_name, func in self._methods:
+            result = func(url, self.timeout)
+
+            if isinstance(result, dict):
+                # Успех!
+                if errors:
+                    logger.info("RedditMonitor: %s сработал (предыдущие: %s)", method_name, "; ".join(errors))
+                return result
+
+            if isinstance(result, str):
+                errors.append(f"{method_name}: {result}")
+                # Логируем ошибку метода только один раз за сессию
+                if method_name not in _first_error_logged:
+                    _first_error_logged.add(method_name)
+                    logger.warning("RedditMonitor: %s не работает — %s", method_name, result)
+
+        # Все методы упали
+        logger.error("RedditMonitor: ВСЕ методы запроса упали: %s", " | ".join(errors))
         return None
 
     async def _check_subreddit_json(
@@ -220,13 +271,6 @@ class RedditMonitor:
 
         for attempt in range(1, self.max_retries + 1):
             try:
-                if self._fetch_method == "none":
-                    logger.error(
-                        "RedditMonitor: curl_cffi не установлен! "
-                        "Выполни: pip install curl_cffi"
-                    )
-                    return 0
-
                 loop = asyncio.get_event_loop()
                 data = await loop.run_in_executor(_thread_pool, self._fetch_reddit, url)
 
