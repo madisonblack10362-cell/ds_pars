@@ -56,35 +56,38 @@ _thread_pool = ThreadPoolExecutor(max_workers=4)
 _first_error_logged: set[str] = set()
 
 
-def _do_request_curl_cffi(url: str, timeout: int) -> dict | str | None:
-    """Запрос через curl_cffi (имперсонация Chrome TLS).
-    Возвращает dict при успехе, строку с описанием ошибки при неудаче, None если не установлен.
-    """
+def _do_request_curl_cffi(url: str, timeout: int, proxy: str = "") -> dict | str | None:
+    """Запрос через curl_cffi (имперсонация Chrome TLS)."""
     try:
-        resp = curl_requests.get(
-            url,
+        kwargs = dict(
+            url=url,
             headers=BROWSER_HEADERS,
             timeout=timeout,
             impersonate="chrome",
         )
+        if proxy:
+            kwargs["proxies"] = {"https": proxy, "http": proxy}
+        resp = curl_requests.get(**kwargs)
         if resp.status_code == 200:
             return resp.json()
         error = f"HTTP {resp.status_code}"
         if resp.status_code == 403:
-            error += " (Reddit блокирует — TLS отпечаток распознан)"
+            error += " (Reddit блокирует)"
         elif resp.status_code == 429:
-            error += " (Rate limit — слишком много запросов)"
+            error += " (Rate limit)"
         return error
     except Exception as e:
         return f"curl_cffi ошибка: {type(e).__name__}: {e}"
 
 
-def _do_request_cloudscraper(url: str, timeout: int) -> dict | str | None:
-    """Запрос через cloudscraper. Возвращает dict/str/None."""
+def _do_request_cloudscraper(url: str, timeout: int, proxy: str = "") -> dict | str | None:
+    """Запрос через cloudscraper."""
     try:
         scraper = cloudscraper.create_scraper(
             browser={"browser": "chrome", "platform": "windows", "desktop": True}
         )
+        if proxy:
+            scraper.proxies = {"https": proxy, "http": proxy}
         resp = scraper.get(url, headers=BROWSER_HEADERS, timeout=timeout)
         if resp.status_code == 200:
             return resp.json()
@@ -93,10 +96,12 @@ def _do_request_cloudscraper(url: str, timeout: int) -> dict | str | None:
         return f"cloudscraper ошибка: {type(e).__name__}: {e}"
 
 
-def _do_request_urllib(url: str, timeout: int) -> dict | str:
+def _do_request_urllib(url: str, timeout: int, proxy: str = "") -> dict | str:
     """Запрос через стандартный urllib (всегда доступен, фоллбэк)."""
     try:
         req = urllib.request.Request(url, headers=BROWSER_HEADERS)
+        if proxy:
+            req.set_proxy(proxy, "https")
         ctx = create_default_context()
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
             if resp.status == 200:
@@ -159,6 +164,7 @@ class RedditMonitor:
         max_retries: int = 3,
         user_agent: str | None = None,
         max_posts_per_check: int = 5,
+        proxy: str = "",
     ):
         self.db = db
         self.subreddit_configs = subreddit_configs
@@ -168,6 +174,7 @@ class RedditMonitor:
         self.max_retries = max_retries
         self.max_posts_per_check = max_posts_per_check
         self.user_agent = user_agent or BROWSER_HEADERS["User-Agent"]
+        self.proxy = proxy
 
         # Доступные методы (в порядке приоритета)
         self._methods: list[tuple[str, callable]] = []
@@ -189,6 +196,10 @@ class RedditMonitor:
                 "RedditMonitor: только urllib — Reddit может блокировать. "
                 "Рекомендуется: pip install curl_cffi"
             )
+        if proxy:
+            logger.info("RedditMonitor: используем прокси %s***", proxy[:20])
+        else:
+            logger.info("RedditMonitor: БЕЗ прокси — если Reddit блокирует IP, добавь 'proxy' в config.json")
 
         # Кэш обработанных post_id
         self._seen_post_ids: dict[str, str] = {}
@@ -238,13 +249,12 @@ class RedditMonitor:
     def _fetch_reddit(self, url: str) -> dict | None:
         """
         Пробует все доступные методы по порядку.
-        Логирует ошибку только первый раз для каждого метода.
         Возвращает dict с данными или None если все методы упали.
         """
         errors: list[str] = []
 
         for method_name, func in self._methods:
-            result = func(url, self.timeout)
+            result = func(url, self.timeout, proxy=self.proxy)
 
             if isinstance(result, dict):
                 # Успех!
@@ -271,7 +281,7 @@ class RedditMonitor:
 
         for attempt in range(1, self.max_retries + 1):
             try:
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 data = await loop.run_in_executor(_thread_pool, self._fetch_reddit, url)
 
                 if data is None:
