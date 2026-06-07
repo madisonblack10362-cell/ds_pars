@@ -38,6 +38,24 @@ class RedditMonitor:
         # "xbox", "xbox series", "game pass",
     ]
 
+    # Паттерны мнений/предложений — отсекаем до AI-анализа
+    OPINION_PATTERNS = [
+        "wouldn't it be", "wouldnt it be", "would be cool",
+        "i think", "i believe", "i feel like", "i wish", "i hope",
+        "they should", "we need", "we deserve", "bohemia should",
+        "anyone else", "does anyone", "is it just me",
+        "dayz 2", "dayz two", "sequel",
+        "hire more", "larger team", "bigger team",
+        "am i the only", "who else thinks",
+        "can we get", "please add", "we want",
+        "what if they", "imagine if",
+        "unpopular opinion", "hot take",
+        "this game is dead", "game is dying",
+        "devs don't care", "developers don't",
+        "fix this", "broken game", "waste of money",
+        "not worth it", "refunded", "refund",
+    ]
+
     def __init__(
         self,
         db: Database,
@@ -266,6 +284,18 @@ class RedditMonitor:
                 logger.info(
                     "RedditMonitor: пост пропущен (blacklist '%s'): %s",
                     keyword, title[:60],
+                )
+                return None
+
+        # Фильтрация мнений/предложений (рандомные мысли, wishlist, рант)
+        # Проверяем только title — если title содержит мнение, весь пост — мусор
+        title_lower = title.lower()
+        for pattern in self.OPINION_PATTERNS:
+            if pattern in title_lower:
+                self._seen_post_ids[external_id] = external_id
+                logger.info(
+                    "RedditMonitor: пост пропущен (мнение/предложение '%s'): %s",
+                    pattern, title[:60],
                 )
                 return None
 

@@ -112,64 +112,55 @@ JSON:
 # Промпт для Reddit-постов — переводит на русский и адаптирует формат
 REDDIT_SYSTEM_PROMPT = """Ты — редактор Telegram-канала про DayZ. Берёшь посты с Reddit и делаешь КРАТКИЕ посты на русском.
 
-СТРОГИЕ ПРАВИЛА:
-1. Пост должен быть КОРОТКИМ — 2-4 предложения в blockquote. НЕ больше.
-2. НЕ придумывай детали которых нет в оригинале. ПЕРЕСКАЗЫВАЙ а не выдумывай.
-3. НЕ добавляй описание "Автор рассказывает о..." или "Пользователь пишет..." — это ЗАПРЕЩЕНО.
-4. Используй ПРЯМОЙ стиль — как будто ты сам делишься инфой. НЕ "Многие игроки считают", а просто суть.
+САМОЕ ГЛАВНОЕ ПРАВИЛО: 90% постов на Reddit — МУСОР. Только РЕАЛЬНЫЕ НОВОСТИ стоят публикации. Если сомневаешься — НЕ публикуй.
 
-ФИЛЬТР (should_publish: false — СТРОГО для):
-- Хвастовство лутом ("look what I found", скрины инвентаря)
-- Банальные скриншоты (красивый пейзаж, мой персонаж)
-- Вопросы новичков ("how do I...", "where is...")
-- Мемы и смешные видео
-- Посты-жалобы ("this game is dead", "devs don't care")
-- Рандомные мысли без содержания
-- Слишком короткие/пустые посты
-- Посты про PlayStation/консоли
+ЧТО ПУБЛИКУЕМ (should_publish: true) — ТОЛЬКО:
+- Официальные анонсы обновлений/патчей (от Bohemia, НЕ от игроков)
+- Официальные патч-ноты
+- Важные баги/эксплоиты с деталями и доказательствами
+- Обновления популярных модов с конкретикой (что изменилось)
+- Полезные лайфхаки с конкретными деталями (НЕ "как крафтить" а редкие механики)
 
-ПУБЛИКУЕМ (should_publish: true):
-- Обновления игры, патчи, новые фичи
-- Важные баги и эксплоиты
-- Обновления популярных модов, кастомные карты
-- Лайфхаки и механики о которых мало кто знает
-- Обсуждения с умными инсайтами
-- Крутые истории выживания (НЕ банальные)
+ЧТО НЕ ПУБЛИКУЕМ (should_publish: false) — ВСЁ ОСТАЛЬНОЕ:
+- Мнения/предложения игроков ("wouldn't it be cool", "they should", "I think", "we need")
+- Wishlist посты ("DayZ 2", "I wish", предложения по улучшению)
+- Обсуждения в стиле "кто-нибудь ещё думает что..."
+- Рант/жалобы ("game is dead", "devs don't care", "fix this")
+- Хвастовство лутом, скрины инвентаря, банальные скрины
+- Вопросы новичков
+- Мемы, смешные видео
+- Истории в духе "я нашёл винтовку" / "мы убили чувака"
+- Посты про консоли (PlayStation, Xbox)
+- Слишком длинные тексты без конкретики
+- Любой пост где автор просто ВЫРАЖАЕТ МНЕНИЕ а не сообщает ФАКТ
 
-ТИПЫ (news_type):
-update, wipe, event, discussion, content, mod, story, bug, meme, other
-
-ПРИОРИТЕТЫ:
-- high: крупное обновление DayZ, официальный анонс Bohemia
-- medium: гайды, обсуждения, патчи, моды
-- low: мемы, скрины, банальщина
-
-ФОРМАТ ПОСТА (на русском):
+ФОРМАТ ПОСТА:
 <b>ЭМОДЗИ ТИП</b>
 
-<blockquote>2-4 предложения. Суть. Без воды.</blockquote>
+<blockquote>2-4 предложения. ТОЛЬКО факты. Никаких мнений. Никакой воды.</blockquote>
 
 #dayz #тип
 
+ПРАВИЛА ФОРМАТИРОВАНИЯ:
+1. ПРЯМОЙ стиль — НЕ "Автор предлагает", НЕ "Пользователь пишет", НЕ "Игроки считают"
+2. ТОЛЬКО факты из оригинала
+3. Коротко — 2-4 предложения в blockquote, НЕ больше
+4. ОДИН <blockquote>. Без ссылок на Reddit.
+5. Названия предметов/оружия в <code> на английском
+
 Эмодзи: update 🔄, wipe ⚠️, event 🎉, discussion 💬, content 💡, mod 🔧, story 📖, bug 🐛
-ОДИН <blockquote>. Без ссылок на Reddit.
 
-ПРИМЕР:
-Исходный: "DayZ 1.25 Update 2 is now live. Helicopter physics reworked, infected AI improved, Hunter scope added."
-{
-  "news_type": "update",
-  "priority": "high",
-  "should_publish": true,
-  "server_name": "Reddit",
-  "server_link": "",
-  "formatted_post": "<b>🔄 ОБНОВЛЕНИЕ</b>\\n\\n<blockquote>Вышло обновление <b>DayZ 1.25 Update 2</b>.\\n\\n• Новая физика вертолётов\\n• Переработанный AI заражённых\\n• Прицел <code>Hunter scope</code>\\n</blockquote>\\n\\n#dayz #обновление"
-}
+ПРИМЕР ХОРОШЕГО ПОСТА:
+Исходный: "DayZ 1.25 Update 2 is now live. Helicopter physics reworked."
+{"news_type": "update", "priority": "high", "should_publish": true, "server_name": "Reddit", "server_link": "", "formatted_post": "<b>🔄 ОБНОВЛЕНИЕ</b>\\n\\n<blockquote>Вышло обновление <b>DayZ 1.25 Update 2</b>. Переработана физика вертолётов.</blockquote>\\n\\n#dayz #обновление"}
 
-ПЛОХОЙ ПРИМЕР (так НЕ делай):
-{
-  "formatted_post": "<b>💡 КОНТЕНТ</b>\\n\\n<blockquote>Многие игроки считают, что клейморы работают как в Call of Duty, нужно привязать взрыватель к проволоке.\\n\\nАвтор рассказывает о своих опытах с минами и клейморами.</blockquote>\\n\\n#dayz #гайд"
-}
-— Это ХУЖЕ чем оригинал. Бессодержательно. Не публикуй такое.
+ПРИМЕР ПЛОХОГО ПОСТА (НЕ публикуй!):
+Исходный: "Wouldn't it be cool if they hired more devs for DayZ 2"
+{"news_type": "other", "priority": "low", "should_publish": false, "server_name": "Reddit", "server_link": "", "formatted_post": "", "summary": "Мнение игрока, не новость"}
+
+Ещё ПЛОХОЙ (НЕ публикуй!):
+Исходный: "Anyone else feel like night is unplayable now?"
+{"news_type": "other", "priority": "low", "should_publish": false, "server_name": "Reddit", "server_link": "", "formatted_post": "", "summary": "Вопрос/мнение, не новость"}
 
 Формат ответа — ТОЛЬКО JSON без markdown.
 """
@@ -226,8 +217,7 @@ class AIAnalyzer:
             except Exception as exc:
                 logger.warning(
                     "Попытка %d/%d анализа LLM не удалась: %s",
-                    attempt,
-                    self.max_retries,
+                    attempt, self.max_retries,
                     exc,
                 )
             if attempt < self.max_retries:
@@ -576,6 +566,3 @@ class AIAnalyzer:
         except Exception as exc:
             logger.warning("Ошибка при проверке сходства через LLM: %s", exc)
             return None
-
-
-
