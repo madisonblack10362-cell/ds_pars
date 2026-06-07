@@ -37,7 +37,7 @@ class DiscordMonitor(Client):
         self.guild_id = guild_id
         self.channel_id = channel_id
         self.min_message_length = min_message_length
-        self._ready = False
+        self._monitor_ready = False
         self.gui = gui
 
         logger.info(
@@ -82,7 +82,7 @@ class DiscordMonitor(Client):
                 "Бот должен быть добавлен на сервер.",
                 self.guild_id,
             )
-            self._ready = False
+            self._monitor_ready = False
             return
 
         # Ищем нужный канал
@@ -93,7 +93,7 @@ class DiscordMonitor(Client):
                 channel.name,
                 channel.id,
             )
-            self._ready = True
+            self._monitor_ready = True
 
             # Обновляем GUI статус — реально подключён
             if self.gui:
@@ -122,7 +122,7 @@ class DiscordMonitor(Client):
                 self.channel_id,
                 guild.name,
             )
-            self._ready = False
+            self._monitor_ready = False
 
     async def on_message(self, message: Message) -> None:
         """Обрабатывает новое сообщение в Discord."""
@@ -131,7 +131,7 @@ class DiscordMonitor(Client):
         # Фильтруем только системные/вебхук-сообщения без смысла обрабатывать.
 
         # Бот не готов или ещё не инициализирован
-        if not self._ready:
+        if not self._monitor_ready:
             return
 
         # Проверяем, что сообщение из нужного канала
