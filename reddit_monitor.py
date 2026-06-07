@@ -211,8 +211,13 @@ class RedditMonitor:
 
         external_id = f"reddit_{subreddit}_{post_id}"
 
-        # Проверяем, не видели ли уже
+        # Проверяем, не видели ли уже (in-memory кэш)
         if external_id in self._seen_post_ids:
+            return None
+
+        # Также проверяем напрямую в БД (на случай если кэш не загружен или сброшен)
+        if await self.db.is_message_processed("reddit", subreddit, external_id):
+            self._seen_post_ids[external_id] = external_id
             return None
 
         # Рейтинг (Reddit RSS не содержит score — ставим 0 и пропускаем фильтр)

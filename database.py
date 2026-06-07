@@ -278,6 +278,15 @@ class Database:
         )
         return [(row["id"], row["text"]) for row in await cursor.fetchall()]
 
+    async def is_message_processed(self, source_type: str, source_id: str, external_id: str) -> bool:
+        """Проверяет, есть ли уже сообщение с таким external_id в БД."""
+        cursor = await self._connection.execute(
+            "SELECT 1 FROM messages WHERE source_type = ? AND source_id = ? AND external_id = ?",
+            (source_type, source_id, external_id),
+        )
+        row = await cursor.fetchone()
+        return row is not None
+
     # -------------------------------------------------------------------------
     # Обработанные сообщения
     # -------------------------------------------------------------------------

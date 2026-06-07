@@ -227,10 +227,14 @@ class Deduplicator:
         for msg_id, text in all_messages:
             text_hash = compute_text_hash(text)
             self._hash_cache[text_hash] = msg_id
-
-            # Загружаем хеши изображений
+            # Кэшируем title и изображения (один запрос к БД)
             msg = await self.db.get_message_by_id(msg_id)
             if msg:
+                if msg.get("title"):
+                    title_hash = compute_text_hash(msg["title"])
+                    self._hash_cache[title_hash] = msg_id
+
+                # Загружаем хеши изображений
                 try:
                     images = json.loads(msg.get("images", "[]"))
                     for img_url in images:
