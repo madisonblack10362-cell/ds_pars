@@ -118,6 +118,60 @@ def _safe_int(val, default=0) -> int:
         return default
 
 
+async def _resolve_author_names(mods: list) -> None:
+    """Парсит имена авторов со страниц Workshop для каждого мода (in-place).
+    Бесплатно, без API ключа — берёт имя из HTML страницы мода."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    # Собираем уникальные creator ID для которых ещё нет имени
+    to_resolve = {}
+    for mod in mods:
+        author = mod.get("author", "").strip()
+        if author and author.isdigit() and not mod.get("author_name"):
+            to_resolve[author] = mod.get("id", "")
+
+    if not to_resolve:
+        return
+
+    logger.info("Резолвим имена для %d авторов...", len(to_resolve))
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            for steam_id, mod_id in to_resolve.items():
+                try:
+                    url = f"https://steamcommunity.com/workshop/filedetails/?id={mod_id}"
+                    async with session.get(
+                        url, headers=headers,
+                        timeout=aiohttp.ClientTimeout(total=15),
+                    ) as resp:
+                        if resp.status != 200:
+                            continue
+                        html = await resp.text()
+
+                    # Ищем имя автора в блоке: <div class="workshopItemAuthorName">
+                    match = re.search(
+                        r'class="workshopItemAuthorName"[^>]*>\s*<a[^>]*>([^<]+)<',
+                        html,
+                    )
+                    if match:
+                        name = match.group(1).strip()
+                        # Обновляем все моды этого автора
+                        for mod in mods:
+                            if mod.get("author") == steam_id:
+                                mod["author_name"] = name
+                        logger.debug("Автор %s → %s", steam_id, name)
+
+                    await asyncio.sleep(0.3)  # Не спамим Steam
+
+                except Exception as e:
+                    logger.debug("Не удалось резолвить автора %s: %s", steam_id, e)
+    except Exception as e:
+        logger.warning("Ошибка при резолвинге авторов: %s", e)
+
+
 def _parse_api_item(item: dict) -> Optional[dict]:
     """Парсит один элемент из Steam API ответа в формат мода."""
     try:
@@ -386,31 +440,134 @@ async def check_for_new_mods(
 
 # ─── Telegram formatting ───────────────────────────────────────────────────────
 
+# ─── Категории модов по тегам ──────────────────────────────────────────────
+
+_TAG_CATEGORY_MAP = {
+    "vehicle": "🚗 Транспорт",
+    "car": "🚗 Транспорт",
+    "boat": "🚗 Транспорт",
+    "helicopter": "🚗 Транспорт",
+    "aircraft": "🚗 Транспорт",
+    "plane": "🚗 Транспорт",
+    "truck": "🚗 Транспорт",
+    "bicycle": "🚗 Транспорт",
+    "transport": "🚗 Транспорт",
+    "weapon": "🔫 Оружие",
+    "gun": "🔫 Оружие",
+    "rifle": "🔫 Оружие",
+    "pistol": "🔫 Оружие",
+    "melee": "🔫 Оружие",
+    "ammo": "🔫 Оружие",
+    "ammunition": "🔫 Оружие",
+    "building": "🏗 Строительство",
+    "base": "🏗 Строительство",
+    "basebuilding": "🏗 Строительство",
+    "cabin": "🏗 Строительство",
+    "shelter": "🏗 Строительство",
+    "tent": "🏗 Строительство",
+    "map": "🗺 Карты",
+    "terrain": "🗺 Карты",
+    "chernarus": "🗺 Карты",
+    "livonia": "🗺 Карты",
+    "clothing": "👔 Одежда",
+    "clothes": "👔 Одежда",
+    "armor": "👔 Одежда",
+    "uniform": "👔 Одежда",
+    "backpack": "👔 Одежда",
+    "food": "🍔 Еда",
+    "drink": "🍔 Еда",
+    "medical": "💊 Медицина",
+    "health": "💊 Медицина",
+    "zombie": "🧟 Зомби",
+    "infected": "🧟 Зомби",
+    "animal": "🐾 Животные",
+    "ai": "🤖 AI / NPC",
+    "npc": "🤖 AI / NPC",
+    "trader": "🤖 AI / NPC",
+    "pvp": "⚔ PVP",
+    "pve": "🕊 PVE",
+    "roleplay": "🎭 Ролевая игра",
+    "rp": "🎭 Ролевая игра",
+    "ui": "🖥 Интерфейс",
+    "hud": "🖥 Интерфейс",
+    "menu": "🖥 Интерфейс",
+    "crafting": "🔧 Крафт",
+    "craft": "🔧 Крафт",
+    "emotes": "🎬 Анимации",
+    "animation": "🎬 Анимации",
+    "effects": "✨ Эффекты",
+    "weather": "🌤 Погода",
+    "graphics": "🎨 Графика",
+    "sound": "🔊 Звук",
+    "audio": "🔊 Звук",
+    "server": "🖥 Сервер",
+    "admin": "🖥 Сервер",
+    "tool": "🔧 Утилиты",
+    "utility": "🔧 Утилиты",
+    "mod": "🔧 Утилиты",
+    "dayz": "🎮 DayZ",
+}
+
+_DEFAULT_CATEGORY = "📦 Мод"
+
+
+def _detect_category(tags: list) -> str:
+    """Определяет категорию мода по тегам."""
+    if not tags:
+        return _DEFAULT_CATEGORY
+    lowered = [t.lower().strip() for t in tags]
+    for tag, category in _TAG_CATEGORY_MAP.items():
+        if tag in lowered:
+            return category
+    return _DEFAULT_CATEGORY
+
+
+def _format_author_display(mod: dict) -> str:
+    """Форматирует имя автора. Если есть resolved_name — использует его, иначе обрезает длинный SteamID."""
+    resolved = mod.get("author_name", "").strip()
+    steam_id = mod.get("author", "").strip()
+
+    if resolved:
+        return _escape_html(resolved)
+
+    if steam_id and not steam_id.isdigit():
+        # Already a name, not a numeric ID
+        return _escape_html(steam_id)
+
+    if steam_id:
+        # Numeric SteamID — show shortened
+        return _escape_html(steam_id)
+
+    return "Неизвестен"
+
+
 def format_mod_message(mod: dict, ai_summary: Optional[str] = None) -> dict:
     """Форматирует данные мода для отправки в Telegram."""
-    icon = "🔧"
-
     tags = mod.get("tags", [])
     if isinstance(tags, list):
         tag_str = ", ".join(tags[:5])
     else:
         tag_str = str(tags)
 
+    category = _detect_category(tags)
+    author = _format_author_display(mod)
     subs = mod.get("subscriptions", 0)
     favs = mod.get("favorited", 0)
     views = mod.get("views", 0)
 
+    # ── Заголовок ──
     parts = [
-        f"{icon} <b>{_escape_html(mod['title'])}</b>",
-        "",
+        f"{category} <b>{_escape_html(mod['title'])}</b>",
     ]
 
-    author = mod.get("author", "").strip()
-    if author:
-        parts.append(f"👤 Автор: {_escape_html(author)}")
+    # ── Автор ──
+    parts.append(f"{'└ ' if author else ''}от {_format_author_display(mod)}")
 
+    # ── Разделитель ──
+    parts.append("")
+
+    # ── Описание ──
     if ai_summary:
-        parts.append("")
         parts.append(ai_summary)
     else:
         desc = mod.get("description", "").strip()
@@ -418,14 +575,12 @@ def format_mod_message(mod: dict, ai_summary: Optional[str] = None) -> dict:
             clean_desc = re.sub(r"<[^>]+>", "", desc)
             clean_desc = clean_desc.strip()[:300]
             if clean_desc:
-                parts.append("")
                 parts.append(_escape_html(clean_desc))
 
+    # ── Разделитель ──
     parts.append("")
 
-    if tag_str:
-        parts.append(f"🏷 Теги: {tag_str}")
-
+    # ── Статистика ──
     stats_parts = []
     if subs:
         stats_parts.append(f"📥 {subs:,}")
@@ -433,20 +588,25 @@ def format_mod_message(mod: dict, ai_summary: Optional[str] = None) -> dict:
         stats_parts.append(f"⭐ {favs:,}")
     if views:
         stats_parts.append(f"👁 {views:,}")
-
     if stats_parts:
-        parts.append(f"📊 {', '.join(stats_parts)}")
+        parts.append(f"📊 {' │ '.join(stats_parts)}")
 
+    # ── Мета ──
+    meta_parts = []
     size = mod.get("size", "")
     if size:
-        parts.append(f"💾 Размер: {size}")
-
+        meta_parts.append(f"💾 {size}")
     updated = mod.get("updated", "")
     if updated:
-        parts.append(f"📅 Обновлён: {updated}")
+        meta_parts.append(f"📅 {updated}")
+    if tag_str:
+        meta_parts.append(f"🏷 {tag_str}")
+    if meta_parts:
+        parts.append(" ".join(meta_parts))
 
+    # ── Ссылка ──
     parts.append("")
-    parts.append(f'🔗 <a href="{mod["url"]}">Открыть в Steam Workshop</a>')
+    parts.append(f'🔗 <a href="{mod["url"]}">Steam Workshop</a>')
 
     text = "\n".join(parts)
 
@@ -499,6 +659,10 @@ async def run_workshop_monitor(
                 min_subscriptions=min_subscriptions,
                 days_old=7,
             )
+
+            # Резолвим имена авторов (бесплатно, через scraping)
+            if new_mods:
+                await _resolve_author_names(new_mods)
 
             for mod in new_mods:
                 try:
