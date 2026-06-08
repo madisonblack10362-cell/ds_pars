@@ -294,48 +294,94 @@ async def check_for_new_mods(
     steam_api_key: Optional[str] = None,
     min_subscriptions: int = 100,
     days_old: int = 7,
+    max_per_check: int = 3,
 ) -> list:
     """
-    Проверяет наличие новых популярных модов за последние N дней.
-    Фильтрует по подписчикам и отслеживает уже опубликованные.
+    Проверяет наличие новых популярных модов.
+
+    На первом запуске (пустой state):
+      - Помечает ВСЕ старые моды как известные (не спамит)
+      - Берёт только TOP-N самых популярных за последние 3 дня
+
+    При обычных проверках:
+      - Возвращает до max_per_check новых модов за последние days_old дней
+      - Сортировка по подписчикам (больше = лучше)
     """
     state = _load_state()
     known_ids = set(state.get("known_ids", []))
     posted_ids = set(state.get("posted_ids", []))
+    is_first_run = not state.get("last_check")
 
     mods = await fetch_popular_mods(steam_api_key=steam_api_key, max_mods=50)
 
     now = time.time()
+
+    if is_first_run:
+        # === ПЕРВЫЙ ЗАПУСК: не спамим старьём ===
+        logger.info("Первый запуск workshop-монитора: фильтруем старые моды")
+        cutoff_3d = now - (3 * 24 * 3600)
+
+        fresh = []
+        old = []
+        for mod in mods:
+            mod_id = mod["id"]
+            if mod_id not in known_ids:
+                known_ids.add(mod_id)
+            if mod_id in posted_ids:
+                continue
+            if mod.get("timestamp", 0) and mod["timestamp"] < cutoff_3d:
+                old.append(mod)
+            else:
+                fresh.append(mod)
+
+        # ВСЁ старое помечаем как известные — больше никогда не покажем
+        for mod in old:
+            posted_ids.add(mod["id"])
+
+        state["known_ids"] = list(known_ids)
+        state["posted_ids"] = list(posted_ids)
+        state["last_check"] = datetime.now(timezone.utc).isoformat()
+        _save_state(state)
+        logger.info(
+            "Первый запуск: свежих модов=%d, старых пропущено=%d, берём топ-%d",
+            len(fresh), len(old), max_per_check,
+        )
+
+        # Фильтруем по подпискам и берём топ по популярности
+        fresh = [m for m in fresh if m.get("subscriptions", 0) >= min_subscriptions]
+        fresh.sort(key=lambda x: x.get("subscriptions", 0), reverse=True)
+        return fresh[:max_per_check]
+
+    # === ОБЫЧНАЯ ПРОВЕРКА ===
     cutoff = now - (days_old * 24 * 3600)
 
     new_mods = []
     for mod in mods:
         mod_id = mod["id"]
-
         if mod_id not in known_ids:
             known_ids.add(mod_id)
-
         if mod_id in posted_ids:
             continue
-
         if mod.get("timestamp", 0) < cutoff:
             continue
-
         if mod.get("subscriptions", 0) < min_subscriptions:
             continue
-
         new_mods.append(mod)
 
     state["known_ids"] = list(known_ids)
     state["last_check"] = datetime.now(timezone.utc).isoformat()
     _save_state(state)
 
-    if new_mods:
-        logger.info("Найдено %d новых популярных модов", len(new_mods))
+    # Сортировка по популярности — лучшие первые
+    new_mods.sort(key=lambda x: x.get("subscriptions", 0), reverse=True)
+    result = new_mods[:max_per_check]
+
+    if result:
+        logger.info("Найдено %d новых популярных модов (отфильтровано из %d)", len(result), len(new_mods))
     else:
         logger.info("Новых популярных модов не найдено")
 
-    return new_mods
+    return result
 
 
 # ─── Telegram formatting ───────────────────────────────────────────────────────
@@ -557,6 +603,9 @@ async def run_workshop_monitor(
 
                 except Exception as e:
                     logger.error("Ошибка обработки мода %s: %s", mod.get("id", "unknown"), e)
+
+                # Задержка между модами — не пачкой
+                await asyncio.sleep(5)
 
         except Exception as e:
             logger.error("Ошибка в основном цикле Workshop монитора: %s", e)

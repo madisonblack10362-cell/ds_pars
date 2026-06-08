@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -242,9 +243,69 @@ async def fetch_dayz_devblog() -> list:
 
 # ─── Основная логика монитора ──────────────────────────────────────────────────
 
-async def check_for_new_patches(include_non_patch: bool = False) -> list:
+def _patch_relevance_score(item: dict) -> float:
+    """
+    Скоринг релевантности патча. Выше = интереснее.
+    Учитывает: свежесть, наличие контента, ключевые слова.
+    """
+    score = 0.0
+    title_lower = (item.get("title", "") or "").lower()
+    content = item.get("content", "") or item.get("summary", "") or ""
+    content_lower = content.lower()
+
+    # Свежесть (по timestamp, 0 = нет даты = низкий приоритет)
+    ts = item.get("timestamp", 0)
+    if ts:
+        age_days = (time.time() - ts) / 86400
+        score += max(0, 30 - age_days)  # 30 баллов за свежий, убывает
+    else:
+        score += 5  # без даты — минимум
+
+    # Сильные ключевые слова в заголовке (вес 15)
+    strong_kw = ["update ", "patch ", "hotfix", "patchnote", "changelog", "release note"]
+    for kw in strong_kw:
+        if kw in title_lower:
+            score += 15
+            break
+
+    # Ключевые слова в заголовке (вес 5)
+    patch_kw = ["update", "patch", "hotfix", "fix", "server", "version",
+                 "stable", "experimental", "expansion", "1."]
+    for kw in patch_kw:
+        if kw in title_lower:
+            score += 5
+            break
+
+    # Наличие контента (чем больше — тем подробнее патч)
+    content_len = len(content)
+    if content_len > 500:
+        score += 10
+    elif content_len > 200:
+        score += 5
+    elif content_len > 50:
+        score += 2
+
+    # Наличие картинки
+    if item.get("image_url"):
+        score += 3
+
+    return score
+
+
+async def check_for_new_patches(include_non_patch: bool = False, max_per_check: int = 3) -> list:
+    """
+    Проверяет наличие новых патчей.
+
+    На первом запуске (пустой state):
+      - Помечает ВСЕ старые патчи как уже обработанные (не спамит)
+      - Берёт только TOP-3 самых свежих и релевантных за последние 3 дня
+
+    При обычных проверках:
+      - Возвращает до max_per_check новых патчей, отсортированных по релевантности
+    """
     state = _load_state()
     posted_ids = set(state.get("posted_ids", []))
+    is_first_run = not state.get("last_check")
 
     all_news = await fetch_steam_news(max_entries=20)
 
@@ -254,23 +315,61 @@ async def check_for_new_patches(include_non_patch: bool = False) -> list:
         if item["id"] not in existing_ids:
             all_news.append(item)
 
-    new_patches = []
+    candidates = []
     for item in all_news:
         if item["id"] in posted_ids:
             continue
         if not item.get("is_patch", False) and not include_non_patch:
             continue
-        new_patches.append(item)
+        candidates.append(item)
+
+    if is_first_run:
+        # === ПЕРВЫЙ ЗАПУСК: не спамим старьём ===
+        logger.info("Первый запуск патч-монитора: фильтруем старые записи")
+
+        now = time.time()
+        cutoff_3d = now - (3 * 24 * 3600)
+
+        fresh = []
+        old = []
+        for item in candidates:
+            ts = item.get("timestamp", 0)
+            if ts and ts > cutoff_3d:
+                fresh.append(item)
+            else:
+                old.append(item)
+
+        # ВСЁ старое помечаем как обработанное — больше никогда не покажем
+        for item in old:
+            posted_ids.add(item["id"])
+
+        if posted_ids != set(state.get("posted_ids", [])):
+            state["posted_ids"] = list(posted_ids)
+            _save_state(state)
+            logger.info("Помечено %d старых патчей как обработанные (пропущены)", len(old))
+
+        # Свежие — скорим и берём топ-N
+        fresh.sort(key=lambda x: _patch_relevance_score(x), reverse=True)
+        result = fresh[:max_per_check]
+        logger.info(
+            "Первый запуск: свежих патчей=%d, старых пропущено=%d, берём топ-%d",
+            len(fresh), len(old), max_per_check,
+        )
+    else:
+        # === ОБЫЧНАЯ ПРОВЕРКА ===
+        # Скорим по релевантности, берём лучшие
+        candidates.sort(key=lambda x: _patch_relevance_score(x), reverse=True)
+        result = candidates[:max_per_check]
 
     state["last_check"] = datetime.now(timezone.utc).isoformat()
     _save_state(state)
 
-    if new_patches:
-        logger.info("Найдено %d новых патчей/обновлений", len(new_patches))
+    if result:
+        logger.info("Найдено %d новых патчей/обновлений (отфильтровано из %d)", len(result), len(candidates))
     else:
         logger.info("Новых патчей/обновлений не найдено")
 
-    return new_patches
+    return result
 
 
 # ─── Telegram formatting ─────────────────────────────────────────────────────
@@ -446,6 +545,9 @@ async def run_patch_monitor(
 
                 except Exception as e:
                     logger.error("Ошибка обработки патча %s: %s", item.get("id", "unknown"), e)
+
+                # Задержка между патчами — не пачкой
+                await asyncio.sleep(5)
 
         except Exception as e:
             logger.error("Ошибка в основном цикле Patch Notes монитора: %s", e)
