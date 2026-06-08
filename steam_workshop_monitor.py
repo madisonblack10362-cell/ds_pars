@@ -110,14 +110,22 @@ async def _fetch_mod_details_via_web(mod_ids: list) -> list:
     return mods
 
 
+def _safe_int(val, default=0) -> int:
+    """Конвертирует значение в int. Steam API часто возвращает числа как строки."""
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return default
+
+
 def _parse_api_item(item: dict) -> Optional[dict]:
     """Парсит один элемент из Steam API ответа в формат мода."""
     try:
-        mod_id = item.get("publishedfileid", "")
+        mod_id = str(item.get("publishedfileid", "")).strip()
         if not mod_id:
             return None
 
-        file_size = item.get("file_size", 0)
+        file_size = _safe_int(item.get("file_size", 0))
         if file_size > 1024 * 1024:
             size_str = f"{file_size / (1024 * 1024):.1f} MB"
         elif file_size > 1024:
@@ -125,7 +133,7 @@ def _parse_api_item(item: dict) -> Optional[dict]:
         else:
             size_str = f"{file_size} B"
 
-        time_updated = item.get("time_updated", 0)
+        time_updated = _safe_int(item.get("time_updated", 0))
         updated_str = ""
         if time_updated:
             updated_str = datetime.fromtimestamp(
@@ -140,20 +148,20 @@ def _parse_api_item(item: dict) -> Optional[dict]:
 
         return {
             "id": mod_id,
-            "title": item.get("title", "Без названия").strip(),
-            "description": item.get("description", "").strip(),
-            "author": item.get("creator", "").strip(),
-            "image_url": item.get("preview_url", ""),
+            "title": str(item.get("title", "Без названия")).strip(),
+            "description": str(item.get("description", "")).strip(),
+            "author": str(item.get("creator", "")).strip(),
+            "image_url": str(item.get("preview_url", "")).strip(),
             "size": size_str,
             "file_size": file_size,
             "updated": updated_str,
             "timestamp": time_updated,
             "url": f"https://steamcommunity.com/sharedfiles/filedetails/?id={mod_id}",
-            "subscriptions": item.get("subscriptions", 0),
-            "favorited": item.get("favorited", 0),
-            "lifetime_subscriptions": item.get("lifetime_subscriptions", 0),
-            "lifetime_favorited": item.get("lifetime_favorited", 0),
-            "views": item.get("views", 0),
+            "subscriptions": _safe_int(item.get("subscriptions", 0)),
+            "favorited": _safe_int(item.get("favorited", 0)),
+            "lifetime_subscriptions": _safe_int(item.get("lifetime_subscriptions", 0)),
+            "lifetime_favorited": _safe_int(item.get("lifetime_favorited", 0)),
+            "views": _safe_int(item.get("views", 0)),
             "tags": tags,
         }
 
