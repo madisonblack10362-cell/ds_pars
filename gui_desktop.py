@@ -259,6 +259,14 @@ class DesktopGUI:
                 ("request_timeout_seconds", "Таймаут запроса (сек)", "30"),
                 ("max_images_per_post", "Макс. фото в посте", "10"),
             ]),
+            ("Steam Workshop", [
+                ("workshop_interval_minutes", "Интервал проверки (мин)", "60"),
+                ("workshop_min_subscriptions", "Мин. подписчиков мода", "100"),
+                ("steam_api_key", "Steam API Key (необязательно)", "Пусто = scraping без ключа"),
+            ]),
+            ("Патчноуты", [
+                ("patchnotes_interval_minutes", "Интервал проверки (мин)", "30"),
+            ]),
             ("Веб-панель", [
                 ("web_panel_url", "URL панели", "https://dayz-monitor-web.vercel.app"),
                 ("web_panel_api_key", "API ключ панели", "Ключ для авторизации бота"),
@@ -271,6 +279,28 @@ class DesktopGUI:
 
             ctk.CTkLabel(frame, text=section_title, font=("Segoe UI", 13, "bold"),
                         text_color=self.ACCENT).pack(anchor="w", padx=12, pady=(10, 4))
+
+            # Переключатели для секции Steam Workshop
+            if section_title == "Steam Workshop":
+                tf = ctk.CTkFrame(frame, fg_color="transparent")
+                tf.pack(fill="x", padx=12, pady=(4, 6))
+                var = tk.BooleanVar(value=True)
+                ctk.CTkCheckBox(tf, text="Включить монитор Steam Workshop",
+                               variable=var, font=("Segoe UI", 11),
+                               text_color=self.TEXT2, fg_color=self.INPUT_BORDER,
+                               hover_color=self.ACCENT).pack(anchor="w")
+                self._toggles["workshop_enabled"] = var
+
+            # Переключатели для секции Патчноуты
+            if section_title == "Патчноуты":
+                tf = ctk.CTkFrame(frame, fg_color="transparent")
+                tf.pack(fill="x", padx=12, pady=(4, 6))
+                var = tk.BooleanVar(value=True)
+                ctk.CTkCheckBox(tf, text="Включить монитор патчноутов",
+                               variable=var, font=("Segoe UI", 11),
+                               text_color=self.TEXT2, fg_color=self.INPUT_BORDER,
+                               hover_color=self.ACCENT).pack(anchor="w")
+                self._toggles["patchnotes_enabled"] = var
 
             # Переключатели для секции Веб-панель
             if section_title == "Веб-панель":
@@ -434,6 +464,8 @@ class DesktopGUI:
             "max_retries", "retry_delay_seconds", "request_timeout_seconds",
             "max_images_per_post",
             "web_panel_url", "web_panel_api_key",
+            "workshop_interval_minutes", "workshop_min_subscriptions", "steam_api_key",
+            "patchnotes_interval_minutes",
         ]
         for key in simple_keys:
             entry = self._entries.get(key)
@@ -451,7 +483,10 @@ class DesktopGUI:
                 entry.insert(0, str(discord.get(cfg_key, "")))
 
         for key, var in self._toggles.items():
-            default = True if key == "moderation_notifications" else False
+            if key in ("workshop_enabled", "patchnotes_enabled", "moderation_notifications"):
+                default = True
+            else:
+                default = False
             var.set(cfg.get(key, default))
 
     def _save_config(self):
@@ -471,6 +506,8 @@ class DesktopGUI:
             "max_retries", "retry_delay_seconds", "request_timeout_seconds",
             "max_images_per_post",
             "web_panel_url", "web_panel_api_key",
+            "workshop_interval_minutes", "workshop_min_subscriptions", "steam_api_key",
+            "patchnotes_interval_minutes",
         ]
         for key in simple_keys:
             entry = self._entries.get(key)
@@ -478,7 +515,8 @@ class DesktopGUI:
                 val = entry.get()
                 if key in ("check_interval_minutes", "reddit_check_interval_minutes", "daily_summary_hour", "daily_summary_minute",
                             "min_message_length", "max_retries", "retry_delay_seconds",
-                            "request_timeout_seconds", "max_images_per_post", "reddit_min_score"):
+                            "request_timeout_seconds", "max_images_per_post", "reddit_min_score",
+                            "workshop_interval_minutes", "workshop_min_subscriptions", "patchnotes_interval_minutes"):
                     try: val = int(val)
                     except ValueError: pass
                 elif key == "similarity_threshold":
