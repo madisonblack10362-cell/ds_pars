@@ -603,3 +603,185 @@ class AIAnalyzer:
         except Exception as exc:
             logger.warning("Ошибка при проверке сходства через LLM: %s", exc)
             return None
+
+    # ─── Steam Workshop Mod — AI описание ────────────────────────────────────
+
+    async def analyze_workshop_mod(self, mod: dict) -> Optional[str]:
+        """
+        AI-анализ мода Steam Workshop для описания на русском.
+
+        Args:
+            mod: Словарь с данными о моде:
+                - title, description, tags, subscriptions, author
+
+        Returns:
+            AI-описание мода на русском или None при ошибке
+        """
+        try:
+            title = mod.get("title", "Без названия")
+            description = mod.get("description", "")
+            tags = mod.get("tags", [])
+            subs = mod.get("subscriptions", 0)
+
+            if len(description) > 2000:
+                description = description[:2000]
+
+            tags_str = ", ".join(str(t) for t in tags[:10]) if tags else "нет тегов"
+
+            user_prompt = (
+                f"Название мода: {title}\n"
+                f"Описание автора: {description}\n"
+                f"Теги: {tags_str}\n"
+                f"Подписчики: {subs:,}\n\n"
+                f"Напиши краткое описание этого мода для Telegram-канала."
+            )
+
+            url = f"{self.base_url}/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": WORKSHOP_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": 0.7,
+                "max_tokens": 500,
+            }
+
+            async with aiohttp.ClientSession(timeout=self.timeout) as session:
+                async with session.post(url, headers=headers, json=payload) as response:
+                    if response.status != 200:
+                        logger.error("LLM API (Workshop) вернул статус %d", response.status)
+                        return None
+                    data = await response.json()
+                    return data["choices"][0]["message"]["content"].strip()
+
+        except Exception as exc:
+            logger.error("Ошибка AI анализа мода: %s", exc)
+            return None
+
+    # ─── Patch Notes — AI резюме ──────────────────────────────────────────────
+
+    async def analyze_patch_notes(self, item: dict) -> Optional[str]:
+        """
+        AI-анализ патчноута для резюме на русском.
+
+        Args:
+            item: Словарь с данными о патче:
+                - title, content, summary, source
+
+        Returns:
+            AI-резюме патча на русском или None при ошибке
+        """
+        try:
+            title = item.get("title", "")
+            content = item.get("content", "")
+            summary = item.get("summary", "")
+
+            text = content if content else summary
+            if not text:
+                logger.warning("Нет текста для AI анализа патча '%s'", title)
+                return None
+
+            if len(text) > 3000:
+                text = text[:3000]
+
+            user_prompt = (
+                f"Заголовок: {title}\n\n"
+                f"Релиз-ноты:\n{text}\n\n"
+                f"Сделай краткое резюме ключевых изменений для Telegram."
+            )
+
+            url = f"{self.base_url}/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": PATCHNOTES_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": 0.5,
+                "max_tokens": 1000,
+            }
+
+            async with aiohttp.ClientSession(timeout=self.timeout) as session:
+                async with session.post(url, headers=headers, json=payload) as response:
+                    if response.status != 200:
+                        logger.error("LLM API (PatchNotes) вернул статус %d", response.status)
+                        return None
+                    data = await response.json()
+                    return data["choices"][0]["message"]["content"].strip()
+
+        except Exception as exc:
+            logger.error("Ошибка AI анализа патча: %s", exc)
+            return None
+
+
+# ─── Промпты для новых мониторов ──────────────────────────────────────────────
+
+WORKSHOP_SYSTEM_PROMPT = """Ты — эксперт по модам DayZ. Создай краткое, увлекательное описание мода для Telegram-канала на русском языке.
+
+Правила:
+- Пиши на русском языке
+- Максимум 3-4 предложения (150-250 символов)
+- Опиши что делает мод, его главную фичу
+- Упомяни чем полезен для игроков
+- НЕ выдумывай функции, которых нет в описании
+- НЕ придумывай конкретные механики если они не описаны
+- Используй emoji по смыслу (1-2 emoji)
+- Если описание мода слишком короткое или непонятное — просто перескажи что есть
+- Формат: короткий абзац, без заголовков"""
+
+PATCHNOTES_SYSTEM_PROMPT = """Ты — гейм-журналист, специализирующийся на DayZ. Создай краткое резюме патчноута для Telegram-канала на русском языке.
+
+Правила:
+- Пиши на русском языке
+- Структура: краткое вступление + список ключевых изменений
+- Форматируй через bullet points (•)
+- Максимум 5-7 самых важных изменений — не пересказывай всё
+- Группируй похожие изменения (все фиксы оружия — в один пункт)
+- НЕ выдумывай изменения, которых нет в релиз-нотах
+- Если текст слишком короткий — просто перескажи что есть
+- Используй emoji по категориям:
+  🔫 — оружие, 🏗 — строительство, 🧟 — зомби/инфекция
+  🚗 — транспорт, 🎨 — визуал, 🐛 — фиксы, ⚙️ — техническое
+- В конце — короткий вывод (1 предложение)
+- Общий объём: 200-400 символов"""
+
+
+# ─── Standalone функции (для использования без AIAnalyzer instance) ──────────
+
+# Глобальный instance для standalone вызовов
+_analyzer_instance: Optional[AIAnalyzer] = None
+
+
+def _get_analyzer() -> AIAnalyzer:
+    """Получает или создаёт глобальный AIAnalyzer instance."""
+    global _analyzer_instance
+    if _analyzer_instance is None:
+        from config import Config
+        cfg = Config()
+        _analyzer_instance = AIAnalyzer(
+            api_key=cfg.AI_API_KEY,
+            base_url=cfg.AI_BASE_URL,
+            model=cfg.AI_MODEL,
+        )
+    return _analyzer_instance
+
+
+async def analyze_workshop_mod(mod: dict) -> Optional[str]:
+    """Standalone функция для анализа мода Workshop."""
+    analyzer = _get_analyzer()
+    return await analyzer.analyze_workshop_mod(mod)
+
+
+async def analyze_patch_notes(item: dict) -> Optional[str]:
+    """Standalone функция для анализа патчноутов."""
+    analyzer = _get_analyzer()
+    return await analyzer.analyze_patch_notes(item)

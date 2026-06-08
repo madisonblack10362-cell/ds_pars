@@ -33,3 +33,7 @@ upload/
 skills/
 logs/
 *.log
+
+# Monitor state files
+workshop_state.json
+patchnotes_state.json
