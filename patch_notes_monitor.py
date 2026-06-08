@@ -324,40 +324,130 @@ def _escape_html(text: str) -> str:
 # ─── Основной цикл ─────────────────────────────────────────────────────────────
 
 async def run_patch_monitor(
-    telegram_bot,
+    telegram_bot=None,
+    db=None,
+    ai_analyzer=None,
+    web_panel_url: str = "",
+    web_panel_api_key: str = "",
     check_interval: int = 1800,
     ai_analyze: bool = True,
 ):
-    """Основной цикл монитора патчноутов."""
-    logger.info("🚀 Patch Notes Monitor запущен (интервал: %d сек)", check_interval)
+    """Основной цикл монитора патчноутов.
+
+    Контент идёт через модерацию:
+      1. Сохраняется в БД как сообщение (source_type='patchnotes')
+      2. Отправляется на веб-панель для модерации
+      3. Публикуется в Telegram ТОЛЬКО после одобрения на панели
+    """
+    logger.info("Patch Notes Monitor запущен (интервал: %d сек)", check_interval)
 
     while True:
         try:
-            logger.info("🔍 Проверяем патчноуты DayZ...")
+            logger.info("Проверяем патчноуты DayZ...")
             new_patches = await check_for_new_patches(include_non_patch=False)
 
             for item in new_patches:
                 try:
-                    logger.info("📋 Обрабатываем: %s (ID: %s)", item["title"], item["id"])
+                    logger.info("Обрабатываем: %s (ID: %s)", item["title"], item["id"])
 
                     ai_summary = None
-                    if ai_analyze:
+                    ai_analysis_result = None
+                    if ai_analyze and ai_analyzer:
+                        try:
+                            ai_analysis_result = await ai_analyzer.analyze_patch_notes(item)
+                            if ai_analysis_result:
+                                ai_summary = ai_analysis_result.get("summary", "")
+                        except Exception as e:
+                            logger.error("AI анализ патча %s не удался: %s", item["id"], e)
+                    elif ai_analyze:
+                        # Fallback: standalone-анализ без экземпляра анализатора
                         try:
                             from ai_analyzer import analyze_patch_notes
-                            ai_summary = await analyze_patch_notes(item)
+                            ai_analysis_result = await analyze_patch_notes(item)
+                            if ai_analysis_result:
+                                ai_summary = ai_analysis_result.get("summary", "")
                         except Exception as e:
                             logger.error("AI анализ патча %s не удался: %s", item["id"], e)
 
                     msg = format_patch_message(item, ai_summary)
 
-                    if telegram_bot:
-                        await telegram_bot.send_patch_post(msg)
-                        logger.info("✅ Патч '%s' опубликован в Telegram", item["title"])
+                    # --- Модерация: сохраняем в БД + отправляем на веб-панель ---
+                    saved_to_db = False
+                    if db:
+                        try:
+                            images = [item.get("image_url")] if item.get("image_url") else []
+                            links = [item.get("link")] if item.get("link") else []
+                            content_text = item.get("content", "") or item.get("summary", "") or item.get("title", "")
+                            msg_id = await db.save_message(
+                                external_id=item["id"],
+                                source_type="patchnotes",
+                                source_id=f"steam_news_{item.get('source', 'rss')}",
+                                server_name=item.get("source", "Steam News"),
+                                text=content_text,
+                                title=item.get("title", ""),
+                                images=images,
+                                links=links,
+                            )
+                            if msg_id:
+                                news_type = ai_analysis_result.get("news_type", "update") if ai_analysis_result else "update"
+                                priority = ai_analysis_result.get("priority", "high") if ai_analysis_result else "high"
+                                summary = ai_analysis_result.get("summary", "") if ai_analysis_result else ""
+                                formatted_post = ai_analysis_result.get("formatted_post", msg.get("text", "")) if ai_analysis_result else msg.get("text", "")
 
-                        state = _load_state()
-                        if item["id"] not in state.get("posted_ids", []):
-                            state["posted_ids"].append(item["id"])
-                            _save_state(state)
+                                await db.save_processed(
+                                    message_id=msg_id,
+                                    news_type=news_type,
+                                    priority=priority,
+                                    should_publish=False,
+                                    summary=summary,
+                                    server_name=item.get("source", "Steam News"),
+                                    formatted_post=formatted_post,
+                                )
+                                saved_to_db = True
+                                logger.info(
+                                    "Патч '%s' #%d отправлен на модерацию (type=%s, priority=%s)",
+                                    item["title"], msg_id, news_type, priority,
+                                )
+                        except Exception as e:
+                            logger.error("Ошибка сохранения патча %s в БД: %s", item["id"], e)
+
+                    # Отправляем на веб-панель для модерации
+                    if web_panel_url:
+                        try:
+                            from web_app_integration import send_to_web_panel
+                            success = await send_to_web_panel(
+                                news_data={
+                                    "externalId": item["id"],
+                                    "serverName": item.get("source", "Steam News"),
+                                    "content": item.get("content", "") or item.get("summary", "") or item.get("title", ""),
+                                    "summary": ai_summary or "",
+                                    "formattedPost": msg.get("text", ""),
+                                    "newsType": ai_analysis_result.get("news_type", "update") if ai_analysis_result else "update",
+                                    "priority": ai_analysis_result.get("priority", "high") if ai_analysis_result else "high",
+                                    "images": [item.get("image_url")] if item.get("image_url") else [],
+                                },
+                                web_app_url=web_panel_url,
+                                bot_api_key=web_panel_api_key or None,
+                            )
+                            if success:
+                                logger.info("Патч '%s' отправлен на веб-панель", item["title"])
+                            else:
+                                logger.error("Веб-панель: не удалось отправить патч '%s'", item["title"])
+                        except ImportError:
+                            logger.warning("web_app_integration не найден — модерация через панель недоступна")
+                        except Exception as e:
+                            logger.error("Ошибка отправки патча на веб-панель: %s", e)
+                    elif not saved_to_db:
+                        # Нет БД и нет веб-панели — fallback: прямой отправ (старое поведение)
+                        if telegram_bot:
+                            await telegram_bot.send_patch_post(msg)
+                            logger.info("Патч '%s' опубликован в Telegram (без модерации — нет БД/панели)", item["title"])
+
+                    # Отмечаем как отправленный в state
+                    state = _load_state()
+                    if item["id"] not in state.get("posted_ids", []):
+                        state["posted_ids"].append(item["id"])
+                        _save_state(state)
 
                 except Exception as e:
                     logger.error("Ошибка обработки патча %s: %s", item.get("id", "unknown"), e)
@@ -365,7 +455,7 @@ async def run_patch_monitor(
         except Exception as e:
             logger.error("Ошибка в основном цикле Patch Notes монитора: %s", e)
 
-        logger.info("⏳ Следующая проверка через %d секунд...", check_interval)
+        logger.info("Следующая проверка через %d секунд...", check_interval)
         await asyncio.sleep(check_interval)
 
 

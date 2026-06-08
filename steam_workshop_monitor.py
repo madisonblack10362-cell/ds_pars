@@ -414,22 +414,32 @@ def _escape_html(text: str) -> str:
 # ─── Основной цикл ─────────────────────────────────────────────────────────────
 
 async def run_workshop_monitor(
-    telegram_bot,
+    telegram_bot=None,
+    db=None,
+    ai_analyzer=None,
+    web_panel_url: str = "",
+    web_panel_api_key: str = "",
     steam_api_key: Optional[str] = None,
     check_interval: int = 3600,
     min_subscriptions: int = 100,
     ai_analyze: bool = True,
 ):
-    """Основной цикл монитора Steam Workshop."""
+    """Основной цикл монитора Steam Workshop.
+
+    Контент идёт через модерацию:
+      1. Сохраняется в БД как сообщение (source_type='workshop')
+      2. Отправляется на веб-панель для модерации
+      3. Публикуется в Telegram ТОЛЬКО после одобрения на панели
+    """
     logger.info(
-        "🚀 Steam Workshop Monitor запущен (интервал: %d сек, мин. подписчиков: %d)",
+        "Steam Workshop Monitor запущен (интервал: %d сек, мин. подписчиков: %d)",
         check_interval,
         min_subscriptions,
     )
 
     while True:
         try:
-            logger.info("🔍 Проверяем Steam Workshop на новые моды...")
+            logger.info("Проверяем Steam Workshop на новые моды...")
             new_mods = await check_for_new_mods(
                 steam_api_key=steam_api_key,
                 min_subscriptions=min_subscriptions,
@@ -439,27 +449,108 @@ async def run_workshop_monitor(
             for mod in new_mods:
                 try:
                     logger.info(
-                        "📝 Обрабатываем мод: %s (ID: %s)", mod["title"], mod["id"]
+                        "Обрабатываем мод: %s (ID: %s)", mod["title"], mod["id"]
                     )
 
                     ai_summary = None
-                    if ai_analyze:
+                    ai_analysis_result = None
+                    if ai_analyze and ai_analyzer:
+                        try:
+                            ai_analysis_result = await ai_analyzer.analyze_workshop_mod(mod)
+                            if ai_analysis_result:
+                                ai_summary = ai_analysis_result.get("summary", "")
+                        except Exception as e:
+                            logger.error("AI анализ мода %s не удался: %s", mod["id"], e)
+                    elif ai_analyze:
+                        # Fallback: standalone-анализ без экземпляра анализатора
                         try:
                             from ai_analyzer import analyze_workshop_mod
-                            ai_summary = await analyze_workshop_mod(mod)
+                            ai_analysis_result = await analyze_workshop_mod(mod)
+                            if ai_analysis_result:
+                                ai_summary = ai_analysis_result.get("summary", "")
                         except Exception as e:
                             logger.error("AI анализ мода %s не удался: %s", mod["id"], e)
 
                     msg = format_mod_message(mod, ai_summary)
 
-                    if telegram_bot:
-                        await telegram_bot.send_workshop_post(msg)
-                        logger.info("✅ Мод '%s' опубликован в Telegram", mod["title"])
+                    # --- Модерация: сохраняем в БД + отправляем на веб-панель ---
+                    saved_to_db = False
+                    if db:
+                        try:
+                            images = [mod.get("image_url")] if mod.get("image_url") else []
+                            links = [mod.get("url")] if mod.get("url") else []
+                            msg_id = await db.save_message(
+                                external_id=mod["id"],
+                                source_type="workshop",
+                                source_id="steam_workshop",
+                                server_name="Steam Workshop",
+                                text=mod.get("description", "") or mod.get("title", ""),
+                                title=mod.get("title", ""),
+                                author=mod.get("author", ""),
+                                images=images,
+                                links=links,
+                            )
+                            if msg_id:
+                                # Сохраняем результат AI-анализа
+                                news_type = ai_analysis_result.get("news_type", "mod_update") if ai_analysis_result else "mod_update"
+                                priority = ai_analysis_result.get("priority", "medium") if ai_analysis_result else "medium"
+                                summary = ai_analysis_result.get("summary", "") if ai_analysis_result else ""
+                                formatted_post = ai_analysis_result.get("formatted_post", msg.get("text", "")) if ai_analysis_result else msg.get("text", "")
 
-                        state = _load_state()
-                        if mod["id"] not in state.get("posted_ids", []):
-                            state["posted_ids"].append(mod["id"])
-                            _save_state(state)
+                                await db.save_processed(
+                                    message_id=msg_id,
+                                    news_type=news_type,
+                                    priority=priority,
+                                    should_publish=False,
+                                    summary=summary,
+                                    server_name="Steam Workshop",
+                                    formatted_post=formatted_post,
+                                )
+                                saved_to_db = True
+                                logger.info(
+                                    "Мод '%s' #%d отправлен на модерацию (type=%s, priority=%s)",
+                                    mod["title"], msg_id, news_type, priority,
+                                )
+                        except Exception as e:
+                            logger.error("Ошибка сохранения мода %s в БД: %s", mod["id"], e)
+
+                    # Отправляем на веб-панель для модерации
+                    if web_panel_url:
+                        try:
+                            from web_app_integration import send_to_web_panel
+                            success = await send_to_web_panel(
+                                news_data={
+                                    "externalId": mod["id"],
+                                    "serverName": "Steam Workshop",
+                                    "content": mod.get("description", "") or mod.get("title", ""),
+                                    "summary": ai_summary or "",
+                                    "formattedPost": msg.get("text", ""),
+                                    "newsType": ai_analysis_result.get("news_type", "mod_update") if ai_analysis_result else "mod_update",
+                                    "priority": ai_analysis_result.get("priority", "medium") if ai_analysis_result else "medium",
+                                    "images": [mod.get("image_url")] if mod.get("image_url") else [],
+                                },
+                                web_app_url=web_panel_url,
+                                bot_api_key=web_panel_api_key or None,
+                            )
+                            if success:
+                                logger.info("Мод '%s' отправлен на веб-панель", mod["title"])
+                            else:
+                                logger.error("Веб-панель: не удалось отправить мод '%s'", mod["title"])
+                        except ImportError:
+                            logger.warning("web_app_integration не найден — модерация через панель недоступна")
+                        except Exception as e:
+                            logger.error("Ошибка отправки мода на веб-панель: %s", e)
+                    elif not saved_to_db:
+                        # Нет БД и нет веб-панели — fallback: прямой отправ (старое поведение)
+                        if telegram_bot:
+                            await telegram_bot.send_workshop_post(msg)
+                            logger.info("Мод '%s' опубликован в Telegram (без модерации — нет БД/панели)", mod["title"])
+
+                    # Отмечаем как отправленный в state
+                    state = _load_state()
+                    if mod["id"] not in state.get("posted_ids", []):
+                        state["posted_ids"].append(mod["id"])
+                        _save_state(state)
 
                 except Exception as e:
                     logger.error("Ошибка обработки мода %s: %s", mod.get("id", "unknown"), e)
@@ -467,7 +558,7 @@ async def run_workshop_monitor(
         except Exception as e:
             logger.error("Ошибка в основном цикле Workshop монитора: %s", e)
 
-        logger.info("⏳ Следующая проверка через %d секунд...", check_interval)
+        logger.info("Следующая проверка через %d секунд...", check_interval)
         await asyncio.sleep(check_interval)
 
 

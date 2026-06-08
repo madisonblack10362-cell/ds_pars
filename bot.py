@@ -232,6 +232,10 @@ class DayZNewsMonitor:
             self._workshop_task = asyncio.create_task(
                 run_workshop_monitor(
                     telegram_bot=self.publisher,
+                    db=self.db,
+                    ai_analyzer=self.ai_analyzer,
+                    web_panel_url=self.web_panel_url,
+                    web_panel_api_key=self.web_panel_api_key,
                     steam_api_key=steam_api_key,
                     check_interval=workshop_interval,
                     min_subscriptions=workshop_min_subs,
@@ -251,6 +255,10 @@ class DayZNewsMonitor:
             self._patch_task = asyncio.create_task(
                 run_patch_monitor(
                     telegram_bot=self.publisher,
+                    db=self.db,
+                    ai_analyzer=self.ai_analyzer,
+                    web_panel_url=self.web_panel_url,
+                    web_panel_api_key=self.web_panel_api_key,
                     check_interval=patch_interval,
                     ai_analyze=bool(self.ai_analyzer),
                 )
