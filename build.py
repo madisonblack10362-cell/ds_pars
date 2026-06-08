@@ -26,6 +26,7 @@ REQUIRED = [
     "aiofiles>=23.2.1",
     "customtkinter>=5.2.0",
     "httpx>=0.27.0",
+    "playwright>=1.40.0",
     "pyinstaller>=6.0.0",
 ]
 
@@ -63,6 +64,8 @@ a = Analysis(
         'apscheduler.triggers.date', 'apscheduler.executors.asyncio',
         'apscheduler.jobstores.memory', 'multidict', 'yarl', 'aiofiles',
         'uvloop',
+        'playwright', 'playwright.async_api', 'playwright.sync_api',
+        'greenlet',
     ],
     hookspath=[], hooksconfig={}, runtime_hooks=[],
     excludes=['matplotlib', 'PIL', 'scipy', 'pandas', 'notebook',

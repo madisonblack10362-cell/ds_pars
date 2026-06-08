@@ -211,10 +211,9 @@ class DayZNewsMonitor:
                 request_timeout=cfg.get("request_timeout_seconds", 30),
                 max_retries=cfg.get("max_retries", 3),
                 max_posts_per_check=cfg.get("reddit_max_posts_per_check", 5),
-                proxy=cfg.get("reddit_proxy", ""),
             )
             await self.reddit_monitor.load_initial_state()
-            logger.info("Reddit-монитор инициализирован (%d сабреддитов)", len(reddit_sources))
+            logger.info("Reddit-монитор инициализирован (%d сабреддитов, Playwright)", len(reddit_sources))
         else:
             logger.info("Reddit-монитор отключён: нет сабреддитов в настройках")
 
@@ -926,6 +925,8 @@ class DayZNewsMonitor:
             await self.scheduler.stop()
         if self.publisher:
             await self.publisher.close()
+        if self.reddit_monitor:
+            await self.reddit_monitor.close_browser()
         if self.db:
             await self.db.close()
 
