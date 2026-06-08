@@ -453,21 +453,16 @@ async def run_workshop_monitor(
                     )
 
                     ai_summary = None
-                    ai_analysis_result = None
                     if ai_analyze and ai_analyzer:
                         try:
-                            ai_analysis_result = await ai_analyzer.analyze_workshop_mod(mod)
-                            if ai_analysis_result:
-                                ai_summary = ai_analysis_result.get("summary", "")
+                            ai_summary = await ai_analyzer.analyze_workshop_mod(mod)
                         except Exception as e:
                             logger.error("AI анализ мода %s не удался: %s", mod["id"], e)
                     elif ai_analyze:
                         # Fallback: standalone-анализ без экземпляра анализатора
                         try:
                             from ai_analyzer import analyze_workshop_mod
-                            ai_analysis_result = await analyze_workshop_mod(mod)
-                            if ai_analysis_result:
-                                ai_summary = ai_analysis_result.get("summary", "")
+                            ai_summary = await analyze_workshop_mod(mod)
                         except Exception as e:
                             logger.error("AI анализ мода %s не удался: %s", mod["id"], e)
 
@@ -492,10 +487,10 @@ async def run_workshop_monitor(
                             )
                             if msg_id:
                                 # Сохраняем результат AI-анализа
-                                news_type = ai_analysis_result.get("news_type", "mod_update") if ai_analysis_result else "mod_update"
-                                priority = ai_analysis_result.get("priority", "medium") if ai_analysis_result else "medium"
-                                summary = ai_analysis_result.get("summary", "") if ai_analysis_result else ""
-                                formatted_post = ai_analysis_result.get("formatted_post", msg.get("text", "")) if ai_analysis_result else msg.get("text", "")
+                                news_type = "mod_update"
+                                priority = "medium"
+                                summary = ai_summary or ""
+                                formatted_post = msg.get("text", "")
 
                                 await db.save_processed(
                                     message_id=msg_id,
@@ -525,8 +520,8 @@ async def run_workshop_monitor(
                                     "content": mod.get("description", "") or mod.get("title", ""),
                                     "summary": ai_summary or "",
                                     "formattedPost": msg.get("text", ""),
-                                    "newsType": ai_analysis_result.get("news_type", "mod_update") if ai_analysis_result else "mod_update",
-                                    "priority": ai_analysis_result.get("priority", "medium") if ai_analysis_result else "medium",
+                                    "newsType": "mod_update",
+                                    "priority": "medium",
                                     "images": [mod.get("image_url")] if mod.get("image_url") else [],
                                 },
                                 web_app_url=web_panel_url,

@@ -351,21 +351,16 @@ async def run_patch_monitor(
                     logger.info("Обрабатываем: %s (ID: %s)", item["title"], item["id"])
 
                     ai_summary = None
-                    ai_analysis_result = None
                     if ai_analyze and ai_analyzer:
                         try:
-                            ai_analysis_result = await ai_analyzer.analyze_patch_notes(item)
-                            if ai_analysis_result:
-                                ai_summary = ai_analysis_result.get("summary", "")
+                            ai_summary = await ai_analyzer.analyze_patch_notes(item)
                         except Exception as e:
                             logger.error("AI анализ патча %s не удался: %s", item["id"], e)
                     elif ai_analyze:
                         # Fallback: standalone-анализ без экземпляра анализатора
                         try:
                             from ai_analyzer import analyze_patch_notes
-                            ai_analysis_result = await analyze_patch_notes(item)
-                            if ai_analysis_result:
-                                ai_summary = ai_analysis_result.get("summary", "")
+                            ai_summary = await analyze_patch_notes(item)
                         except Exception as e:
                             logger.error("AI анализ патча %s не удался: %s", item["id"], e)
 
@@ -389,10 +384,10 @@ async def run_patch_monitor(
                                 links=links,
                             )
                             if msg_id:
-                                news_type = ai_analysis_result.get("news_type", "update") if ai_analysis_result else "update"
-                                priority = ai_analysis_result.get("priority", "high") if ai_analysis_result else "high"
-                                summary = ai_analysis_result.get("summary", "") if ai_analysis_result else ""
-                                formatted_post = ai_analysis_result.get("formatted_post", msg.get("text", "")) if ai_analysis_result else msg.get("text", "")
+                                news_type = "update"
+                                priority = "high"
+                                summary = ai_summary or ""
+                                formatted_post = msg.get("text", "")
 
                                 await db.save_processed(
                                     message_id=msg_id,
@@ -422,8 +417,8 @@ async def run_patch_monitor(
                                     "content": item.get("content", "") or item.get("summary", "") or item.get("title", ""),
                                     "summary": ai_summary or "",
                                     "formattedPost": msg.get("text", ""),
-                                    "newsType": ai_analysis_result.get("news_type", "update") if ai_analysis_result else "update",
-                                    "priority": ai_analysis_result.get("priority", "high") if ai_analysis_result else "high",
+                                    "newsType": "update",
+                                    "priority": "high",
                                     "images": [item.get("image_url")] if item.get("image_url") else [],
                                 },
                                 web_app_url=web_panel_url,
