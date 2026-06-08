@@ -151,6 +151,16 @@ class RedditMonitor:
                     "--disable-dev-shm-usage",
                     "--disable-gpu",
                     "--disable-extensions",
+                    "--disable-infobars",
+                    "--window-size=1920,1080",
+                    "--start-maximized",
+                    "--disable-blink-features=AutomationControlled",
+                    "--exclude-switches=enable-automation",
+                    "--disable-features=IsolateOrigins,site-per-process",
+                    "--disable-hang-monitor",
+                    "--disable-notifications",
+                    "--disable-popup-blocking",
+                    "--lang=en-US",
                 ]
 
                 self._browser = await self._playwright.chromium.launch(
@@ -158,6 +168,8 @@ class RedditMonitor:
                     args=launch_args,
                 )
 
+                # Stealth: инжектим скрипт СРАЗУ в каждый новый контекст,
+                # чтобы скрыть navigator.webdriver и прочие признаки автоматизации
                 self._context = await self._browser.new_context(
                     user_agent=(
                         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -167,9 +179,51 @@ class RedditMonitor:
                     viewport={"width": 1920, "height": 1080},
                     locale="en-US",
                     timezone_id="America/New_York",
+                    screen={"width": 1920, "height": 1080},
+                    extra_http_headers={
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "sec-ch-ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+                        "sec-ch-ua-mobile": "?0",
+                        "sec-ch-ua-platform": '"Windows"',
+                    },
                 )
 
-                logger.info("RedditMonitor: Chromium запущен (headless)")
+                # Stealth injection — скрытие playwright/automation признаков
+                stealth_js = """
+                // Скрытие webdriver
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                // Скрытие playwright
+                delete navigator.__proto__.webdriver;
+                // Chrome runtime
+                window.chrome = {runtime: {}, loadTimes: function(){}, csi: function(){}};
+                // Permissions
+                const originalQuery = window.navigator.permissions.query;
+                window.navigator.permissions.query = (parameters) => (
+                    parameters.name === 'notifications' ?
+                        Promise.resolve({state: Notification.permission}) :
+                        originalQuery(parameters)
+                );
+                // Plugins (делаем непустым)
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5].map(() => ({
+                        name: 'Chrome PDF Plugin',
+                        description: 'Portable Document Format',
+                        filename: 'internal-pdf-viewer',
+                        length: 1,
+                    })),
+                });
+                // Languages
+                Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+                // Platform
+                Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});
+                // Hardware concurrency
+                Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});
+                // Device memory
+                Object.defineProperty(navigator, 'deviceMemory', {get: () => 8});
+                """
+                await self._context.add_init_script(stealth_js)
+
+                logger.info("RedditMonitor: Chromium запущен (headless + stealth)")
                 return self._context
 
             except Exception as e:
@@ -203,37 +257,47 @@ class RedditMonitor:
         if not text:
             return True
 
-        block_markers = [
-            "blocked",
-            "captcha",
-            "CAPTCHA",
-            "Captcha",
-            "Too Many Requests",
+        # Жёсткие блокировки — точно страница заблокирована
+        hard_blocks = [
+            "You've been blocked",
             "Access denied",
-            "Доступ ограничен",
             "Доступ заблокирован",
-            "доступ временно ограничен",
-            "Security Checkpoint",
-            "Service Unavailable",
-            "503",
             "Error 403",
             "Forbidden",
-            "cloudflare",
-            "Cloudflare",
-            "just a moment",
-            "checking your browser",
-            "network security",
-            "You've been blocked",
+            "Too Many Requests",
+            "Service Unavailable",
         ]
-
-        for marker in block_markers:
+        for marker in hard_blocks:
             if marker in text:
                 return True
 
-        # Если страница слишком короткая и не содержит постов — скорее всего блок
-        if len(text) < 500 and "post" not in text.lower():
-            return True
+        # Captcha / Cloudflare challenge — может пройти после ожидания
+        soft_blocks = [
+            "captcha", "CAPTCHA", "Captcha",
+            "Security Checkpoint",
+            "just a moment",
+            "checking your browser",
+            "Доступ ограничен",
+            "доступ временно ограничен",
+        ]
+        for marker in soft_blocks:
+            if marker in text:
+                return "soft"
 
+        return False
+
+    async def _wait_cloudflare(self, page: Page, max_wait_ms: int = 15000) -> bool:
+        """Ждёт пока Cloudflare challenge решится (если headless может его пройти)."""
+        for _ in range(5):
+            await asyncio.sleep(3)
+            text = await page.text_content("body") or ""
+            status = self._is_blocked_text(text)
+            if status is False:
+                return True
+            if status is True:
+                return False
+            # status == "soft" — продолжаем ждать
+            logger.debug("RedditMonitor: Cloudflare challenge ещё активен, жду...")
         return False
 
     # =====================================================================
@@ -258,11 +322,21 @@ class RedditMonitor:
             # Ждём React рендер (аналог reactRenderDelay в Zennoparser)
             await asyncio.sleep(self._react_render_delay / 1000)
 
-            # Проверяем блокировку ДО ожидания элементов
+            # Проверяем блокировку
             page_text = await page.text_content("body") or ""
-            if self._is_blocked_text(page_text):
+            block_status = self._is_blocked_text(page_text)
+
+            if block_status is True:
+                # Жёсткая блокировка — сразу выход
                 logger.warning("RedditMonitor: БЛОКИРОВКА обнаружена на %s", url)
                 return False
+            elif block_status == "soft":
+                # Cloudflare challenge — пробуем подождать
+                logger.info("RedditMonitor: Cloudflare challenge на %s — жду...", url)
+                if not await self._wait_cloudflare(page):
+                    logger.warning("RedditMonitor: Cloudflare не прошёл на %s", url)
+                    return False
+                logger.info("RedditMonitor: Cloudflare challenge пройден!")
 
             # Ждём появления постов
             if wait_selector:
@@ -279,7 +353,8 @@ class RedditMonitor:
 
             # Повторная проверка после ожидания
             page_text = await page.text_content("body") or ""
-            if self._is_blocked_text(page_text):
+            block_status2 = self._is_blocked_text(page_text)
+            if block_status2 is True:
                 logger.warning("RedditMonitor: БЛОКИРОВКА после ожидания на %s", url)
                 return False
 
