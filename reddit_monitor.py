@@ -72,6 +72,14 @@ class RedditMonitor:
         "how do i", "where can i", "can someone",
         "looking for group", "lfg", "lfm",
         "server looking", "recruiting",
+        # Team size / budget / dev complaints
+        "dev team is still so small", "fund a", "aaa budget",
+        "dev team", "why is the team", "small team",
+        "team is too small", "why are the devs",
+        "hire more developers", "hire more devs",
+        "bigger development team", "larger dev team",
+        "single title", "fund a one time",
+        "team size", "team needs to grow",
     ]
 
     def __init__(
