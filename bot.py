@@ -36,6 +36,8 @@ from publisher import Publisher
 from scheduler import Scheduler
 from vk_monitor import VKMonitor
 from reddit_monitor import RedditMonitor
+from steam_workshop_monitor import run_workshop_monitor, fetch_popular_mods
+from patch_notes_monitor import run_patch_monitor, fetch_steam_news
 
 
 class DayZNewsMonitor:
@@ -59,6 +61,8 @@ class DayZNewsMonitor:
         self.scheduler: Optional[Scheduler] = None
         self.vk_monitor: Optional[VKMonitor] = None
         self.reddit_monitor: Optional[RedditMonitor] = None
+        self._workshop_task: Optional[asyncio.Task] = None
+        self._patch_task: Optional[asyncio.Task] = None
         self.web_panel_url: str = ""
         self.web_panel_api_key: str = ""
         self.notify_chat_id: str = ""
@@ -218,6 +222,44 @@ class DayZNewsMonitor:
             logger.info("Reddit-монитор отключён: нет сабреддитов в настройках")
 
         # -----------------------------------------------------------------
+        # Steam Workshop монитор
+        # -----------------------------------------------------------------
+        if cfg.get("workshop_enabled", False):
+            workshop_interval = cfg.get("workshop_interval_minutes", 60) * 60
+            workshop_min_subs = cfg.get("workshop_min_subscriptions", 100)
+            steam_api_key = cfg.get("steam_api_key", "") or None
+
+            self._workshop_task = asyncio.create_task(
+                run_workshop_monitor(
+                    telegram_bot=self.publisher,
+                    steam_api_key=steam_api_key,
+                    check_interval=workshop_interval,
+                    min_subscriptions=workshop_min_subs,
+                    ai_analyze=bool(self.ai_analyzer),
+                )
+            )
+            logger.info("Steam Workshop монитор запущен (интервал: %d мин)", cfg.get("workshop_interval_minutes", 60))
+        else:
+            logger.info("Steam Workshop монитор отключён")
+
+        # -----------------------------------------------------------------
+        # Патчноуты монитор
+        # -----------------------------------------------------------------
+        if cfg.get("patchnotes_enabled", False):
+            patch_interval = cfg.get("patchnotes_interval_minutes", 30) * 60
+
+            self._patch_task = asyncio.create_task(
+                run_patch_monitor(
+                    telegram_bot=self.publisher,
+                    check_interval=patch_interval,
+                    ai_analyze=bool(self.ai_analyzer),
+                )
+            )
+            logger.info("Патчноуты монитор запущен (интервал: %d мин)", cfg.get("patchnotes_interval_minutes", 30))
+        else:
+            logger.info("Патчноуты монитор отключён")
+
+        # -----------------------------------------------------------------
         # Discord мониторинг (запускается как отдельная фоновая задача)
         # -----------------------------------------------------------------
         discord_token = cfg.get("discord_token", "")
@@ -322,6 +364,8 @@ class DayZNewsMonitor:
             "check_discord": "Discord мониторинг",
             "check_vk": "VK мониторинг",
             "check_reddit": "Reddit мониторинг",
+            "workshop": "Steam Workshop",
+            "patchnotes": "Патчноуты",
             "analyze_messages": "AI-анализ сообщений",
             "publish_from_panel": "Публикация с панели",
             "check_pending_moderation": "Проверка модерации",
@@ -927,6 +971,10 @@ class DayZNewsMonitor:
             await self.publisher.close()
         if self.reddit_monitor:
             await self.reddit_monitor.close_browser()
+        if self._workshop_task:
+            self._workshop_task.cancel()
+        if self._patch_task:
+            self._patch_task.cancel()
         if self.db:
             await self.db.close()
 

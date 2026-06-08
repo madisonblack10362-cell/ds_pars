@@ -805,5 +805,47 @@ class Publisher:
         # Сводка отправляется в основной канал (channel_id), а не в канал новостей
         return await self.publish_message(text, chat_id=self.channel_id)
 
+    # ─── Методы для Steam Workshop и Patch Notes мониторов ──────────────────
+
+    async def send_workshop_post(self, msg: dict) -> Optional[int]:
+        """
+        Отправляет пост о моде Steam Workshop в Telegram.
+
+        Args:
+            msg: Словарь от steam_workshop_monitor.format_mod_message():
+                - text: HTML текст
+                - photo_url: URL превью мода
+                - mod_id: ID мода
+        """
+        text = msg.get("text", "")
+        photo_url = msg.get("photo_url", "")
+
+        if photo_url:
+            return await self.publish_message(
+                text, image_urls=[photo_url]
+            )
+        else:
+            return await self.publish_message(text)
+
+    async def send_patch_post(self, msg: dict) -> Optional[int]:
+        """
+        Отправляет пост о патч-ноутах в Telegram.
+
+        Args:
+            msg: Словарь от patch_notes_monitor.format_patch_message():
+                - text: HTML текст
+                - photo_url: URL картинки (если есть)
+                - patch_id: ID патча
+        """
+        text = msg.get("text", "")
+        photo_url = msg.get("photo_url", "")
+
+        if photo_url:
+            return await self.publish_message(
+                text, image_urls=[photo_url]
+            )
+        else:
+            return await self.publish_message(text)
+
 
 
