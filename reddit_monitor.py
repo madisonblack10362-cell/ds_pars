@@ -49,6 +49,51 @@ class RedditMonitor:
         "playstation", "ps4", "ps5", "psn", "play station", "ps5 pro",
         "плойка", "плойке", "плойку", "плойкой",
         "консоль", "консоли", "консольная версия", "console",
+        # --- Личный gameplay / скриншоты ---
+        "finally reached", "made it to", "got to the", "found my first",
+        "my first ", "i just found", "i just got", "i finally",
+        "look what i found", "can't believe i", "cant believe i",
+        "so proud of", "after hours of", "after days of",
+        "my base", "my car", "my helicopter", "my truck", "my camp",
+        "my build", "my stash", "my tent", "my loot",
+        "here's my", "heres my", "check out my",
+        "i survived", "i managed to", "i got killed",
+        "i died to", "death by", "killed by", "got killed",
+        "my squad", "my team", "my friend", "my buddy",
+        "me and my", "playing with", "session with",
+        "good run", "great run", "bad run", "wipe run",
+        "stream sniped", "got stream", "stream sniper",
+        "running to ", "walking to ", "driving to ","sailing to ",
+        "first time", "day 1 ", "day one ","day 100",
+        "1,000 hours", "1000 hours", "500 hours", "5000 hours",
+        "hours in", "hours of", "x hours",
+        "returning player", "came back", "taking a break",
+        "unsubscribing", "leaving dayz", "quitting dayz",
+        " goodbye ", "farewell", "it's been fun",
+        "fps", "my fps", "low fps", "high fps", "fps drop",
+        "gpu", "cpu", "rtx", "gtx", "ram usage",
+        # --- Вопросы / помощь ---
+        "how do i", "how to", "where can i", "where do i",
+        "can someone help", "need help", "help me",
+        "any tips", "any advice", "what's the best", "whats the best",
+        "is it worth", "should i buy", "should i play",
+        "beginner", "new player", "new to dayz",
+        "looking for group", "lfg", "lfm", "eu server", "na server",
+        "server looking", "recruiting", "clan looking",
+        # --- Мемы / шутки ---
+        "dayz in a nutshell", "dayz moments", "sums up",
+        "typical dayz", "only in dayz", "dayz experience",
+        "when you", "when u ", "be like",
+        # --- Баги / краши ---
+        "game crashed", "game freezes", "stuttering", "lagging",
+        "error code", "crash report", "can't launch", "wont launch",
+        # --- Травма / жалобы ---
+        "this game is dead", "game is dying", "dead game",
+        "devs don't care", "developers don't",
+        "fix this", "broken game", "waste of money",
+        "not worth it", "refunded", "refund",
+        "is dayz worth", "is dayz fun", "is dayz dead",
+        "unpopular opinion", "hot take",
     ]
 
     # Паттерны мнений/предложений — отсекаем до AI-анализа
@@ -62,17 +107,6 @@ class RedditMonitor:
         "am i the only", "who else thinks",
         "can we get", "please add", "we want",
         "what if they", "imagine if",
-        "unpopular opinion", "hot take",
-        "this game is dead", "game is dying",
-        "devs don't care", "developers don't",
-        "fix this", "broken game", "waste of money",
-        "not worth it", "refunded", "refund",
-        "is dayz worth", "is dayz fun", "is dayz dead",
-        "should i buy", "should i play",
-        "how do i", "where can i", "can someone",
-        "looking for group", "lfg", "lfm",
-        "server looking", "recruiting",
-        # Team size / budget / dev complaints
         "dev team is still so small", "fund a", "aaa budget",
         "dev team", "why is the team", "small team",
         "team is too small", "why are the devs",
@@ -80,6 +114,13 @@ class RedditMonitor:
         "bigger development team", "larger dev team",
         "single title", "fund a one time",
         "team size", "team needs to grow",
+        "what do you think", "thoughts on", "what's your",
+        "whats your", "your opinion", "who else",
+        # --- Личные впечатления / обзоры ---
+        "i love this game", "i hate this game", "this game is",
+        "best game", "worst game", "love dayz", "hate dayz",
+        "my review", "honest review", "my thoughts on",
+        "rating this", "i rate this",
     ]
 
     def __init__(
@@ -767,6 +808,19 @@ class RedditMonitor:
         selftext = selftext.strip()
 
         text = selftext if len(selftext) > len(title) else title
+
+        # Фильтр: посты-скриншоты без описания (только title, нет selftext)
+        # Типично: "I finally reached the coast" — просто скрин с 0 текстом
+        has_images = bool(post.get("images", []))
+        is_image_post = has_images and len(selftext) < 50
+        title_words = len(title.split())
+        if is_image_post and title_words <= 8:
+            self._seen_post_ids[external_id] = external_id
+            logger.info(
+                "RedditMonitor: пропущен (скриншот без описания): %s",
+                title[:60],
+            )
+            return "blacklist"
 
         # Blacklist
         check_text = f"{title} {text}".lower()
