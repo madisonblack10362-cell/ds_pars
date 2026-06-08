@@ -762,16 +762,22 @@ _analyzer_instance: Optional[AIAnalyzer] = None
 
 
 def _get_analyzer() -> AIAnalyzer:
-    """Получает или создаёт глобальный AIAnalyzer instance."""
+    """Получает или создаёт глобальный AIAnalyzer instance из config.json."""
     global _analyzer_instance
     if _analyzer_instance is None:
-        from config import Config
-        cfg = Config()
-        _analyzer_instance = AIAnalyzer(
-            api_key=cfg.AI_API_KEY,
-            base_url=cfg.AI_BASE_URL,
-            model=cfg.AI_MODEL,
-        )
+        import os
+        _config_path = os.environ.get("CONFIG_PATH", "config.json")
+        try:
+            with open(_config_path, "r", encoding="utf-8") as _f:
+                _cfg = json.load(_f)
+            _analyzer_instance = AIAnalyzer(
+                api_key=_cfg.get("openai_api_key", ""),
+                base_url=_cfg.get("openai_base_url", "https://api.openai.com/v1"),
+                model=_cfg.get("openai_model", "gpt-4o-mini"),
+            )
+        except Exception as e:
+            logger.error("Не удалось загрузить config.json для standalone AI: %s", e)
+            raise
     return _analyzer_instance
 
 

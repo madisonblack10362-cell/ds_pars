@@ -161,7 +161,7 @@ def _extract_first_image(html: str) -> str:
 async def fetch_steam_news(max_entries: int = 20) -> list:
     news = []
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         feed = await loop.run_in_executor(None, feedparser.parse, STEAM_NEWS_RSS)
 
         entries = feed.get("entries", [])
