@@ -437,7 +437,6 @@ class DesktopGUI:
                 height=32, corner_radius=6,
             )
             entry.pack(side="left", padx=(8, 8), fill="x", expand=True)
-            self._bind_paste(entry)
             self._entries[key] = entry
 
             ctk.CTkLabel(row, text=hint, font=("Segoe UI", 9),
@@ -482,64 +481,43 @@ class DesktopGUI:
         hint_frame.pack(fill="x", padx=14, pady=(6, 4))
         ctk.CTkLabel(
             hint_frame,
-            text="Добавляйте YouTube-каналы для парсинга по Channel ID или URL",
+            text="Добавляйте YouTube-каналы для парсинга по URL или @handle",
             font=("Segoe UI", 10),
             text_color=self.TEXT3,
         ).pack(anchor="w")
         ctk.CTkLabel(
             hint_frame,
-            text="Пример: UCvQPcPcEzzMPTjTMzGCRN0g или https://www.youtube.com/@channel",
+            text="Пример: https://www.youtube.com/@karapasdayz",
             font=("Segoe UI", 9),
             text_color=self.TEXT3,
         ).pack(anchor="w")
 
-        # Поле ввода + кнопка добавления
+        # Поле ввода + кнопки
         add_row = ctk.CTkFrame(parent, fg_color="transparent")
         add_row.pack(fill="x", padx=14, pady=(4, 6))
 
+        # StringVar для надёжного чтения текста (обходит баг CTkEntry)
+        self._yt_channel_var = tk.StringVar(value="")
         self._yt_channel_entry = ctk.CTkEntry(
             add_row,
             border_color=self.BORDER, border_width=1,
             text_color=self.TEXT, font=("Consolas", 11),
             fg_color=self.BG_ELEVATED,
             height=32, corner_radius=6,
-            placeholder_text="Channel ID или URL YouTube...",
+            placeholder_text="URL или @handle YouTube канала...",
+            textvariable=self._yt_channel_var,
         )
-        self._yt_channel_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self._yt_channel_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
         self._bind_paste(self._yt_channel_entry)
 
-        # Кнопка "Вставить" — через PowerShell + запись во внутренний и внешний виджет
-        def _paste_channel():
-            try:
-                import subprocess
-                r = subprocess.run(
-                    ["powershell", "-command", "Get-Clipboard"],
-                    capture_output=True, text=True, timeout=5
-                )
-                text = r.stdout.strip()
-                if not text:
-                    return
-                # Пишем и во внутренний _entry и в CTkEntry
-                self._yt_channel_entry.delete(0, "end")
-                try:
-                    w = getattr(self._yt_channel_entry, "_entry", None)
-                    if w:
-                        w.delete(0, "end")
-                        w.insert(0, text)
-                    else:
-                        self._yt_channel_entry.insert(0, text)
-                except Exception:
-                    self._yt_channel_entry.insert(0, text)
-            except Exception as e:
-                self.append_log("ERROR", f"Вставка: {e}")
-
+        # Кнопка «Вставить» — читает из системного буфера обмена
         ctk.CTkButton(
-            add_row, text="📋 Вставить", width=90,
+            add_row, text="Вставить",
             font=("Segoe UI", 10),
-            command=_paste_channel,
-        ).pack(side="left", padx=(0, 8))
-
-
+            fg_color=self.BG_ELEVATED, hover_color=self.BORDER,
+            text_color=self.TEXT2, width=70, height=32, corner_radius=8,
+            command=self._paste_channel,
+        ).pack(side="left", padx=(0, 6))
 
         ctk.CTkButton(
             add_row, text="+ Добавить",
@@ -560,28 +538,22 @@ class DesktopGUI:
 
         self._yt_channel_widgets = []
 
+    def _paste_channel(self):
+        """Вставляет текст из буфера обмена в поле канала через StringVar."""
+        try:
+            text = self.root.clipboard_get()
+            if text and text.strip():
+                self._yt_channel_var.set(text.strip())
+                logger.debug("GUI: вставлено в поле канала: %s", text.strip()[:60])
+        except Exception as e:
+            logger.debug("GUI: ошибка вставки: %s", e)
+
     def _add_youtube_channel(self):
         """Добавляет канал в список и сохраняет в config."""
-        try:
-            return self._add_youtube_channel_inner()
-        except Exception as e:
-            self.append_log("ERROR", f"YouTube: ошибка добавления: {e}")
-            import traceback
-            traceback.print_exc()
-
-    def _add_youtube_channel_inner(self):
-        """Добавляет канал в список и сохраняет в config."""
-        # Читаем текст: сначала из CTkEntry, fallback на внутренний _entry
-        raw = self._yt_channel_entry.get().strip()
+        # Читаем из StringVar — 100% надёжно, не зависит от багов CTkEntry
+        raw = self._yt_channel_var.get().strip()
         if not raw:
-            try:
-                w = getattr(self._yt_channel_entry, "_entry", None)
-                if w:
-                    raw = w.get().strip()
-            except Exception:
-                pass
-        if not raw:
-            self.append_log("WARNING", "YouTube: поле канала пустое")
+            self.append_log("WARNING", "YouTube: введите URL или @handle канала")
             return
 
         # Парсим ID из URL или текста
@@ -616,24 +588,19 @@ class DesktopGUI:
             with open(self.config_path, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, indent=2, ensure_ascii=False)
             logger.info("YouTube: добавлен канал %s", channel_id)
-            self.append_log("INFO", f"YouTube: добавлен канал {channel_id}")
+            self.append_log("INFO", f"YouTube: канал добавлен: {channel_id}")
         except Exception as e:
             logger.error("Ошибка сохранения канала: %s", e)
             self.append_log("ERROR", f"Ошибка сохранения: {e}")
             return
 
-        # Очищаем оба виджета
-        self._yt_channel_entry.delete(0, "end")
-        try:
-            getattr(self._yt_channel_entry, "_entry", None).delete(0, "end")
-        except Exception:
-            pass
-
+        # Очищаем поле
+        self._yt_channel_var.set("")
 
         # Обновляем список в GUI
         self._refresh_youtube_channels_list(cfg)
 
-        # Обновляем каналы в youtube_monitor
+        # Обновляем каналы в youtube_monitor (перезагружаем из config)
         try:
             from youtube_monitor import load_youtube_channels
             load_youtube_channels(cfg)
@@ -641,83 +608,42 @@ class DesktopGUI:
             pass
 
     @staticmethod
-    def _get_inner(e):
-        """Возвращает внутренний tk.Entry из CTkEntry."""
-        return getattr(e, "_entry", e)
-
-    @staticmethod
     def _bind_paste(entry):
-        """Ctrl+V/A/C/X для CTkEntry — через внутренний tk.Entry."""
-        def _inner():
-            return getattr(entry, "_entry", entry)
-
         def do_paste(event=None):
             try:
-                w = _inner()
-                w.delete("sel.first", "sel.last")
-                text = w.clipboard_get()
-                w.insert("insert", text)
+                entry.delete("sel.first", "sel.last")
             except Exception:
                 pass
-            return "break"
+            try:
+                text = entry.clipboard_get()
+                entry.insert("insert", text)
+            except Exception:
+                pass
 
         def do_copy(event=None):
             try:
-                w = _inner()
-                text = w.selection_get()
-                w.clipboard_clear()
-                w.clipboard_append(text)
+                text = entry.selection_get()
+                entry.clipboard_clear()
+                entry.clipboard_append(text)
             except Exception:
                 pass
-            return "break"
-
-        def do_cut(event=None):
-            try:
-                w = _inner()
-                text = w.selection_get()
-                w.clipboard_clear()
-                w.clipboard_append(text)
-                w.delete("sel.first", "sel.last")
-            except Exception:
-                pass
-            return "break"
 
         def do_selall(event=None):
-            try:
-                w = _inner()
-                w.focus_set()
-                w.select_range(0, "end")
-            except Exception:
-                pass
+            entry.select_range(0, "end")
             return "break"
 
-        for seq in ("<Control-v>", "<Control-V>", "<Control-c>", "<Control-C>",
-                    "<Control-x>", "<Control-X>", "<Control-a>", "<Control-A>"):
-            entry.bind(seq, None)  # снимаем дефолтный биндинг
         entry.bind("<Control-v>", do_paste)
         entry.bind("<Control-V>", do_paste)
-        entry.bind("<Control-c>", do_copy)
-        entry.bind("<Control-C>", do_copy)
-        entry.bind("<Control-x>", do_cut)
-        entry.bind("<Control-X>", do_cut)
         entry.bind("<Control-a>", do_selall)
         entry.bind("<Control-A>", do_selall)
-        # Биндим и на внутренний виджет
-        inner = _inner()
-        inner.bind("<Control-v>", do_paste)
-        inner.bind("<Control-V>", do_paste)
-        inner.bind("<Control-c>", do_copy)
-        inner.bind("<Control-C>", do_copy)
-        inner.bind("<Control-x>", do_cut)
-        inner.bind("<Control-X>", do_cut)
-        inner.bind("<Control-a>", do_selall)
-        inner.bind("<Control-A>", do_selall)
+        entry.bind("<Control-c>", do_copy)
+        entry.bind("<Control-C>", do_copy)
 
     def _parse_youtube_channel_id(self, text: str) -> str:
-        """Извлекает YouTube Channel ID из строки (ID напрямую, URL, @handle)."""
+        """Извлекает YouTube Channel ID или @handle из строки."""
         text = text.strip()
 
-        # Прямой Channel ID (начинается с UC, 24 символа)
+        # Прямой Channel ID (начинается с UC, 22 символа после UC)
         if re.match(r"^UC[\w-]{22}$", text):
             return text
 
@@ -726,11 +652,10 @@ class DesktopGUI:
         if m:
             return m.group(1)
 
-        # YouTube URL с @handle — сохраняем как есть (бот сам резолвнет при парсинге)
+        # YouTube URL с @handle
         m = re.search(r"youtube\.com/@([\w.-]+)", text)
         if m:
             handle = m.group(1)
-            # Сохраняем как @handle — youtube_monitor попробует resolving
             return f"@{handle}"
 
         # Просто @handle
@@ -773,23 +698,34 @@ class DesktopGUI:
             row = ctk.CTkFrame(self._yt_channels_listbox_frame, fg_color=self.BG_CARD, corner_radius=6)
             row.pack(fill="x", padx=4, pady=2)
 
-            # Если есть имя — показываем "Имя (ID)", иначе просто ID
-            if ch_name:
-                display = f"  {ch_name}  ({ch_id})"
+            # Краткий ID для отображения
+            if ch_id.startswith("@"):
+                display_id = ch_id
+            elif ch_id.startswith("UC") and len(ch_id) >= 24:
+                display_id = f"UC...{ch_id[-6:]}"
             else:
-                display = f"  {ch_id}"
+                display_id = ch_id
 
             ctk.CTkLabel(
                 row,
-                text=display,
-                font=("Consolas", 10),
-                text_color=self.TEXT2,
-                anchor="w",
-            ).pack(side="left", fill="x", expand=True, padx=(8, 0), pady=6)
+                text=ch_name or display_id,
+                font=("Segoe UI", 10, "bold" if ch_name else "normal"),
+                text_color=self.TEXT if ch_name else self.TEXT2,
+                width=180, anchor="w",
+            ).pack(side="left", padx=(8, 0), pady=6)
+
+            if ch_name:
+                ctk.CTkLabel(
+                    row,
+                    text=display_id,
+                    font=("Consolas", 9),
+                    text_color=self.TEXT3,
+                    anchor="w",
+                ).pack(side="left", fill="x", expand=True, padx=(0, 8), pady=6)
 
             # Кнопка удаления
             btn = ctk.CTkButton(
-                row, text="✕",
+                row, text="\u2715",
                 font=("Segoe UI", 11),
                 fg_color=self.RED_BG, hover_color=self.RED,
                 text_color=self.RED, width=28, height=28, corner_radius=6,
@@ -891,10 +827,6 @@ class DesktopGUI:
         )
         self._log_text.pack(side="left", fill="both", expand=True, padx=(4, 0), pady=4)
         self._log_text.bind("<Key>", self._block_typing)
-        self._log_text.bind("<Control-c>", self._copy_log_selection)
-        self._log_text.bind("<Control-C>", self._copy_log_selection)
-        self._log_text.bind("<Control-a>", self._select_all_logs)
-        self._log_text.bind("<Control-A>", self._select_all_logs)
 
         # Tags
         self._log_text.tag_configure("TIME", foreground=self.TEXT3)
@@ -910,21 +842,6 @@ class DesktopGUI:
 
     def _log_text_yview(self, *args):
         self._log_text.yview(*args)
-
-    def _copy_log_selection(self, event=None):
-        """Копирует выделенный текст из лога в буфер обмена."""
-        try:
-            text = self._log_text.selection_get()
-            self._log_text.clipboard_clear()
-            self._log_text.clipboard_append(text)
-        except Exception:
-            pass
-        return "break"
-
-    def _select_all_logs(self, event=None):
-        """Выделяет весь текст в логе."""
-        self._log_text.tag_add("sel", "1.0", "end")
-        return "break"
 
     def _block_typing(self, event):
         if event.keysym in ("Control_L", "Control_R", "Shift_L", "Shift_R",
