@@ -1024,14 +1024,13 @@ async def _search_all_queries_parallel(
     """
     # Определяем фильтр даты для Invidious
     # Invidious поддерживает: hour, today, week, month, year, all
+    # Используем "year" для любого lookback > 30 дней — Invidious сам отфильтрует
     if lookback_days <= 7:
         date_filter = "week"
     elif lookback_days <= 30:
         date_filter = "month"
-    elif lookback_days <= 365:
-        date_filter = "year"
     else:
-        date_filter = ""
+        date_filter = "year"
 
     tasks = []
     for query, sort_by in _SEARCH_QUERIES:
@@ -1103,7 +1102,7 @@ def _filter_video(
         if source not in ("rss", "yt_dlp"):
             return "no_date"
         # RSS с published=0 — пропускаем (дата может быть в updated)
-    elif not _is_within_lookback(published, lookback_days):
+    elif source != "invidious" and not _is_within_lookback(published, lookback_days):
         # FIX-3: debug-лог чтобы видеть реальные даты отсеянных видео
         try:
             readable = datetime.fromtimestamp(
@@ -1443,7 +1442,7 @@ async def check_for_new_videos(
     if irrelevant:
         parts.append(f"не-DayZ: {irrelevant}")
     if views_r:
-        parts.append(f"мало views: {views_r}")
+        parts.append(f"мало views: {views_r} [min_v={min_views} min_l={min_likes}]")
     if no_date:
         parts.append(f"без даты: {no_date}")
     parts.append(f"новых: {new_count}")
