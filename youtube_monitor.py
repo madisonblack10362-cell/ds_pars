@@ -42,7 +42,7 @@ _LONG_VIDEO_MAX = 1200        # > 20 минут — не берём (по умо
 _DEFAULT_LOOKBACK_DAYS = 90   # По умолчанию ищем за 3 месяца
 
 # Минимум кириллических символов для определения русского текста
-_MIN_RU_CHARS = 2  # Смягчённый порог (было 3)
+_MIN_RU_CHARS = 5  # Строгий порог — отсекает видео с 1-2 кириллическими символами
 
 # Путь к файлу состояния
 _STATE_FILE = "youtube_state.json"
@@ -89,14 +89,17 @@ async def _get_ytdlp_semaphore() -> asyncio.Semaphore:
 # но если там пусто — используются каналы по умолчанию ниже.
 # Можно добавлять/удалять каналы через GUI.
 _DEFAULT_YOUTUBE_CHANNELS = [
-    # Русскоязычные DayZ каналы (основной источник)
-    {"id": "UCvQPcPcEzzMPTjTMzGCRN0g", "name": "DayZ Official"},
-    {"id": "UCxMACMoQE1AJTKmjmCCdTsA", "name": "Bohemia Interactive"},
-    # Популярные русскоязычные DayZ-каналы
+    # Только русскоязычные DayZ каналы
     {"id": "UCdFrJ3cFV0sBcSkGyOz8o7Q", "name": "DayZ Россия"},
     {"id": "UCnXzJG3RgDwRqbYQMq9LlgA", "name": "GIGA DayZ"},
-    {"id": "UCaOQfLYzm2Y8kGxNFbQkFRA", "name": "DayZ Twitch"},
 ]
+
+# Блок-лист каналов — англоязычные/мусорные, никогда не парсятся
+_CHANNEL_BLOCKLIST = {
+    "UCvQPcPcEzzMPTjTMzGCRN0g",  # DayZ Official (английский)
+    "UCxMACMoQE1AJTKmjmCCdTsA",  # Bohemia Interactive (английский)
+    "UCaOQfLYzm2Y8kGxNFbQkFRA",  # DayZ Twitch (в основном стримы/английский)
+}
 
 # Текущий рабочий список каналов (загружается из config или дефолтный)
 _YOUTUBE_CHANNELS: list[dict] = []
@@ -1119,6 +1122,11 @@ def _filter_video(
       'not_russian' — видео не на русском языке
       'not_shorts' — не является шортсом (вертикальным видео <=90с)
     """
+    # Блок-лист каналов (английские/мусорные)
+    ch_id = video.get("channel_id", "")
+    if ch_id and ch_id in _CHANNEL_BLOCKLIST:
+        return "blocked_channel"
+
     # Прямые эфиры — нет
     if video.get("is_live", False):
         return "live"
