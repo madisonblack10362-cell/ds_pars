@@ -694,7 +694,7 @@ async def _fetch_dynamic_instances() -> list[str]:
     if _dynamic_instances and (now - _dynamic_instances_timestamp) < _DYNAMIC_CACHE_TTL:
         return _dynamic_instances
 
-    logger.info("YouTube: загрузка динамических Invidious инстансов...")
+    logger.debug("YouTube: загрузка динамических Invidious инстансов...")
 
     try:
         timeout = aiohttp.ClientTimeout(total=15)
@@ -732,13 +732,13 @@ async def _fetch_dynamic_instances() -> list[str]:
                 if instances:
                     _dynamic_instances[:] = instances
                     _dynamic_instances_timestamp = now
-                    logger.info(
+                    logger.debug(
                         "YouTube: загружено %d динамических Invidious инстансов",
                         len(instances),
                     )
 
     except Exception as e:
-        logger.warning("YouTube: ошибка загрузки Invidious инстансов: %s", e)
+        logger.debug("YouTube: ошибка загрузки Invidious инстансов: %s", e)
 
     return _dynamic_instances
 
@@ -1254,7 +1254,7 @@ async def check_for_new_videos(
     processed_count = 0
 
     # ─── Стратегия 1: RSS каналов (параллельно) ─────────────────────────
-    logger.info("YouTube: RSS — проверка %d каналов...", len(_YOUTUBE_CHANNELS))
+    logger.debug("YouTube: RSS — проверка %d каналов...", len(_YOUTUBE_CHANNELS))
     rss_start = time.time()
 
     try:
@@ -1268,7 +1268,7 @@ async def check_for_new_videos(
         rss_videos = []
 
     # ─── Стратегия 2: Поисковые запросы (параллельно через gather) ────
-    logger.info("YouTube: поиск — %d запросов (lookback: %d дней)...", len(_SEARCH_QUERIES), lookback_days)
+    logger.debug("YouTube: поиск — %d запросов (lookback: %d дней)...", len(_SEARCH_QUERIES), lookback_days)
     search_start = time.time()
 
     try:
