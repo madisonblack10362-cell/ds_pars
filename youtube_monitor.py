@@ -142,7 +142,20 @@ _CATEGORY_KEYWORDS = {
     ],
 }
 
-# ─── Мусор-фильтры для стримов ─────────────────────────────────────────────
+# ─── Стрим-фильтры (любые упоминания стрима/лайва = мусор) ───────────
+_STREAM_LIVE_KEYWORDS = re.compile(
+    r"(?i)"
+    r"\bstream\b|"
+    r"\bstreams?\b|"
+    r"\bстрим\b|"
+    r"\bстримы\b|"
+    r"\blive\b|"
+    r"\bлайв\b|"
+    r"\bтрансляци\b|"
+    r"\bbroadcast\b",
+    re.UNICODE,
+)
+
 _STREAM_GARBAGE_PATTERNS = re.compile(
     r"(?i)"
     r"стрим\s*№\s*\d|"
@@ -289,9 +302,12 @@ def _is_dayz_related(title: str, description: str = "") -> bool:
 
 
 def _is_stream_garbage(title: str) -> bool:
-    """Проверяет, является ли видео мусорным стримом."""
+    """Проверяет, является ли видео стримом/трансляцией — отсеиваем полностью."""
     if not title:
         return False
+    # Любое упоминание stream/стрим/live в title = стрим
+    if _STREAM_LIVE_KEYWORDS.search(title):
+        return True
     return bool(_STREAM_GARBAGE_PATTERNS.search(title))
 
 
@@ -1068,10 +1084,10 @@ def _filter_video(
     if duration > _LONG_VIDEO_MAX:
         return "long"
 
-    # Мусорные стримы
+    # Стримы и трансляции — полностью отсеиваем
     title = video.get("title", "")
     if _is_stream_garbage(title):
-        return "garbage"
+        return "live"
 
     # Фильтр даты (только если есть published timestamp)
     published = video.get("published", 0) or 0
@@ -1302,9 +1318,8 @@ async def check_for_new_videos(
         "total": len(combined_videos),
         "dup": 0,        # Дубликаты (seen_video_ids)
         "already": 0,    # Уже было в posted_ids
-        "live": 0,       # Прямой эфир
-        "long": 0,       # Длительность > 5 мин
-        "garbage": 0,    # Мусорный стрим
+        "live": 0,       # Стримы/трансляции (любые упоминания stream/стрим/live)
+        "long": 0,       # Длительность > 10 мин
         "old": 0,        # Старше lookback_days
         "irrelevant": 0, # Не релевантно DayZ
         "views": 0,      # Мало просмотров/лайков
@@ -1369,7 +1384,6 @@ async def check_for_new_videos(
     already = funnel["already"]
     live = funnel["live"]
     long = funnel["long"]
-    garbage = funnel["garbage"]
     old = funnel["old"]
     irrelevant = funnel["irrelevant"]
     views_r = funnel["views"]
@@ -1383,9 +1397,7 @@ async def check_for_new_videos(
     if live:
         parts.append(f"стримы: {live}")
     if long:
-        parts.append(f"длинные(>5мин): {long}")
-    if garbage:
-        parts.append(f"мусор: {garbage}")
+        parts.append(f"длинные(>10мин): {long}")
     if old:
         parts.append(f"старые(>{lookback_days}д): {old}")
     if irrelevant:
@@ -1469,21 +1481,28 @@ async def _save_videos_to_db(
             logger.debug("YouTube: дубликат/ошибка: %s (%s)", video_id, title[:50])
             continue
 
-        # AI-анализ
+        # AI-пересказ видео + полноценный Telegram-пост
         priority = "low"
+        ai_summary = f"[{category}] {title}"
+        ai_post = msg if isinstance(msg, str) else str(msg)
+
         if category in ("updates", "events", "weapons", "secrets"):
             priority = "medium"
 
         try:
             from ai_analyzer import _get_analyzer
             analyzer = _get_analyzer()
-            ai_result = await analyzer.analyze(
-                text=f"{title}\n{description[:500]}",
-                author=ch_title,
-            )
+            ai_result = await analyzer.analyze_youtube_video(video)
             if ai_result:
                 priority = ai_result.get("priority", priority)
                 ai_summary = ai_result.get("summary", ai_summary) or ai_summary
+                ai_post = ai_result.get("formatted_post", ai_post) or ai_post
+                # Обновляем категорию из AI-анализа если differs
+                ai_type = ai_result.get("news_type", "")
+                if ai_type and ai_type != "other":
+                    category = ai_type
+                logger.info("YouTube AI: '%s' → %s (%s)",
+                            title[:40], ai_type, priority)
         except Exception as e:
             logger.debug("YouTube: AI недоступен: %s", e)
 
@@ -1495,7 +1514,7 @@ async def _save_videos_to_db(
             should_publish=False,
             summary=ai_summary or "",
             server_name=ch_title,
-            formatted_post=msg if isinstance(msg, str) else str(msg),
+            formatted_post=ai_post if isinstance(ai_post, str) else str(ai_post),
         )
 
         # Веб-панель
@@ -1515,6 +1534,7 @@ async def _save_videos_to_db(
                         "url": url,
                         "thumbnail": video.get("thumbnail", ""),
                         "summary": ai_summary or "",
+                        "formattedPost": ai_post if isinstance(ai_post, str) else str(ai_post),
                     },
                     web_app_url=web_panel_url,
                     bot_api_key=web_panel_api_key or None,

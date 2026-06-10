@@ -722,8 +722,159 @@ class AIAnalyzer:
             logger.error("Ошибка AI анализа патча: %s", exc)
             return None
 
+    # ─── YouTube Video — AI пересказ + Telegram пост ─────────────────────────
+
+    async def analyze_youtube_video(self, video: dict) -> Optional[dict]:
+        """
+        AI-пересказ YouTube видео + полноценный Telegram-пост.
+
+        На основе названия, описания, канала и метаданных видео генерирует:
+        - summary: краткий пересказ на русском (2-3 предложения)
+        - formatted_post: готовый HTML-пост для Telegram
+        - news_type: категория контента
+        - priority: приоритет
+
+        Args:
+            video: Словарь с данными видео:
+                - title, description, channel_title, duration, views, likes,
+                  thumbnail, url, video_id, category
+
+        Returns:
+            Словарь с полями summary, formatted_post, news_type, priority
+            или None при ошибке.
+        """
+        try:
+            title = video.get("title", "Без названия")
+            description = (video.get("description", "") or "")[:1500]
+            channel = video.get("channel_title", "YouTube")
+            duration = video.get("duration", 0) or 0
+            views = video.get("views", 0) or 0
+            url = video.get("url", "")
+            category = video.get("category", "other")
+
+            # Форматируем длительность
+            dur_str = ""
+            if duration and duration > 0:
+                m, s = divmod(int(duration), 60)
+                dur_str = f"{m}:{s:02d}"
+
+            # Форматируем просмотры
+            views_str = ""
+            if views:
+                if views >= 1_000_000:
+                    views_str = f"{views / 1_000_000:.1f}M"
+                elif views >= 1_000:
+                    views_str = f"{views / 1_000:.1f}K"
+                else:
+                    views_str = str(views)
+
+            user_prompt = (
+                f"Название видео: {title}\n"
+                f"Канал: {channel}\n"
+                f"Длительность: {dur_str}\n"
+                f"Просмотры: {views_str}\n"
+                f"Категория: {category}\n"
+            )
+            if description:
+                user_prompt += f"\nОписание:\n{description}"
+
+            url_to_post = f"{self.base_url}/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": YOUTUBE_VIDEO_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": 0.5,
+                "max_tokens": 1500,
+            }
+
+            async with aiohttp.ClientSession(timeout=self.timeout) as session:
+                async with session.post(url_to_post, headers=headers, json=payload) as response:
+                    if response.status != 200:
+                        body = await response.text()
+                        logger.error("LLM API (YouTube) вернул статус %d: %s", response.status, body[:500])
+                        return None
+                    data = await response.json()
+                    content = data["choices"][0]["message"]["content"]
+                    parsed = self._parse_llm_json(content)
+                    if parsed is None:
+                        logger.warning("Не удалось распарсить JSON от LLM (YouTube): %s", content[:300])
+                        return None
+
+                    # Добавляем URL видео в formatted_post
+                    post = parsed.get("formatted_post", "")
+                    if url and post:
+                        parsed["formatted_post"] = f"{post}\n\n{url}"
+                    return parsed
+
+        except Exception as exc:
+            logger.error("Ошибка AI анализа YouTube видео: %s", exc)
+            return None
+
 
 # ─── Промпты для новых мониторов ──────────────────────────────────────────────
+
+YOUTUBE_VIDEO_SYSTEM_PROMPT = """Ты — редактор Telegram-канала про DayZ. Твоя задача: на основе данных YouTube видео (название, описание, канал, длительность, просмотры) сделать краткий пересказ и полноценный пост для Telegram на русском.
+
+ПРАВИЛА:
+1. НЕ ПРИДУМЫВАЙ содержания видео. Используй ТОЛЬКО то, что есть в названии и описании.
+2. Если описание пустое или непонятное — перескажи по названию, добавь "по названию видео:".
+3. Пиши на русском языке. Если оригинал на английском — переведи и адаптируй.
+4. Пост должен быть увлекательным и информативным.
+5. Объём: summary 2-3 предложения (для превью), formatted_post — полноценный пост с блоком цитат.
+
+ФОРМАТ ПОСТА (Telegram HTML):
+1. ЗАГОЛОВОК — название видео жирным + эмодзи по категории:
+   - pvp/guide/weapons/vehicles → 🎮
+   - updates/events → 📢
+   - bugs/secrets → 🔍
+   - memes → 😂
+   - other → 📹
+
+2. ОСНОВНОЙ ТЕКСТ в <blockquote> — пересказ того, о чём видео:
+   - Кратко о чём видео (1-2 предложения)
+   - Ключевые моменты через буллеты (•)
+   - НЕ выдумывай детали которых нет в описании
+
+3. МЕТА — вне blockquote:
+   - Канал: <i>имя канала</i>
+   - ⏱ длительность  👁 просмотры
+   - Ссылка на видео
+
+ПРИМЕР:
+{
+  "summary": "Краткий обзор нового оружия M4 в обновлении DayZ 1.29 — характеристики, где найти, чем отличается от аналогов.",
+  "formatted_post": "<b>🎮 Обзор нового M4 в DayZ 1.29</b>\\n\\n<blockquote>Автор детально разбирает новое оружие <code>M4</code>, добавленное в обновлении 1.29.\\n\\n<b>Основное:</b>\\n• Характеристики и урон\\n• Где найти на карте\\n• Сравнение с аналогами\\n• Стоит ли использовать</blockquote>\\n\\n<i>DayZ Guides</i>\\n⏱ 4:35  👁 12.3K\\n\\nhttps://www.youtube.com/watch?v=xxx",
+  "news_type": "guide",
+  "priority": "medium"
+}
+
+КАТЕГОРИЯ (news_type):
+- guide — гайд/обзор/инструкция
+- pvp — PvP/рейд/бой
+- weapons — оружие
+- updates — обновление/патч
+- events — ивент/турнир
+- bugs — баг/эксплойт
+- memes — мем/прикол
+- secrets — секрет/пасхалка
+- base — строительство базы
+- vehicles — транспорт
+- other — всё остальное
+
+ПРИОРИТЕТ:
+- high: официальное обновление, важный баг/эксплойт
+- medium: гайд, PvP, оружие, транспорт
+- low: мем, прикол, обычное видео
+
+Формат ответа — ТОЛЬКО JSON без markdown:
+{"summary": "...", "formatted_post": "HTML", "news_type": "...", "priority": "..."}
+"""
 
 WORKSHOP_SYSTEM_PROMPT = """Ты — эксперт по модам DayZ. Создай краткое, увлекательное описание мода для Telegram-канала на русском языке.
 
