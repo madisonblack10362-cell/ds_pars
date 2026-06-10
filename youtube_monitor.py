@@ -41,7 +41,7 @@ from logger import logger
 
 # Пороги длительности (секунды)
 _SHORTS_MAX_DURATION = 90    # Порог для "шортс" (YouTube Shorts)
-_LONG_VIDEO_MAX = 600         # > 10 минут — не берём (DayZ гайды до 10 мин ок)
+_LONG_VIDEO_MAX = 1200        # > 20 минут — не берём (по умолчанию; можно переопределить через config)
 
 # Пороги даты
 _DEFAULT_LOOKBACK_DAYS = 90   # По умолчанию ищем за 3 месяца
@@ -1066,6 +1066,7 @@ def _filter_video(
     min_views: int = 0,
     min_likes: int = 0,
     lookback_days: int = 90,
+    max_duration: int = 0,
     require_dayz_keyword: bool = True,
 ) -> str | None:
     """
@@ -1074,7 +1075,7 @@ def _filter_video(
 
     Причины:
       'live'       — прямой эфир
-      'long'       — длительность > 5 минут
+      'long'       — длительность > max_duration (или _LONG_VIDEO_MAX)
       'garbage'    — мусорный стрим
       'old'        — старше lookback_days
       'irrelevant' — не релевантно DayZ
@@ -1084,9 +1085,10 @@ def _filter_video(
     if video.get("is_live", False):
         return "live"
 
-    # Длительность
+    # Длительность (max_duration=0 → используем _LONG_VIDEO_MAX)
     duration = video.get("duration", 0) or 0
-    if duration > _LONG_VIDEO_MAX:
+    effective_max = max_duration if max_duration > 0 else _LONG_VIDEO_MAX
+    if duration > effective_max:
         return "long"
 
     # Стримы и трансляции — полностью отсеиваем
@@ -1264,6 +1266,7 @@ async def check_for_new_videos(
     min_likes = int(config.get("youtube_min_likes", 0))
     max_per_check = int(config.get("youtube_max_per_check", 10))
     max_results = int(config.get("youtube_max_results", 10))
+    max_duration = int(config.get("youtube_max_duration", 0))
     lookback_days = int(config.get("youtube_lookback_days", _DEFAULT_LOOKBACK_DAYS))
 
     state = _load_state()
@@ -1354,6 +1357,7 @@ async def check_for_new_videos(
             min_views=min_views,
             min_likes=min_likes,
             lookback_days=lookback_days,
+            max_duration=max_duration,
         )
         if reject_reason:
             funnel[reject_reason] = funnel.get(reject_reason, 0) + 1
@@ -1573,6 +1577,7 @@ async def run_youtube_monitor(
     min_likes: int = 0,
     check_interval_hours: int = 2,
     max_per_check: int = 10,
+    max_duration: int = 0,
     download_shorts: bool = True,
     shutdown_event=None,
     notify_callback=None,
@@ -1612,6 +1617,7 @@ async def run_youtube_monitor(
         "youtube_min_views": min_views,
         "youtube_min_likes": min_likes,
         "youtube_max_per_check": max_per_check,
+        "youtube_max_duration": max_duration,
         "youtube_download": download_shorts,
         "ai_analyze": ai_analyze,
         "images_dir": "downloads",
@@ -1620,8 +1626,9 @@ async def run_youtube_monitor(
 
     logger.info(
         "YouTube монитор: запущен "
-        "(интервал=%dч, views≥%d, likes≥%d, max=%d, lookback=%dд, download=%s)",
+        "(интервал=%dч, views≥%d, likes≥%d, max=%d, duration≤%dс, lookback=%dд, download=%s)",
         check_interval_hours, min_views, min_likes, max_per_check,
+        max_duration if max_duration > 0 else _LONG_VIDEO_MAX,
         lookback_days, download_shorts,
     )
 

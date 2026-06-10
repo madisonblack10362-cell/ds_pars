@@ -228,9 +228,10 @@ class DayZNewsMonitor:
         # -----------------------------------------------------------------
         if cfg.get("youtube_enabled", True):
             youtube_interval = int(cfg.get("youtube_interval_hours", 2))
-            youtube_min_views = int(cfg.get("youtube_min_views", 100))
-            youtube_min_likes = int(cfg.get("youtube_min_likes", 50))
-            youtube_max_per_check = int(cfg.get("youtube_max_per_check", 10))
+            youtube_min_views = int(cfg.get("youtube_min_views", 0))
+            youtube_min_likes = int(cfg.get("youtube_min_likes", 0))
+            youtube_max_per_check = int(cfg.get("youtube_max_per_check", 15))
+            youtube_max_duration = int(cfg.get("youtube_max_duration", 0))
             youtube_download_shorts = cfg.get("youtube_download_shorts", True)
             youtube_lookback_days = int(cfg.get("youtube_lookback_days", 90))
 
@@ -243,6 +244,7 @@ class DayZNewsMonitor:
                     min_likes=youtube_min_likes,
                     check_interval_hours=youtube_interval,
                     max_per_check=youtube_max_per_check,
+                    max_duration=youtube_max_duration,
                     download_shorts=youtube_download_shorts,
                     shutdown_event=self._shutdown_event,
                     notify_callback=self._notify_moderation,
