@@ -424,30 +424,35 @@ def cleanup_old_downloads(
 #  Управление состоянием
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _load_state() -> dict:
-    """Загружает состояние из JSON-файла."""
-    if not os.path.exists(_STATE_FILE):
-        return {"posted_ids": {}, "last_check": 0, "channel_etags": {}}
-    try:
-        with open(_STATE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if "posted_ids" not in data:
-            data["posted_ids"] = {}
-        if "channel_etags" not in data:
-            data["channel_etags"] = {}
-        return data
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning("YouTube: не удалось загрузить состояние: %s", e)
-        return {"posted_ids": {}, "last_check": 0, "channel_etags": {}}
-
 
 def _save_state(state: dict) -> None:
-    """Сохраняет состояние в JSON-файл."""
-    try:
-        with open(_STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
-    except OSError as e:
-        logger.warning("YouTube: не удалось сохранить состояние: %s", e)
+    """Сохраняет состояние в JSON-файл. При ошибке прав — пробует /tmp."""
+    for target in [_STATE_FILE, f"/tmp/{_STATE_FILE}"]:
+        try:
+            with open(target, "w", encoding="utf-8") as f:
+                json.dump(state, f, ensure_ascii=False, indent=2)
+            return
+        except OSError:
+            continue
+    logger.warning("YouTube: не удалось сохранить состояние")
+
+
+def _load_state() -> dict:
+    """Загружает состояние из JSON-файла с fallback на /tmp."""
+    for target in [_STATE_FILE, f"/tmp/{_STATE_FILE}"]:
+        try:
+            if os.path.exists(target):
+                with open(target, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if "posted_ids" not in data:
+                    data["posted_ids"] = {}
+                if "channel_etags" not in data:
+                    data["channel_etags"] = {}
+                return data
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("YouTube: не удалось загрузить состояние из %s: %s", target, e)
+            continue
+    return {"posted_ids": {}, "last_check": 0, "channel_etags": {}}
 
 
 # ═════════════════════════════════════════════════════════════════════════════
