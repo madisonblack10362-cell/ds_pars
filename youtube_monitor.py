@@ -104,27 +104,6 @@ _CHANNEL_BLOCKLIST = {
 # Текущий рабочий список каналов (загружается из config или дефолтный)
 _YOUTUBE_CHANNELS: list[dict] = []
 
-async def _resolve_handle_to_id(handle: str) -> str:
-    """Конвертирует @handle в UC... Channel ID через парсинг HTML."""
-    handle = handle.strip().lstrip("@")
-    if not handle:
-        return ""
-    url = f"https://www.youtube.com/@{handle}"
-    try:
-        session = await _get_session()
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-            if resp.status != 200:
-                return ""
-            html = await resp.text()
-        m = __import__("re").search(r'"channelId":"(UC[\w-]{22})"', html)
-        if m:
-            logger.info("YouTube: @%s → %s", handle, m.group(1))
-            return m.group(1)
-    except Exception as e:
-        logger.debug("YouTube: не удалось резолвить @%s: %s", handle, e)
-    return ""
-
-
 def load_youtube_channels(config: dict | None = None) -> list[dict]:
     """Загружает список каналов из config.json или возвращает дефолтный."""
     global _YOUTUBE_CHANNELS
@@ -132,6 +111,7 @@ def load_youtube_channels(config: dict | None = None) -> list[dict]:
         config = {}
     channels = config.get("youtube_channels", [])
     if isinstance(channels, list) and channels:
+        # Валидация: каждый элемент должен иметь id
         valid = []
         for ch in channels:
             if isinstance(ch, dict) and ch.get("id"):
@@ -147,17 +127,14 @@ def load_youtube_channels(config: dict | None = None) -> list[dict]:
     return _YOUTUBE_CHANNELS
 
 # ─── Поисковые запросы для API поиска ────────────────────────────────────────
-# Только русскоязычные запросы для поиска шортсов
+# Только shorts-специфичные запросы (чтобы не находить длинные видео)
 _SEARCH_QUERIES = [
-    # Только запросы для поиска YouTube Shorts (вертикальные <=90с)
-    ("DayZ shorts", "date"),
-    ("DayZ шортс", "date"),
-    ("DayZ рилс", "date"),
-    ("DayZ приколы шортс", "relevance"),
-    ("DayZ мем шортс", "relevance"),
-    ("DayZ пвп шортс", "date"),
-    ("DayZ баг шортс", "relevance"),
-    ("DayZ гайд шортс", "date"),
+    ("DayZ шортс", "relevance"),
+    ("DayZ рилс", "relevance"),
+    ("DayZ shorts", "relevance"),
+    ("DayZ приколы", "relevance"),
+    ("DayZ мем", "relevance"),
+    ("DayZ короткое видео", "date"),
 ]
 
 # ─── Категории контента ─────────────────────────────────────────────────────
@@ -675,32 +652,128 @@ async def _fetch_channel_rss(channel_id: str, etag: str = "") -> tuple[list[dict
         return [], etag, ""
 
 
+async def _resolve_handle_to_id(handle: str) -> str:
+    """
+    Резолвит @handle в UC... Channel ID через Invidious API.
+    Возвращает UC ID или пустую строку при неудаче.
+    """
+    if not handle.startswith("@"):
+        return handle  # Уже UC ID
+    clean_handle = handle.lstrip("@")
+    instances = await _get_invidious_instances()
+    for inst in instances[:5]:
+        try:
+            session = await _get_session()
+            async with session.get(
+                f"{inst}/api/v1/resolveurl",
+                params={"url": f"https://www.youtube.com/@{clean_handle}"},
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status != 200:
+                    _remove_bad_instance(inst)
+                    continue
+                data = await resp.json()
+                ucid = data.get("ucid", "")
+                author = data.get("author", "")
+                if ucid and ucid.startswith("UC"):
+                    logger.info("YouTube: @%s → %s (%s)", clean_handle, ucid, author)
+                    # Обновляем ID в _YOUTUBE_CHANNELS на месте
+                    for ch in _YOUTUBE_CHANNELS:
+                        if ch.get("id") == handle:
+                            ch["id"] = ucid
+                            if not ch.get("name") and author:
+                                ch["name"] = author
+                            break
+                    return ucid
+        except Exception as e:
+            logger.debug("YouTube: resolve @%s через %s ошибка: %s", clean_handle, inst, e)
+            _remove_bad_instance(inst)
+    logger.warning("YouTube: не удалось резолвить @%s в UC ID", clean_handle)
+    return ""
+
+
+async def _fetch_channel_videos_invidious(channel_id: str, max_videos: int = 15) -> list[dict]:
+    """
+    Получает последние видео канала через Invidious API.
+    Работает и для UC ID, и для @handle (через resolve).
+    """
+    # Если @handle — пробуем резолвить
+    if channel_id.startswith("@"):
+        resolved = await _resolve_handle_to_id(channel_id)
+        if resolved:
+            channel_id = resolved
+        else:
+            return []
+
+    instances = await _get_invidious_instances()
+    for inst in instances[:5]:
+        try:
+            session = await _get_session()
+            async with session.get(
+                f"{inst}/api/v1/channels/{channel_id}/videos",
+                params={"sort_by": "newest", "page": 1},
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status != 200:
+                    _remove_bad_instance(inst)
+                    continue
+                items = await resp.json()
+                videos = []
+                for item in items[:max_videos]:
+                    if not isinstance(item, dict) or item.get("type") != "video":
+                        continue
+                    video = _parse_invidious_item(item)
+                    if video.get("video_id"):
+                        video["_from_manual_channel"] = True
+                        videos.append(video)
+                if videos:
+                    logger.info(
+                        "YouTube/channel: %s → %d видео через %s",
+                        channel_id, len(videos), inst,
+                    )
+                return videos
+        except Exception as e:
+            logger.debug("YouTube/channel: %s через %s ошибка: %s", channel_id, inst, e)
+            _remove_bad_instance(inst)
+    return []
+
+
 async def _fetch_all_channels_rss(state: dict) -> list[dict]:
     """
     Параллельно загружает RSS всех каналов.
+    Сначала резолвит @handle в UC ID, потом загружает RSS.
     Возвращает список новых видео.
     """
     channel_etags = state.get("channel_etags", {})
     all_videos = []
 
-    # Резолвим @handle → UC... перед RSS
-    for ch in _YOUTUBE_CHANNELS:
+    # ─── Сначала резолвим все @handle → UC ID ───────────────────────
+    resolve_tasks = []
+    resolve_indices = []
+    for i, ch in enumerate(_YOUTUBE_CHANNELS):
         ch_id = ch.get("id", "")
         if ch_id.startswith("@"):
-            resolved = await _resolve_handle_to_id(ch_id)
-            if resolved:
-                ch["id"] = resolved
-                ch["_was_handle"] = ch_id
-                logger.info("YouTube/RSS: @%s резолвен в %s", ch_id, resolved)
+            resolve_tasks.append(_resolve_handle_to_id(ch_id))
+            resolve_indices.append(i)
 
+    if resolve_tasks:
+        resolve_results = await asyncio.gather(*resolve_tasks, return_exceptions=True)
+        for j, result in enumerate(resolve_results):
+            if isinstance(result, Exception):
+                idx = resolve_indices[j]
+                ch = _YOUTUBE_CHANNELS[idx]
+                logger.warning("YouTube: не удалось резолвить канал '%s'", ch.get("id", "?"))
+
+    # ─── Теперь загружаем RSS для всех каналов с UC ID ───────────────
     tasks = []
     rss_channel_indices = []
     for i, ch in enumerate(_YOUTUBE_CHANNELS):
         ch_id = ch.get("id", "")
         if not ch_id:
             continue
+        # @handle не поддерживается YouTube RSS — пропускаем (даже после неудачного resolve)
         if ch_id.startswith("@"):
-            logger.debug("YouTube/RSS: не удалось резолвить @handle '%s'", ch_id)
+            logger.debug("YouTube/RSS: пропускаем @handle '%s' (не резолвлен)", ch_id)
             continue
         etag = channel_etags.get(ch_id, "")
         tasks.append(_fetch_channel_rss(ch_id, etag))
@@ -723,9 +796,10 @@ async def _fetch_all_channels_rss(state: dict) -> list[dict]:
             channel_etags[ch_id] = new_etag
 
         if videos:
-            # Добавляем channel_id
+            # Добавляем channel_id + флаг ручного канала
             for v in videos:
                 v["channel_id"] = ch_id
+                v["_from_manual_channel"] = True
             logger.debug(
                 "YouTube/RSS: '%s' → %d видео (etag: %s)",
                 ch.get("name", ch_id), len(videos), bool(new_etag),
@@ -1371,15 +1445,15 @@ async def check_for_new_videos(
     Проверяет YouTube на наличие новых DayZ видео.
 
     Стратегии (параллельно):
-      1. RSS-ленты каналов — свежие видео напрямую
+      1. RSS-ленты каналов — свежие видео напрямую (с @handle→UC resolve)
+      1.5. Invidious channel videos — дополняет RSS для всех каналов
       2. Поисковые запросы через Invidious/yt-dlp
 
     Фильтры:
-      - Только русскоязычные видео (по умолчанию)
-      - Только Shorts/вертикальные <=90с (по умолчанию)
+      - Для вручную добавленных каналов: только shorts<=90с + не стрим
+      - Для поиска: + русскоязычные + релевантность DayZ
       - lookback_days (default 90 = 3 месяца)
       - min_views / min_likes
-      - Релевантность DayZ
     """
     if config is None:
         config = {}
@@ -1415,7 +1489,7 @@ async def check_for_new_videos(
                 existing_ids.add(wc_id)
         logger.info("YouTube: всего %d каналов (config + веб-панель)", len(channels))
     else:
-        logger.info("YouTube: используется %d каналов для RSS", len(channels))
+        logger.info("YouTube: используется %d каналов для парсинга", len(channels))
 
     # ─── Автоочистка posted_ids от старых записей ────────────────────────
     # Удаляем записи старше lookback_days, чтобы не накапливать бесконечно
@@ -1430,7 +1504,7 @@ async def check_for_new_videos(
     if stale_count:
         logger.info("YouTube: очищено %d старых записей из posted_ids", stale_count)
 
-    # ─── Стратегия 1: RSS каналов (параллельно) ─────────────────────────
+    # ─── Стратегия 1: RSS каналов (параллельно, с @handle resolve) ────
     rss_start = time.time()
 
     try:
@@ -1438,6 +1512,26 @@ async def check_for_new_videos(
     except Exception as e:
         logger.error("YouTube: RSS ошибка: %s", e)
         rss_videos = []
+
+    # ─── Стратегия 1.5: Invidious channel videos (для всех каналов) ─────
+    # Дополняем RSS — Invidious может отдать видео которых нет в RSS
+    channel_videos_inv = []
+    try:
+        ch_tasks = []
+        for ch in channels:
+            ch_id = ch.get("id", "")
+            if ch_id:
+                ch_tasks.append(_fetch_channel_videos_invidious(ch_id, max_videos=15))
+        if ch_tasks:
+            ch_results = await asyncio.gather(*ch_tasks, return_exceptions=True)
+            for r in ch_results:
+                if isinstance(r, list) and r:
+                    channel_videos_inv.extend(r)
+        if channel_videos_inv:
+            logger.info("YouTube: Invidious channel fetch → %d видео из %d каналов",
+                        len(channel_videos_inv), len(ch_tasks))
+    except Exception as e:
+        logger.debug("YouTube: Invidious channel fetch ошибка: %s", e)
 
     # ─── Стратегия 2: Поисковые запросы (параллельно через gather) ────
     try:
@@ -1452,7 +1546,10 @@ async def check_for_new_videos(
     # ─── Объединяем и фильтруем с воронкой ────────────────────────────────
     combined_videos = []
     for v in rss_videos:
-        v["_priority_source"] = "rss"
+        v["_priority_source"] = "channel_rss"
+        combined_videos.append(v)
+    for v in channel_videos_inv:
+        v["_priority_source"] = "channel_invidious"
         combined_videos.append(v)
     for v in search_videos:
         v["_priority_source"] = "search"
@@ -1499,14 +1596,19 @@ async def check_for_new_videos(
             continue
 
         # Фильтрация (теперь возвращает причину)
+        # Для видео из вручную добавленных каналов — ослабляем фильтры:
+        # - Не проверяем релевантность DayZ (пользователь сам выбрал канал)
+        # - Не фильтруем по русскому языку (доверяем выбору пользователя)
+        from_manual = video.get("_from_manual_channel", False)
         reject_reason = _filter_video(
             video,
             min_views=min_views,
             min_likes=min_likes,
             lookback_days=lookback_days,
             max_duration=max_duration,
-            require_russian=require_russian,
+            require_russian=require_russian and not from_manual,
             shorts_only=shorts_only,
+            require_dayz_keyword=not from_manual,
         )
         if reject_reason:
             funnel[reject_reason] = funnel.get(reject_reason, 0) + 1
