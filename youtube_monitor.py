@@ -104,6 +104,27 @@ _CHANNEL_BLOCKLIST = {
 # Текущий рабочий список каналов (загружается из config или дефолтный)
 _YOUTUBE_CHANNELS: list[dict] = []
 
+async def _resolve_handle_to_id(handle: str) -> str:
+    """Конвертирует @handle в UC... Channel ID через парсинг HTML."""
+    handle = handle.strip().lstrip("@")
+    if not handle:
+        return ""
+    url = f"https://www.youtube.com/@{handle}"
+    try:
+        session = await _get_session()
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            if resp.status != 200:
+                return ""
+            html = await resp.text()
+        m = __import__("re").search(r'"channelId":"(UC[\w-]{22})"', html)
+        if m:
+            logger.info("YouTube: @%s → %s", handle, m.group(1))
+            return m.group(1)
+    except Exception as e:
+        logger.debug("YouTube: не удалось резолвить @%s: %s", handle, e)
+    return ""
+
+
 def load_youtube_channels(config: dict | None = None) -> list[dict]:
     """Загружает список каналов из config.json или возвращает дефолтный."""
     global _YOUTUBE_CHANNELS
@@ -111,7 +132,6 @@ def load_youtube_channels(config: dict | None = None) -> list[dict]:
         config = {}
     channels = config.get("youtube_channels", [])
     if isinstance(channels, list) and channels:
-        # Валидация: каждый элемент должен иметь id
         valid = []
         for ch in channels:
             if isinstance(ch, dict) and ch.get("id"):
@@ -663,15 +683,24 @@ async def _fetch_all_channels_rss(state: dict) -> list[dict]:
     channel_etags = state.get("channel_etags", {})
     all_videos = []
 
+    # Резолвим @handle → UC... перед RSS
+    for ch in _YOUTUBE_CHANNELS:
+        ch_id = ch.get("id", "")
+        if ch_id.startswith("@"):
+            resolved = await _resolve_handle_to_id(ch_id)
+            if resolved:
+                ch["id"] = resolved
+                ch["_was_handle"] = ch_id
+                logger.info("YouTube/RSS: @%s резолвен в %s", ch_id, resolved)
+
     tasks = []
-    rss_channel_indices = []  # Трекаем какие индексы идут через RSS (не @handle)
+    rss_channel_indices = []
     for i, ch in enumerate(_YOUTUBE_CHANNELS):
         ch_id = ch.get("id", "")
         if not ch_id:
             continue
-        # @handle не поддерживается YouTube RSS — пропускаем
         if ch_id.startswith("@"):
-            logger.debug("YouTube/RSS: пропускаем @handle '%s' (нужен Channel ID для RSS)", ch_id)
+            logger.debug("YouTube/RSS: не удалось резолвить @handle '%s'", ch_id)
             continue
         etag = channel_etags.get(ch_id, "")
         tasks.append(_fetch_channel_rss(ch_id, etag))
