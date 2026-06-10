@@ -505,6 +505,7 @@ class DesktopGUI:
             placeholder_text="Channel ID или URL YouTube...",
         )
         self._yt_channel_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self._bind_paste(self._yt_channel_entry)
 
         self._yt_name_entry = ctk.CTkEntry(
             add_row,
@@ -594,6 +595,38 @@ class DesktopGUI:
             load_youtube_channels(cfg)
         except Exception:
             pass
+
+    @staticmethod
+    def _bind_paste(entry):
+        def do_paste(event=None):
+            try:
+                entry.delete("sel.first", "sel.last")
+            except Exception:
+                pass
+            try:
+                text = entry.clipboard_get()
+                entry.insert("insert", text)
+            except Exception:
+                pass
+
+        def do_copy(event=None):
+            try:
+                text = entry.selection_get()
+                entry.clipboard_clear()
+                entry.clipboard_append(text)
+            except Exception:
+                pass
+
+        def do_selall(event=None):
+            entry.select_range(0, "end")
+            return "break"
+
+        entry.bind("<Control-v>", do_paste)
+        entry.bind("<Control-V>", do_paste)
+        entry.bind("<Control-a>", do_selall)
+        entry.bind("<Control-A>", do_selall)
+        entry.bind("<Control-c>", do_copy)
+        entry.bind("<Control-C>", do_copy)
 
     def _parse_youtube_channel_id(self, text: str) -> str:
         """Извлекает YouTube Channel ID из строки (ID напрямую, URL, @handle)."""
