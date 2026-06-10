@@ -173,29 +173,40 @@ class DesktopGUI:
         status_frame = ctk.CTkFrame(parent, fg_color=self.CARD)
         status_frame.pack(fill="x", padx=8, pady=(8, 4))
 
+        # Настройка grid: 2 ряда, колонки одинаковой ширины
+        status_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
+        status_frame.grid_rowconfigure((0, 1), weight=1)
+
         self._status_cards = {}
-        for key, label in [
+        _cards = [
             ("discord", "Discord"),
             ("telegram", "Telegram"),
             ("ai", "AI Анализатор"),
             ("db", "База данных"),
-            ("reddit", "Reddit"),
             ("youtube", "YouTube"),
             ("workshop", "Workshop"),
             ("patchnotes", "Патчноуты"),
-        ]:
-            card = ctk.CTkFrame(status_frame, fg_color=self.BG2, width=160)
-            card.pack(side="left", padx=4, pady=6, fill="y", expand=True)
-            card.pack_propagate(False)
+        ]
 
-            ctk.CTkLabel(card, text=label, font=("Segoe UI", 11),
-                        text_color=self.TEXT2).pack(pady=(8, 0))
-            val = ctk.CTkLabel(card, text="Отключён", font=("Segoe UI", 12, "bold"),
-                              text_color=self.TEXT3)
-            val.pack(pady=(2, 2))
-            info = ctk.CTkLabel(card, text="", font=("Segoe UI", 10),
-                               text_color=self.TEXT3, wraplength=140)
-            info.pack(pady=(0, 8))
+        for idx, (key, label) in enumerate(_cards):
+            row, col = divmod(idx, 4)
+
+            card = ctk.CTkFrame(status_frame, fg_color=self.BG2, height=70)
+            card.grid(row=row, column=col, padx=4, pady=4, sticky="nsew")
+            card.grid_propagate(False)
+
+            # Горизонтальный layout внутри карточки
+            inner = ctk.CTkFrame(card, fg_color="transparent")
+            inner.pack(fill="both", expand=True, padx=10, pady=6)
+
+            ctk.CTkLabel(inner, text=label, font=("Segoe UI", 11, "bold"),
+                        text_color=self.TEXT2, anchor="w").pack(side="left", fill="y")
+            val = ctk.CTkLabel(inner, text="Отключён", font=("Segoe UI", 11),
+                              text_color=self.TEXT3, anchor="e")
+            val.pack(side="right", fill="y")
+            info = ctk.CTkLabel(card, text="", font=("Segoe UI", 9),
+                               text_color=self.TEXT3, wraplength=200, anchor="w")
+            info.pack(fill="x", padx=10, pady=(0, 2))
             self._status_cards[key] = {"value": val, "info": info}
 
         counter_frame = ctk.CTkFrame(parent, fg_color=self.CARD)
