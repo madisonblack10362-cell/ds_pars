@@ -508,6 +508,22 @@ class DesktopGUI:
         self._yt_channel_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self._bind_paste(self._yt_channel_entry)
 
+        # Кнопка "Вставить" — гарантированно работает в CTkEntry на Windows
+        def _paste_channel():
+            try:
+                w = getattr(self._yt_channel_entry, "_entry", self._yt_channel_entry)
+                text = w.tk.call("tk_getClipboard", {})
+                w.delete("0", "end")
+                w.insert("0", text)
+            except Exception:
+                pass
+
+        ctk.CTkButton(
+            add_row, text="📋 Вставить", width=90,
+            font=("Segoe UI", 10),
+            command=_paste_channel,
+        ).pack(side="left", padx=(0, 8))
+
         self._yt_name_entry = ctk.CTkEntry(
             add_row,
             border_color=self.BORDER, border_width=1,
