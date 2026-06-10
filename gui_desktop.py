@@ -508,15 +508,21 @@ class DesktopGUI:
         self._yt_channel_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self._bind_paste(self._yt_channel_entry)
 
-        # Кнопка "Вставить" — гарантированно работает в CTkEntry на Windows
+        # Кнопка "Вставить" — через PowerShell, работает всегда
         def _paste_channel():
             try:
-                w = getattr(self._yt_channel_entry, "_entry", self._yt_channel_entry)
-                text = w.tk.call("tk_getClipboard", {})
-                w.delete("0", "end")
-                w.insert("0", text)
-            except Exception:
-                pass
+                import subprocess
+                r = subprocess.run(
+                    ["powershell", "-command", "Get-Clipboard"],
+                    capture_output=True, text=True, timeout=5
+                )
+                text = r.stdout.strip()
+                if text:
+                    w = getattr(self._yt_channel_entry, "_entry", self._yt_channel_entry)
+                    w.delete("0", "end")
+                    w.insert("0", text)
+            except Exception as e:
+                self.append_log("ERROR", f"Вставка: {e}")
 
         ctk.CTkButton(
             add_row, text="📋 Вставить", width=90,
