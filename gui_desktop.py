@@ -4,6 +4,7 @@ Desktop GUI for DayZ News Monitor — Modern Design.
 
 import json
 import queue
+import re
 import threading
 import tkinter as tk
 from datetime import datetime
@@ -358,10 +359,11 @@ class DesktopGUI:
             ]),
             ("YouTube", [
                 ("youtube_interval_hours", "Интервал проверки (часы)", "2"),
-                ("youtube_min_views", "Мин. просмотров", "100"),
-                ("youtube_min_likes", "Мин. лайков", "50"),
+                ("youtube_min_views", "Мин. просмотров", "0"),
+                ("youtube_min_likes", "Мин. лайков", "0"),
                 ("youtube_max_per_check", "Макс. видео за проверку", "5"),
             ]),
+            ("YouTube Каналы", []),
             ("Веб-панель", [
                 ("web_panel_url", "URL панели", "https://dayz-monitor-web.vercel.app"),
                 ("web_panel_api_key", "API ключ панели", "Ключ авторизации бота"),
@@ -411,6 +413,10 @@ class DesktopGUI:
         elif title == "YouTube":
             self._add_toggle(frame, "youtube_enabled", "Включить YouTube монитор")
             self._add_toggle(frame, "youtube_download_shorts", "Скачивать шортсы")
+            self._add_toggle(frame, "youtube_russian_only", "Только русскоязычные видео")
+            self._add_toggle(frame, "youtube_shorts_only", "Только Shorts (<=90с)")
+        elif title == "YouTube Каналы":
+            self._build_youtube_channels_section(frame)
         elif title == "Веб-панель":
             self._add_toggle(frame, "moderation_notifications", "Уведомления о модерации в Telegram")
 
@@ -467,6 +473,251 @@ class DesktopGUI:
             corner_radius=4,
         ).pack(anchor="w")
         self._toggles[key] = var
+
+    def _build_youtube_channels_section(self, parent):
+        """Секция управления YouTube-каналами: список + добавление/удаление."""
+        # Описание
+        hint_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        hint_frame.pack(fill="x", padx=14, pady=(6, 4))
+        ctk.CTkLabel(
+            hint_frame,
+            text="Добавляйте YouTube-каналы для парсинга по Channel ID или URL",
+            font=("Segoe UI", 10),
+            text_color=self.TEXT3,
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            hint_frame,
+            text="Пример: UCvQPcPcEzzMPTjTMzGCRN0g или https://www.youtube.com/@channel",
+            font=("Segoe UI", 9),
+            text_color=self.TEXT3,
+        ).pack(anchor="w")
+
+        # Поле ввода + кнопка добавления
+        add_row = ctk.CTkFrame(parent, fg_color="transparent")
+        add_row.pack(fill="x", padx=14, pady=(4, 6))
+
+        self._yt_channel_entry = ctk.CTkEntry(
+            add_row,
+            border_color=self.BORDER, border_width=1,
+            text_color=self.TEXT, font=("Consolas", 11),
+            fg_color=self.BG_ELEVATED,
+            height=32, corner_radius=6,
+            placeholder_text="Channel ID или URL YouTube...",
+        )
+        self._yt_channel_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        self._yt_name_entry = ctk.CTkEntry(
+            add_row,
+            border_color=self.BORDER, border_width=1,
+            text_color=self.TEXT, font=("Segoe UI", 11),
+            fg_color=self.BG_ELEVATED,
+            height=32, corner_radius=6,
+            width=140,
+            placeholder_text="Название (необяз.)",
+        )
+        self._yt_name_entry.pack(side="left", padx=(0, 8))
+
+        ctk.CTkButton(
+            add_row, text="+ Добавить",
+            font=("Segoe UI", 11, "bold"),
+            fg_color=self.GREEN, hover_color="#4cc95f",
+            text_color="#ffffff", width=100, height=32, corner_radius=8,
+            command=self._add_youtube_channel,
+        ).pack(side="left")
+
+        # Список каналов (скроллируемый)
+        list_frame = ctk.CTkFrame(parent, fg_color=self.BG_ELEVATED, corner_radius=8)
+        list_frame.pack(fill="both", expand=True, padx=14, pady=(0, 10), ipady=4)
+
+        self._yt_channels_listbox_frame = ctk.CTkScrollableFrame(
+            list_frame, fg_color="transparent", height=180,
+        )
+        self._yt_channels_listbox_frame.pack(fill="both", expand=True, padx=4, pady=4)
+
+        self._yt_channel_widgets = []
+
+    def _add_youtube_channel(self):
+        """Добавляет канал в список и сохраняет в config."""
+        raw = self._yt_channel_entry.get().strip()
+        name = self._yt_name_entry.get().strip()
+        if not raw:
+            return
+
+        # Парсим ID из URL или текста
+        channel_id = self._parse_youtube_channel_id(raw)
+        if not channel_id:
+            self.append_log("WARNING", "YouTube: не удалось извлечь Channel ID из: " + raw)
+            return
+
+        # Загружаем текущий список из конфига
+        try:
+            with open(self.config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            cfg = {}
+
+        channels = cfg.get("youtube_channels", [])
+        if not isinstance(channels, list):
+            channels = []
+
+        # Проверяем на дубликат
+        for ch in channels:
+            ch_id = ch.get("id", "") if isinstance(ch, dict) else str(ch)
+            if ch_id == channel_id:
+                self.append_log("WARNING", f"YouTube: канал {channel_id} уже есть в списке")
+                return
+
+        # Добавляем
+        channels.append({"id": channel_id, "name": name})
+        cfg["youtube_channels"] = channels
+
+        try:
+            with open(self.config_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2, ensure_ascii=False)
+            logger.info("YouTube: добавлен канал %s (%s)", channel_id, name or "без имени")
+            self.append_log("INFO", f"YouTube: добавлен канал {name or channel_id}")
+        except Exception as e:
+            logger.error("Ошибка сохранения канала: %s", e)
+            self.append_log("ERROR", f"Ошибка сохранения: {e}")
+            return
+
+        # Очищаем поле
+        self._yt_channel_entry.delete(0, "end")
+        self._yt_name_entry.delete(0, "end")
+
+        # Обновляем список в GUI
+        self._refresh_youtube_channels_list(cfg)
+
+        # Обновляем каналы в youtube_monitor
+        try:
+            from youtube_monitor import load_youtube_channels
+            load_youtube_channels(cfg)
+        except Exception:
+            pass
+
+    def _parse_youtube_channel_id(self, text: str) -> str:
+        """Извлекает YouTube Channel ID из строки (ID напрямую, URL, @handle)."""
+        text = text.strip()
+
+        # Прямой Channel ID (начинается с UC, 24 символа)
+        if re.match(r"^UC[\w-]{22}$", text):
+            return text
+
+        # YouTube URL с channel_id
+        m = re.search(r"youtube\.com/channel/(UC[\w-]{22})", text)
+        if m:
+            return m.group(1)
+
+        # YouTube URL с @handle (нельзя извлечь ID без API, сохраняем handle)
+        m = re.search(r"youtube\.com/@([\w.-]+)", text)
+        if m:
+            handle = m.group(1)
+            # Сохраняем как @handle — youtube_monitor попробует resolving
+            return f"@{handle}"
+
+        # Просто @handle
+        if text.startswith("@") and len(text) > 1:
+            return text
+
+        return ""
+
+    def _refresh_youtube_channels_list(self, cfg: dict):
+        """Обновляет визуальный список каналов в GUI."""
+        # Очищаем старые виджеты
+        for w in self._yt_channel_widgets:
+            try:
+                w.destroy()
+            except Exception:
+                pass
+        self._yt_channel_widgets.clear()
+
+        channels = cfg.get("youtube_channels", [])
+        if not channels:
+            ctk.CTkLabel(
+                self._yt_channels_listbox_frame,
+                text="Нет добавленных каналов (используются каналы по умолчанию)",
+                font=("Segoe UI", 10),
+                text_color=self.TEXT3,
+            ).pack(anchor="w", padx=8, pady=8)
+            self._yt_channel_widgets.append(
+                self._yt_channels_listbox_frame.winfo_children()[-1]
+            )
+            return
+
+        for idx, ch in enumerate(channels):
+            if isinstance(ch, dict):
+                ch_id = ch.get("id", "?")
+                ch_name = ch.get("name", "")
+            else:
+                ch_id = str(ch)
+                ch_name = ""
+
+            row = ctk.CTkFrame(self._yt_channels_listbox_frame, fg_color=self.BG_CARD, corner_radius=6)
+            row.pack(fill="x", padx=4, pady=2)
+
+            label_text = f"{ch_name}  " if ch_name else ""
+            label_text += f"<span style='color: {self.TEXT3}; font-size: 9px;'>{ch_id}</span>"
+
+            ctk.CTkLabel(
+                row,
+                text=f"  {ch_name or 'Без имени'}",
+                font=("Segoe UI", 10),
+                text_color=self.TEXT2,
+                width=160, anchor="w",
+            ).pack(side="left", padx=(8, 0), pady=6)
+
+            ctk.CTkLabel(
+                row,
+                text=ch_id,
+                font=("Consolas", 9),
+                text_color=self.TEXT3,
+                anchor="w",
+            ).pack(side="left", fill="x", expand=True, padx=(0, 8), pady=6)
+
+            # Кнопка удаления
+            btn = ctk.CTkButton(
+                row, text="✕",
+                font=("Segoe UI", 11),
+                fg_color=self.RED_BG, hover_color=self.RED,
+                text_color=self.RED, width=28, height=28, corner_radius=6,
+                command=lambda i=idx: self._remove_youtube_channel(i),
+            )
+            btn.pack(side="right", padx=(0, 8), pady=6)
+
+            self._yt_channel_widgets.append(row)
+
+    def _remove_youtube_channel(self, index: int):
+        """Удаляет канал из списка по индексу."""
+        try:
+            with open(self.config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            return
+
+        channels = cfg.get("youtube_channels", [])
+        if not isinstance(channels, list) or index >= len(channels):
+            return
+
+        removed = channels.pop(index)
+        ch_info = removed.get("name", removed.get("id", "?")) if isinstance(removed, dict) else str(removed)
+        cfg["youtube_channels"] = channels
+
+        try:
+            with open(self.config_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2, ensure_ascii=False)
+            logger.info("YouTube: удалён канал %s", ch_info)
+            self.append_log("INFO", f"YouTube: удалён канал {ch_info}")
+        except Exception as e:
+            logger.error("Ошибка удаления канала: %s", e)
+            return
+
+        self._refresh_youtube_channels_list(cfg)
+
+        try:
+            from youtube_monitor import load_youtube_channels
+            load_youtube_channels(cfg)
+        except Exception:
+            pass
 
     # ================================================================
     # Logs
@@ -603,11 +854,16 @@ class DesktopGUI:
 
             for key, var in self._toggles.items():
                 if key in ("workshop_enabled", "patchnotes_enabled", "moderation_notifications",
-                            "youtube_enabled", "youtube_download_shorts"):
+                            "youtube_enabled", "youtube_download_shorts",
+                            "youtube_russian_only", "youtube_shorts_only"):
                     default = True
                 else:
                     default = False
                 var.set(cfg.get(key, default))
+
+            # Загружаем список YouTube-каналов
+            if hasattr(self, '_yt_channels_listbox_frame') and self._yt_channels_listbox_frame:
+                self._refresh_youtube_channels_list(cfg)
 
         except Exception as e:
             import traceback

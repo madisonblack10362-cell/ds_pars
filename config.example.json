@@ -37,5 +37,17 @@
       "channel_id": "000000000000000000",
       "channel_name": "dayz-news"
     }
-  }
+  },
+
+  "_comment_youtube": "YouTube настройки: только русские шортсы, каналы настраиваются через GUI",
+  "youtube_enabled": true,
+  "youtube_russian_only": true,
+  "youtube_shorts_only": true,
+  "youtube_download_shorts": true,
+  "youtube_interval_hours": 2,
+  "youtube_min_views": 0,
+  "youtube_min_likes": 0,
+  "youtube_max_per_check": 5,
+  "youtube_lookback_days": 90,
+  "youtube_channels": []
 }

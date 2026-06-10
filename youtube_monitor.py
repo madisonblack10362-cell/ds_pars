@@ -84,37 +84,63 @@ async def _get_ytdlp_semaphore() -> asyncio.Semaphore:
     return _ytdlp_semaphore
 
 # ─── Каналы DayZ для RSS мониторинга ─────────────────────────────────────────
-# ID каналов YouTube — источники самого свежего контента  # FIX: реальные ID каналов
-_YOUTUBE_CHANNELS = [
-    # Официальные
+# ID каналов YouTube — источники самого свежего контента.
+# Каналы загружаются из config.json (youtube_channels),
+# но если там пусто — используются каналы по умолчанию ниже.
+# Можно добавлять/удалять каналы через GUI.
+_DEFAULT_YOUTUBE_CHANNELS = [
+    # Русскоязычные DayZ каналы (основной источник)
     {"id": "UCvQPcPcEzzMPTjTMzGCRN0g", "name": "DayZ Official"},
     {"id": "UCxMACMoQE1AJTKmjmCCdTsA", "name": "Bohemia Interactive"},
-    # Крупные англоязычные DayZ каналы  # FIX-8: рабочие ID для теста
-    {"id": "UCiqnHa8godMz59KXBpGLkMg", "name": "Wobo"},
-    {"id": "UC1tnWBHAHDUBfBvXAYXqKfA", "name": "Fresh"},
-    {"id": "UCuCE3bHBGPHnqVBTqMHpFhw", "name": "Monto"},
-    # TODO: добавить реальные ID русскоязычных DayZ каналов вручную
 ]
 
+# Текущий рабочий список каналов (загружается из config или дефолтный)
+_YOUTUBE_CHANNELS: list[dict] = []
+
+def load_youtube_channels(config: dict | None = None) -> list[dict]:
+    """Загружает список каналов из config.json или возвращает дефолтный."""
+    global _YOUTUBE_CHANNELS
+    if config is None:
+        config = {}
+    channels = config.get("youtube_channels", [])
+    if isinstance(channels, list) and channels:
+        # Валидация: каждый элемент должен иметь id
+        valid = []
+        for ch in channels:
+            if isinstance(ch, dict) and ch.get("id"):
+                valid.append(ch)
+            elif isinstance(ch, str) and ch.strip():
+                valid.append({"id": ch.strip(), "name": ""})
+        if valid:
+            _YOUTUBE_CHANNELS = valid
+            logger.info("YouTube: загружено %d каналов из config.json", len(valid))
+            return valid
+    # Fallback на дефолтные
+    _YOUTUBE_CHANNELS = list(_DEFAULT_YOUTUBE_CHANNELS)
+    return _YOUTUBE_CHANNELS
+
 # ─── Поисковые запросы для API поиска ────────────────────────────────────────
-# Расширенные запросы с целевыми ключевыми словами для шортсов
+# Только русскоязычные запросы для поиска шортсов
 _SEARCH_QUERIES = [
-    # Shorts-специфичные запросы
-    ("DayZ shorts", "relevance"),
+    # Shorts-специфичные запросы (русские)
     ("DayZ шортс", "relevance"),
     ("DayZ рилс", "relevance"),
-    ("DayZ funny moments", "relevance"),
     ("DayZ приколы", "relevance"),
-    # Контентные запросы
-    ("DayZ gameplay 2025", "date"),
-    ("DayZ update", "date"),
-    ("DayZ патч", "date"),
-    ("DayZ баг glitch", "relevance"),
-    ("DayZ pvp highlights", "relevance"),
-    ("DayZ raid", "relevance"),
-    ("DayZ base building", "relevance"),
-    ("DayZ секрет пасхалка", "relevance"),
     ("DayZ мем", "relevance"),
+    ("DayZ shorts на русском", "relevance"),
+    # Контентные запросы (русские)
+    ("DayZ гайд", "date"),
+    ("DayZ патч", "date"),
+    ("DayZ баг", "relevance"),
+    ("DayZ пвп", "relevance"),
+    ("DayZ рейд", "relevance"),
+    ("DayZ база", "relevance"),
+    ("DayZ секрет", "relevance"),
+    ("DayZ пасхалка", "relevance"),
+    ("DayZ обновление", "date"),
+    ("DayZ вайп", "relevance"),
+    ("DayZ оружие", "relevance"),
+    ("DayZ лут", "relevance"),
 ]
 
 # ─── Категории контента ─────────────────────────────────────────────────────
@@ -641,22 +667,29 @@ async def _fetch_all_channels_rss(state: dict) -> list[dict]:
     all_videos = []
 
     tasks = []
-    for ch in _YOUTUBE_CHANNELS:
+    rss_channel_indices = []  # Трекаем какие индексы идут через RSS (не @handle)
+    for i, ch in enumerate(_YOUTUBE_CHANNELS):
         ch_id = ch.get("id", "")
         if not ch_id:
             continue
+        # @handle не поддерживается YouTube RSS — пропускаем
+        if ch_id.startswith("@"):
+            logger.debug("YouTube/RSS: пропускаем @handle '%s' (нужен Channel ID для RSS)", ch_id)
+            continue
         etag = channel_etags.get(ch_id, "")
         tasks.append(_fetch_channel_rss(ch_id, etag))
+        rss_channel_indices.append(i)
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    for i, result in enumerate(results):
+    for j, result in enumerate(results):
         if isinstance(result, Exception):
-            logger.debug("YouTube/RSS: ошибка канала #%d: %s", i, result)
+            logger.debug("YouTube/RSS: ошибка канала #%d: %s", j, result)
             continue
 
         videos, new_etag, last_modified = result
-        ch = _YOUTUBE_CHANNELS[i] if i < len(_YOUTUBE_CHANNELS) else {}
+        orig_i = rss_channel_indices[j] if j < len(rss_channel_indices) else j
+        ch = _YOUTUBE_CHANNELS[orig_i] if orig_i < len(_YOUTUBE_CHANNELS) else {}
         ch_id = ch.get("id", "")
 
         # Обновляем etag в состоянии
@@ -1065,6 +1098,8 @@ def _filter_video(
     lookback_days: int = 90,
     max_duration: int = 0,
     require_dayz_keyword: bool = True,
+    require_russian: bool = True,
+    shorts_only: bool = True,
 ) -> str | None:
     """
     Фильтрует видео. Возвращает None если проходит все фильтры,
@@ -1072,18 +1107,24 @@ def _filter_video(
 
     Причины:
       'live'       — прямой эфир
-      'long'       — длительность > max_duration (или _LONG_VIDEO_MAX)
+      'long'       — длительность > max_duration (или _SHORTS_MAX_DURATION если shorts_only)
       'garbage'    — мусорный стрим
       'old'        — старше lookback_days
       'irrelevant' — не релевантно DayZ
       'views'      — мало просмотров/лайков
+      'not_russian' — видео не на русском языке
+      'not_shorts' — не является шортсом (вертикальным видео <=90с)
     """
     # Прямые эфиры — нет
     if video.get("is_live", False):
         return "live"
 
-    # Длительность (max_duration=0 → используем _LONG_VIDEO_MAX)
+    # ─── Фильтр: только шортсы (вертикальные, <= 90 сек) ─────────
     duration = video.get("duration", 0) or 0
+    if shorts_only and duration > _SHORTS_MAX_DURATION:
+        return "not_shorts"
+
+    # Длительность (max_duration=0 → используем _LONG_VIDEO_MAX)
     effective_max = max_duration if max_duration > 0 else _LONG_VIDEO_MAX
     if duration > effective_max:
         return "long"
@@ -1117,6 +1158,16 @@ def _filter_video(
             video.get("source", "unknown"),
         )
         return "old"
+
+    # ─── Фильтр: только русскоязычные видео ───────────────────────
+    if require_russian:
+        title = video.get("title", "")
+        description = video.get("description", "")
+        channel_title = video.get("channel_title", "")
+        # Проверяем русский текст в заголовке, описании ИЛИ названии канала
+        combined_text = f"{title} {description} {channel_title}"
+        if not _is_russian_text(combined_text):
+            return "not_russian"
 
     # Релевантность DayZ
     description = video.get("description", "")
@@ -1295,6 +1346,10 @@ async def check_for_new_videos(
     seen_video_ids = set()
     processed_count = 0
 
+    # ─── Загружаем каналы из конфига (ДО RSS-запроса!) ──────────────────
+    channels = load_youtube_channels(config)
+    logger.info("YouTube: используется %d каналов для RSS", len(channels))
+
     # ─── Автоочистка posted_ids от старых записей ────────────────────────
     # Удаляем записи старше lookback_days, чтобы не накапливать бесконечно
     now_ts = time.time()
@@ -1336,8 +1391,12 @@ async def check_for_new_videos(
         v["_priority_source"] = "search"
         combined_videos.append(v)
 
+    # Настройки фильтрации из конфига
+    require_russian = config.get("youtube_russian_only", True)
+    shorts_only = config.get("youtube_shorts_only", True)
+
     # Счётчики ворнки фильтрации
-    funnel = {  # FIX-5: добавлена детализация old по источнику
+    funnel = {
         "total": len(combined_videos),
         "dup": 0,
         "already": 0,
@@ -1350,6 +1409,8 @@ async def check_for_new_videos(
         "irrelevant": 0,
         "views": 0,
         "no_date": 0,
+        "not_russian": 0,
+        "not_shorts": 0,
     }
 
     for video in combined_videos:
@@ -1377,6 +1438,8 @@ async def check_for_new_videos(
             min_likes=min_likes,
             lookback_days=lookback_days,
             max_duration=max_duration,
+            require_russian=require_russian,
+            shorts_only=shorts_only,
         )
         if reject_reason:
             funnel[reject_reason] = funnel.get(reject_reason, 0) + 1
@@ -1421,6 +1484,8 @@ async def check_for_new_videos(
     irrelevant = funnel["irrelevant"]
     views_r = funnel["views"]
     no_date = funnel["no_date"]
+    not_russian = funnel.get("not_russian", 0)
+    not_shorts = funnel.get("not_shorts", 0)
     new_count = len(all_new_videos)
 
     parts = [f"найдено: {n}"]
@@ -1430,15 +1495,19 @@ async def check_for_new_videos(
         parts.append(f"уже было: {already}")
     if live:
         parts.append(f"стримы: {live}")
+    if not_shorts:
+        parts.append(f"не шортсы: {not_shorts}")
     if long:
         parts.append(f"длинные(>10мин): {long}")
-    if old:  # FIX-5: детализация по источнику
+    if old:
         parts.append(
             f"старые(>{lookback_days}д): {old} "
             f"[rss={funnel.get('old_rss',0)} "
             f"inv={funnel.get('old_invidious',0)} "
             f"ytdlp={funnel.get('old_ytdlp',0)}]"
         )
+    if not_russian:
+        parts.append(f"не русские: {not_russian}")
     if irrelevant:
         parts.append(f"не-DayZ: {irrelevant}")
     if views_r:
