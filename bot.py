@@ -202,7 +202,7 @@ class DayZNewsMonitor:
                     max_duration=youtube_max_duration,
                     download_shorts=youtube_download_shorts,
                     shutdown_event=self._shutdown_event,
-                    notify_callback=self._notify_moderation,
+                    notify_callback=self._youtube_notify_wrapper,
                     web_panel_url=self.web_panel_url,
                     web_panel_api_key=self.web_panel_api_key,
                     lookback_days=youtube_lookback_days,
@@ -374,6 +374,45 @@ class DayZNewsMonitor:
         except Exception as exc:
             logger.warning("Не удалось получить список пользователей: %s", exc)
             return []
+
+    async def _youtube_notify_wrapper(self, video: dict) -> None:
+        """Обёртка: youtube_monitor передаёт dict, а _notify_moderation ждёт 4 аргумента."""
+        title = video.get("title", "")
+        category = video.get("category", "other")
+        priority = "low"
+        if category in ("updates", "events", "weapons", "secrets"):
+            priority = "medium"
+        channel = video.get("channel_title", "YouTube")
+
+        # Пробуем стандартный путь через модерацию
+        if self.moderation_notifications and (self.notify_chat_id or self.publisher):
+            await self._notify_moderation(
+                title=title,
+                news_type=category,
+                priority=priority,
+                source=f"YouTube: {channel}",
+            )
+            return
+
+        # Фоллбэк: отправляем напрямую в Telegram канал
+        try:
+            pub = self.publisher
+            if not pub:
+                tg_token = self.config.get("telegram_bot_token", "")
+                tg_channel = self.config.get("telegram_channel_id", "")
+                if tg_token and tg_channel:
+                    from publisher import Publisher
+                    pub = Publisher(bot_token=tg_token, channel_id=tg_channel)
+            if pub:
+                from youtube_monitor import format_video_message
+                msg = format_video_message(video, category=category)
+                url = video.get("url", "")
+                if url and msg:
+                    msg = f"{msg}\n\n{url}"
+                await pub.publish_message(text=msg)
+                logger.info("YouTube: уведомление отправлено в Telegram канал")
+        except Exception as e:
+            logger.debug("YouTube: ошибка отправки уведомления: %s", e)
 
     async def _notify_moderation(
         self, title: str, news_type: str, priority: str, source: str
