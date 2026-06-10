@@ -632,7 +632,7 @@ async def _fetch_all_channels_rss(state: dict) -> list[dict]:
             # Добавляем channel_id
             for v in videos:
                 v["channel_id"] = ch_id
-            logger.info(
+            logger.debug(
                 "YouTube/RSS: '%s' → %d видео (etag: %s)",
                 ch.get("name", ch_id), len(videos), bool(new_etag),
             )
@@ -1046,41 +1046,42 @@ def _filter_video(
     min_likes: int = 0,
     lookback_days: int = 90,
     require_dayz_keyword: bool = True,
-) -> bool:
+) -> str | None:
     """
-    Фильтрует видео. Возвращает True если проходит все фильтры.
+    Фильтрует видео. Возвращает None если проходит все фильтры,
+    либо строку с причиной отбраковки для статистики ворнки.
 
-    Фильтры:
-      - Не прямой эфир
-      - Длительность ≤ 5 минут
-      - Не мусорный стрим
-      - Дата публикации в рамках lookback_days
-      - Релевантность контента (DayZ)
-      - Просмотров/лайки (когда статистика доступна)
+    Причины:
+      'live'       — прямой эфир
+      'long'       — длительность > 5 минут
+      'garbage'    — мусорный стрим
+      'old'        — старше lookback_days
+      'irrelevant' — не релевантно DayZ
+      'views'      — мало просмотров/лайков
     """
     # Прямые эфиры — нет
     if video.get("is_live", False):
-        return False
+        return "live"
 
     # Длительность
     duration = video.get("duration", 0) or 0
     if duration > _LONG_VIDEO_MAX:
-        return False
+        return "long"
 
     # Мусорные стримы
     title = video.get("title", "")
     if _is_stream_garbage(title):
-        return False
+        return "garbage"
 
     # Фильтр даты (только если есть published timestamp)
     published = video.get("published", 0) or 0
     if published > 0 and not _is_within_lookback(published, lookback_days):
-        return False
+        return "old"
 
     # Релевантность DayZ
     description = video.get("description", "")
     if require_dayz_keyword and not _is_dayz_related(title, description):
-        return False
+        return "irrelevant"
 
     # Просмотры/лайки (только когда статистика доступна)
     views = video.get("views", 0) or 0
@@ -1088,12 +1089,12 @@ def _filter_video(
 
     if views > 0:
         if min_views > 0 and views < min_views:
-            return False
+            return "views"
         if min_likes > 0 and likes < min_likes:
-            return False
+            return "views"
     # Если views=0 (RSS без статистики или yt-dlp flat) — пропускаем
 
-    return True
+    return None  # Проходит все фильтры
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1254,21 +1255,15 @@ async def check_for_new_videos(
     processed_count = 0
 
     # ─── Стратегия 1: RSS каналов (параллельно) ─────────────────────────
-    logger.debug("YouTube: RSS — проверка %d каналов...", len(_YOUTUBE_CHANNELS))
     rss_start = time.time()
 
     try:
         rss_videos = await _fetch_all_channels_rss(state)
-        logger.info(
-            "YouTube: RSS получено %d видео за %.1fс",
-            len(rss_videos), time.time() - rss_start,
-        )
     except Exception as e:
         logger.error("YouTube: RSS ошибка: %s", e)
         rss_videos = []
 
     # ─── Стратегия 2: Поисковые запросы (параллельно через gather) ────
-    logger.debug("YouTube: поиск — %d запросов (lookback: %d дней)...", len(_SEARCH_QUERIES), lookback_days)
     search_start = time.time()
 
     try:
@@ -1276,16 +1271,11 @@ async def check_for_new_videos(
             lookback_days=lookback_days,
             max_results_per_query=max_results,
         )
-        logger.info(
-            "YouTube: поиск получил %d видео за %.1fс",
-            len(search_videos), time.time() - search_start,
-        )
     except Exception as e:
         logger.error("YouTube: поиск ошибка: %s", e)
         search_videos = []
 
-    # ─── Объединяем и фильтруем ─────────────────────────────────────────
-    # RSS видео имеют приоритет (помечаем приоритет)
+    # ─── Объединяем и фильтруем с воронкой ────────────────────────────────
     combined_videos = []
     for v in rss_videos:
         v["_priority_source"] = "rss"
@@ -1294,11 +1284,21 @@ async def check_for_new_videos(
         v["_priority_source"] = "search"
         combined_videos.append(v)
 
-    logger.info("YouTube: всего %d видео, начинаем фильтрацию...", len(combined_videos))
+    # Счётчики ворнки фильтрации
+    funnel = {
+        "total": len(combined_videos),
+        "dup": 0,        # Дубликаты (seen_video_ids)
+        "already": 0,    # Уже было в posted_ids
+        "live": 0,       # Прямой эфир
+        "long": 0,       # Длительность > 5 мин
+        "garbage": 0,    # Мусорный стрим
+        "old": 0,        # Старше lookback_days
+        "irrelevant": 0, # Не релевантно DayZ
+        "views": 0,      # Мало просмотров/лайков
+    }
 
     for video in combined_videos:
         if processed_count >= max_per_check:
-            logger.info("YouTube: лимит max_per_check=%d достигнут", max_per_check)
             break
 
         video_id = video.get("video_id", "")
@@ -1307,19 +1307,23 @@ async def check_for_new_videos(
 
         # Дедупликация
         if video_id in seen_video_ids:
+            funnel["dup"] += 1
             continue
         seen_video_ids.add(video_id)
 
         if video_id in posted_ids:
+            funnel["already"] += 1
             continue
 
-        # Фильтрация
-        if not _filter_video(
+        # Фильтрация (теперь возвращает причину)
+        reject_reason = _filter_video(
             video,
             min_views=min_views,
             min_likes=min_likes,
             lookback_days=lookback_days,
-        ):
+        )
+        if reject_reason:
+            funnel[reject_reason] = funnel.get(reject_reason, 0) + 1
             continue
 
         # Категория
@@ -1340,19 +1344,55 @@ async def check_for_new_videos(
             "source": video.get("source", "unknown"),
         }
 
-        logger.info(
-            "YouTube: [+]: %s (%s, %s, %d views, src=%s)",
-            video.get("title", "")[:60],
-            _format_duration(video.get("duration", 0)),
-            category,
-            video.get("views", 0),
-            video.get("source", "?"),
-        )
-
     # Сохраняем состояние
     state["posted_ids"] = posted_ids
     state["last_check"] = time.time()
     _save_state(state)
+
+    # ─── Логируем воронку одной строкой ──────────────────────────────────
+    elapsed = time.time() - rss_start
+    n = funnel["total"]
+    dups = funnel["dup"]
+    already = funnel["already"]
+    live = funnel["live"]
+    long = funnel["long"]
+    garbage = funnel["garbage"]
+    old = funnel["old"]
+    irrelevant = funnel["irrelevant"]
+    views_r = funnel["views"]
+    new_count = len(all_new_videos)
+
+    parts = [f"найдено: {n}"]
+    if dups:
+        parts.append(f"дубли: {dups}")
+    if already:
+        parts.append(f"уже было: {already}")
+    if live:
+        parts.append(f"стримы: {live}")
+    if long:
+        parts.append(f"длинные(>5мин): {long}")
+    if garbage:
+        parts.append(f"мусор: {garbage}")
+    if old:
+        parts.append(f"старые(>{lookback_days}д): {old}")
+    if irrelevant:
+        parts.append(f"не-DayZ: {irrelevant}")
+    if views_r:
+        parts.append(f"мало views: {views_r}")
+    parts.append(f"новых: {new_count}")
+    parts.append(f"({elapsed:.1f}с)")
+
+    logger.info("YouTube: %s", " → ".join(parts))
+
+    # Логируем каждое новое видео
+    for v in all_new_videos:
+        logger.info(
+            "YouTube [+]: %s (%s, %s, %s views)",
+            v.get("title", "")[:60],
+            _format_duration(v.get("duration", 0)),
+            v.get("category", "?"),
+            _format_views(v.get("views", 0)),
+        )
 
     # ─── Сохраняем в БД и отправляем в веб-панель ────────────────────────
     if db and all_new_videos:
@@ -1363,9 +1403,6 @@ async def check_for_new_videos(
             web_panel_url=web_panel_url,
             web_panel_api_key=web_panel_api_key,
         )
-
-    if all_new_videos:
-        logger.info("YouTube: итог — %d новых видео", len(all_new_videos))
 
     return all_new_videos
 
