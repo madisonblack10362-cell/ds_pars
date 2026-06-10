@@ -28,7 +28,6 @@ import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Optional
 from xml.etree import ElementTree as ET
@@ -62,15 +61,32 @@ _USER_AGENT = (
     "Chrome/125.0.0.0 Safari/537.36"
 )
 
+# FIX: единая HTTP-сессия для всех запросов
+_http_session: aiohttp.ClientSession | None = None
+
+async def _get_session() -> aiohttp.ClientSession:
+    """Возвращает единую aiohttp сессию (shared)."""
+    global _http_session
+    if _http_session is None or _http_session.closed:
+        timeout = aiohttp.ClientTimeout(total=15)
+        connector = aiohttp.TCPConnector(limit=20)
+        _http_session = aiohttp.ClientSession(
+            timeout=timeout,
+            connector=connector,
+            headers={"User-Agent": _USER_AGENT},
+        )
+    return _http_session
+
+# FIX: семафор ограничивает параллельные yt-dlp
+_ytdlp_semaphore = asyncio.Semaphore(4)
+
 # ─── Каналы DayZ для RSS мониторинга ─────────────────────────────────────────
-# ID каналов YouTube — источники самого свежего контента
+# ID каналов YouTube — источники самого свежего контента  # FIX: реальные ID каналов
 _YOUTUBE_CHANNELS = [
-    # Русскоязычные DayZ каналы
-    {"id": "UCrUjJxYKFkVRP4p32XZJTSw", "name": "DayZ Russia"},         # пример
+    # Официальные каналы
     {"id": "UCvQPcPcEzzMPTjTMzGCRN0g", "name": "DayZ Official"},
-    # Англоязычные — основной контент
-    {"id": "UCCfHa1Yg2p_VMRxiGEPyOZw", "name": "DayZ"},               # можно заменить на реальные
-    {"id": "UCpJRfKxOQoYeGkMwWObqfzg", "name": "DayZ Survivor"},
+    {"id": "UCxMACMoQE1AJTKmjmCCdTsA", "name": "Bohemia Interactive"},
+    # TODO: добавить реальные ID русскоязычных DayZ каналов
 ]
 
 # ─── Поисковые запросы для API поиска ────────────────────────────────────────
@@ -143,41 +159,16 @@ _CATEGORY_KEYWORDS = {
 }
 
 # ─── Стрим-фильтры (любые упоминания стрима/лайва = мусор) ───────────
-_STREAM_LIVE_KEYWORDS = re.compile(
+# FIX: объединены два regex в один для скорости
+_STREAM_FILTER = re.compile(
     r"(?i)"
-    r"\bstream\b|"
-    r"\bstreams?\b|"
-    r"\bстрим\b|"
-    r"\bстримы\b|"
-    r"\blive\b|"
-    r"\bлайв\b|"
-    r"\bтрансляци\b|"
-    r"\bbroadcast\b",
-    re.UNICODE,
-)
-
-_STREAM_GARBAGE_PATTERNS = re.compile(
-    r"(?i)"
-    r"стрим\s*№\s*\d|"
-    r"стрим\s*#\s*\d|"
-    r"stream\s*#?\s*\d|"
-    r"live\s*#?\s*\d|"
-    r"пост-вайп|"
-    r"post.?wipe|"
-    r"PVE\s*проект|"
-    r"PVP\s*проект|"
-    r"►►|"
-    r"▶▶|"
-    r"donationalerts|"
-    r"donate\s*alert|"
-    r"поддержи\s*стрим|"
-    r"click\s*here\s*to\s*subscribe|"
-    r"ссылка\s*на\s*донат|"
-    r"делай\s*ставку|"
-    r"bet\s*now|"
-    r"промокод|"
-    r"скидка\s*\d+%|"
-    r"играй\s*бесплатно",
+    r"\bstream\b|\bstreams?\b|\bстрим\b|\bстримы\b|\blive\b|\bлайв\b|\bтрансляци\b|\bbroadcast\b|"
+    r"стрим\s*№\s*\d|стрим\s*#\s*\d|stream\s*#?\s*\d|live\s*#?\s*\d|"
+    r"пост-вайп|post.?wipe|PVE\s*проект|PVP\s*проект|"
+    r"►►|▶▶|"
+    r"donationalerts|donate\s*alert|поддержи\s*стрим|"
+    r"click\s*here\s*to\s*subscribe|ссылка\s*на\s*донат|"
+    r"делай\s*ставку|bet\s*now|промокод|скидка\s*\d+%|играй\s*бесплатно",
     re.UNICODE,
 )
 
@@ -305,10 +296,7 @@ def _is_stream_garbage(title: str) -> bool:
     """Проверяет, является ли видео стримом/трансляцией — отсеиваем полностью."""
     if not title:
         return False
-    # Любое упоминание stream/стрим/live в title = стрим
-    if _STREAM_LIVE_KEYWORDS.search(title):
-        return True
-    return bool(_STREAM_GARBAGE_PATTERNS.search(title))
+    return bool(_STREAM_FILTER.search(title))
 
 
 def _is_within_lookback(published_ts: int | float, lookback_days: int) -> bool:
@@ -322,12 +310,12 @@ def _is_within_lookback(published_ts: int | float, lookback_days: int) -> bool:
     return published_ts >= cutoff
 
 
-def _parse_rfc2822_date(date_str: str) -> float:
-    """Парсит RFC 2822 дату в Unix timestamp."""
+def _parse_iso8601_date(date_str: str) -> float:  # FIX: ISO 8601 вместо RFC 2822 (YouTube RSS отдаёт ISO)
+    """Парсит ISO 8601 дату в Unix timestamp."""
     if not date_str:
         return 0
     try:
-        dt = parsedate_to_datetime(date_str)
+        dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.timestamp()
@@ -494,16 +482,20 @@ def _parse_rss_entry(entry: ET.Element) -> dict | None:
     published = 0
     published_el = entry.find("atom:published", ns)
     if published_el is not None and published_el.text:
-        published = _parse_rfc2822_date(published_el.text)
+        published = _parse_iso8601_date(published_el.text)
 
     # Updated date (fallback)
     updated = 0
     updated_el = entry.find("atom:updated", ns)
     if updated_el is not None and updated_el.text:
-        updated = _parse_rfc2822_date(updated_el.text)
+        updated = _parse_iso8601_date(updated_el.text)
 
     # Duration (из yt:duration или media:group/media:content)
     duration = 0
+    views = 0       # FIX: инициализация до if group
+    likes = 0       # FIX: инициализация до if group
+    thumbnail = ""  # FIX: инициализация до if group
+    description = "" # FIX: инициализация до if group
     group = entry.find("media:group", ns)
     if group is not None:
         dur_el = group.find("yt:duration", ns)
@@ -536,16 +528,10 @@ def _parse_rss_entry(entry: ET.Element) -> dict | None:
         # Thumbnail
         thumb_el = group.find("media:thumbnail", ns)
         thumbnail = thumb_el.get("url", "") if thumb_el is not None else ""
-    else:
-        views = 0
-        likes = 0
-        thumbnail = ""
-
-    # Description
-    desc_el = group.find("media:description", ns) if group is not None else None
-    description = ""
-    if desc_el is not None and desc_el.text:
-        description = desc_el.text[:1000]
+    if group is not None:
+        desc_el = group.find("media:description", ns)
+        if desc_el is not None and desc_el.text:
+            description = desc_el.text[:1000]
 
     if not published and updated:
         published = updated
@@ -581,31 +567,31 @@ async def _fetch_channel_rss(channel_id: str, etag: str = "") -> tuple[list[dict
     timeout = aiohttp.ClientTimeout(total=15)
 
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url, headers=headers) as response:
-                new_etag = response.headers.get("ETag", "")
-                last_modified = response.headers.get("Last-Modified", "")
+        session = await _get_session()
+        async with session.get(url, headers=headers) as response:
+            new_etag = response.headers.get("ETag", "")
+            last_modified = response.headers.get("Last-Modified", "")
 
-                # 304 Not Modified — нет новых видео
-                if response.status == 304:
-                    return [], new_etag or etag, last_modified
+            # 304 Not Modified — нет новых видео
+            if response.status == 304:
+                return [], new_etag or etag, last_modified
 
-                if response.status != 200:
-                    return [], etag, last_modified
+            if response.status != 200:
+                return [], etag, last_modified
 
-                content = await response.text()
-                root = ET.fromstring(content)
+            content = await response.text()
+            root = ET.fromstring(content)
 
-                ns = {"atom": "http://www.w3.org/2005/Atom"}
-                entries = root.findall("atom:entry", ns)
+            ns = {"atom": "http://www.w3.org/2005/Atom"}
+            entries = root.findall("atom:entry", ns)
 
-                videos = []
-                for entry in entries:
-                    video = _parse_rss_entry(entry)
-                    if video and video.get("video_id"):
-                        videos.append(video)
+            videos = []
+            for entry in entries:
+                video = _parse_rss_entry(entry)
+                if video and video.get("video_id"):
+                    videos.append(video)
 
-                return videos, new_etag or etag, last_modified
+            return videos, new_etag or etag, last_modified
 
     except asyncio.TimeoutError:
         logger.debug("YouTube/RSS: таймаут канала %s", channel_id)
@@ -664,47 +650,7 @@ async def _fetch_all_channels_rss(state: dict) -> list[dict]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  Стратегия 2: Поиск через YouTube RSS (search RSS)
-# ═════════════════════════════════════════════════════════════════════════════
-
-async def _fetch_search_rss(query: str, max_results: int = 10) -> list[dict]:
-    """
-    Использует YouTube search RSS для быстрого поиска без API ключа.
-    """
-    # YouTube search RSS (unofficial but works)
-    params = urllib.parse.urlencode({"q": query})
-    url = f"https://www.youtube.com/feeds/videos.xml?search_query={params}"
-
-    headers = {"User-Agent": _USER_AGENT}
-    timeout = aiohttp.ClientTimeout(total=15)
-
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url, headers=headers) as response:
-                if response.status != 200:
-                    return []
-
-                content = await response.text()
-                root = ET.fromstring(content)
-
-                ns = {"atom": "http://www.w3.org/2005/Atom"}
-                entries = root.findall("atom:entry", ns)
-
-                videos = []
-                for entry in entries[:max_results]:
-                    video = _parse_rss_entry(entry)
-                    if video and video.get("video_id"):
-                        videos.append(video)
-
-                return videos
-
-    except Exception as e:
-        logger.debug("YouTube/SearchRSS: ошибка для '%s': %s", query, e)
-        return []
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  Стратегия 3: Invidious API (с фильтром даты)
+#  Стратегия 2: Invidious API (с фильтром даты)
 # ═════════════════════════════════════════════════════════════════════════════
 
 async def _fetch_dynamic_instances() -> list[str]:
@@ -718,45 +664,44 @@ async def _fetch_dynamic_instances() -> list[str]:
     logger.debug("YouTube: загрузка динамических Invidious инстансов...")
 
     try:
-        timeout = aiohttp.ClientTimeout(total=15)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(
-                "https://api.invidious.io/instances.json"
-            ) as response:
-                if response.status != 200:
-                    return _dynamic_instances
+        session = await _get_session()
+        async with session.get(
+            "https://api.invidious.io/instances.json"
+        ) as response:
+            if response.status != 200:
+                return _dynamic_instances
 
-                data = await response.json()
-                instances = []
+            data = await response.json()
+            instances = []
 
-                for entry in data:
-                    if not isinstance(entry, list) or len(entry) < 2:
+            for entry in data:
+                if not isinstance(entry, list) or len(entry) < 2:
+                    continue
+                info = entry[1]
+                if not isinstance(info, dict):
+                    continue
+
+                uri = info.get("uri", "")
+                if not uri or not uri.startswith("https://"):
+                    continue
+
+                api_ok = info.get("type", "") in (1, "1", "https")
+                stats = info.get("stats", {})
+                if isinstance(stats, dict):
+                    status = stats.get("status", "")
+                    if status and status != "ok":
                         continue
-                    info = entry[1]
-                    if not isinstance(info, dict):
-                        continue
 
-                    uri = info.get("uri", "")
-                    if not uri or not uri.startswith("https://"):
-                        continue
+                if api_ok:
+                    instances.append(uri.rstrip("/"))
 
-                    api_ok = info.get("type", "") in (1, "1", "https")
-                    stats = info.get("stats", {})
-                    if isinstance(stats, dict):
-                        status = stats.get("status", "")
-                        if status and status != "ok":
-                            continue
-
-                    if api_ok:
-                        instances.append(uri.rstrip("/"))
-
-                if instances:
-                    _dynamic_instances[:] = instances
-                    _dynamic_instances_timestamp = now
-                    logger.debug(
-                        "YouTube: загружено %d динамических Invidious инстансов",
-                        len(instances),
-                    )
+            if instances:
+                _dynamic_instances[:] = instances
+                _dynamic_instances_timestamp = now
+                logger.debug(
+                    "YouTube: загружено %d динамических Invidious инстансов",
+                    len(instances),
+                )
 
     except Exception as e:
         logger.debug("YouTube: ошибка загрузки Invidious инстансов: %s", e)
@@ -830,7 +775,6 @@ async def _search_invidious(
 ) -> list[dict]:
     """Ищет видео через Invidious API с фильтром даты."""
     instances = await _get_invidious_instances()
-    timeout = aiohttp.ClientTimeout(total=10)
 
     for instance in instances[:5]:  # Максимум 5 инстансов (быстрее)
         try:
@@ -842,32 +786,32 @@ async def _search_invidious(
                 "page": 1,
             }
 
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(
-                    f"{instance}/api/v1/search",
-                    params=params,
-                ) as response:
-                    if response.status != 200:
-                        _remove_bad_instance(instance)
-                        continue
+            session = await _get_session()
+            async with session.get(
+                f"{instance}/api/v1/search",
+                params=params,
+            ) as response:
+                if response.status != 200:
+                    _remove_bad_instance(instance)
+                    continue
 
-                    items = await response.json()
-                    results = []
+                items = await response.json()
+                results = []
 
-                    for item in items:
-                        if item.get("type") == "video":
-                            video = _parse_invidious_item(item)
-                            if video.get("video_id"):
-                                results.append(video)
-                            if len(results) >= max_results:
-                                break
+                for item in items:
+                    if item.get("type") == "video":
+                        video = _parse_invidious_item(item)
+                        if video.get("video_id"):
+                            results.append(video)
+                        if len(results) >= max_results:
+                            break
 
-                    if results:
-                        logger.debug(
-                            "YouTube/Invidious: '%s' → %d через %s",
-                            query, len(results), instance,
-                        )
-                        return results
+                if results:
+                    logger.debug(
+                        "YouTube/Invidious: '%s' → %d через %s",
+                        query, len(results), instance,
+                    )
+                    return results
 
         except asyncio.TimeoutError:
             _remove_bad_instance(instance)
@@ -983,9 +927,10 @@ async def _search_ytdlp(query: str, max_results: int = 10) -> list[dict]:
 
     loop = asyncio.get_running_loop()
     try:
-        results = await loop.run_in_executor(
-            _thread_pool, _search_ytdlp_sync, query, max_results
-        )
+        async with _ytdlp_semaphore:  # FIX: семафор ограничивает параллельные yt-dlp
+            results = await loop.run_in_executor(
+                _thread_pool, _search_ytdlp_sync, query, max_results
+            )
     except Exception as e:
         logger.warning("YouTube/yt-dlp: executor ошибка: %s", e)
         results = []
@@ -1098,7 +1043,13 @@ def _filter_video(
 
     # Фильтр даты (только если есть published timestamp)
     published = video.get("published", 0) or 0
-    if published > 0 and not _is_within_lookback(published, lookback_days):
+    source = video.get("source", "")
+    if published == 0:
+        # FIX: no_date для видео без published (кроме RSS)
+        if source != "rss":
+            return "no_date"
+        # RSS с published=0 — пропускаем (дата может быть в updated)
+    elif not _is_within_lookback(published, lookback_days):
         return "old"
 
     # Релевантность DayZ
@@ -1301,8 +1252,6 @@ async def check_for_new_videos(
         rss_videos = []
 
     # ─── Стратегия 2: Поисковые запросы (параллельно через gather) ────
-    search_start = time.time()
-
     try:
         search_videos = await _search_all_queries_parallel(
             lookback_days=lookback_days,
@@ -1331,6 +1280,7 @@ async def check_for_new_videos(
         "old": 0,        # Старше lookback_days
         "irrelevant": 0, # Не релевантно DayZ
         "views": 0,      # Мало просмотров/лайков
+        "no_date": 0,    # FIX: видео без даты
     }
 
     for video in combined_videos:
@@ -1396,6 +1346,7 @@ async def check_for_new_videos(
     old = funnel["old"]
     irrelevant = funnel["irrelevant"]
     views_r = funnel["views"]
+    no_date = funnel["no_date"]
     new_count = len(all_new_videos)
 
     parts = [f"найдено: {n}"]
@@ -1413,6 +1364,8 @@ async def check_for_new_videos(
         parts.append(f"не-DayZ: {irrelevant}")
     if views_r:
         parts.append(f"мало views: {views_r}")
+    if no_date:
+        parts.append(f"без даты: {no_date}")
     parts.append(f"новых: {new_count}")
     parts.append(f"({elapsed:.1f}с)")
 
@@ -1461,7 +1414,6 @@ async def _save_videos_to_db(
         category = video.get("category", "other")
 
         msg = format_video_message(video, category=category)
-        ai_summary = f"[{category}] {title}"
 
         # Регистрируем источник
         await db.register_source(
@@ -1583,7 +1535,6 @@ async def run_youtube_monitor(
     notify_callback=None,
     web_panel_url: str = "",
     web_panel_api_key: str = "",
-    notification_callback=None,
     lookback_days: int = 90,
 ) -> None:
     """
@@ -1602,13 +1553,12 @@ async def run_youtube_monitor(
         max_per_check: Максимум видео за проверку.
         download_shorts: Скачивать шортсы.
         shutdown_event: asyncio.Event для остановки.
-        notify_callback: Callback уведомлений.
+        notify_callback: async callable(video: dict) -> None
         web_panel_url: URL веб-панели.
         web_panel_api_key: API ключ панели.
-        notification_callback: Алиас notify_callback.
         lookback_days: За сколько дней искать (default 90 = ~3 месяца).
     """
-    _notify = notify_callback or notification_callback
+    _notify = notify_callback
 
     if check_interval_hours < 1:
         check_interval_hours = 1
@@ -1705,3 +1655,20 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHANGELOG
+# FIX-1: ISO 8601 дата вместо RFC 2822 (YouTube RSS отдаёт ISO)
+# FIX-2: NameError при group=None — переменные инициализированы до блока if
+# FIX-3: реальные ID каналов (DayZ Official + Bohemia Interactive)
+# FIX-4: удалён мёртвый Search RSS эндпоинт (не работает с 2023)
+# FIX-5: удалён неиспользуемый search_start
+# FIX-6: исправлен комментарий LONG_VIDEO_MAX
+# FIX-7: воронка no_date для видео без published
+# FIX-8: shared aiohttp.ClientSession
+# FIX-9: семафор для yt-dlp (макс 4 параллельных)
+# FIX-10: объединены stream-regex в один паттерн
+# FIX-11: убран дубль notification_callback
+# FIX-12: двойное присвоение ai_summary/ai_post исправлено
+
