@@ -508,7 +508,7 @@ class DesktopGUI:
         self._yt_channel_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self._bind_paste(self._yt_channel_entry)
 
-        # Кнопка "Вставить" — через PowerShell, работает всегда
+        # Кнопка "Вставить" — через PowerShell + запись во внутренний и внешний виджет
         def _paste_channel():
             try:
                 import subprocess
@@ -517,10 +517,19 @@ class DesktopGUI:
                     capture_output=True, text=True, timeout=5
                 )
                 text = r.stdout.strip()
-                if text:
-                    w = getattr(self._yt_channel_entry, "_entry", self._yt_channel_entry)
-                    w.delete("0", "end")
-                    w.insert("0", text)
+                if not text:
+                    return
+                # Пишем и во внутренний _entry и в CTkEntry
+                self._yt_channel_entry.delete(0, "end")
+                try:
+                    w = getattr(self._yt_channel_entry, "_entry", None)
+                    if w:
+                        w.delete(0, "end")
+                        w.insert(0, text)
+                    else:
+                        self._yt_channel_entry.insert(0, text)
+                except Exception:
+                    self._yt_channel_entry.insert(0, text)
             except Exception as e:
                 self.append_log("ERROR", f"Вставка: {e}")
 
@@ -563,9 +572,25 @@ class DesktopGUI:
 
     def _add_youtube_channel(self):
         """Добавляет канал в список и сохраняет в config."""
+        # Читаем текст: сначала из CTkEntry, fallback на внутренний _entry
         raw = self._yt_channel_entry.get().strip()
-        name = self._yt_name_entry.get().strip()
         if not raw:
+            try:
+                w = getattr(self._yt_channel_entry, "_entry", None)
+                if w:
+                    raw = w.get().strip()
+            except Exception:
+                pass
+        name = self._yt_name_entry.get().strip()
+        if not name:
+            try:
+                w = getattr(self._yt_name_entry, "_entry", None)
+                if w:
+                    name = w.get().strip()
+            except Exception:
+                pass
+        if not raw:
+            self.append_log("WARNING", "YouTube: поле канала пустое")
             return
 
         # Парсим ID из URL или текста
@@ -606,9 +631,17 @@ class DesktopGUI:
             self.append_log("ERROR", f"Ошибка сохранения: {e}")
             return
 
-        # Очищаем поле
+        # Очищаем оба виджета
         self._yt_channel_entry.delete(0, "end")
         self._yt_name_entry.delete(0, "end")
+        try:
+            getattr(self._yt_channel_entry, "_entry", None).delete(0, "end")
+        except Exception:
+            pass
+        try:
+            getattr(self._yt_name_entry, "_entry", None).delete(0, "end")
+        except Exception:
+            pass
 
         # Обновляем список в GUI
         self._refresh_youtube_channels_list(cfg)
@@ -706,7 +739,7 @@ class DesktopGUI:
         if m:
             return m.group(1)
 
-        # YouTube URL с @handle (нельзя извлечь ID без API, сохраняем handle)
+        # YouTube URL с @handle — сохраняем как есть (бот сам резолвнет при парсинге)
         m = re.search(r"youtube\.com/@([\w.-]+)", text)
         if m:
             handle = m.group(1)
