@@ -230,8 +230,9 @@ class DayZNewsMonitor:
             youtube_interval = int(cfg.get("youtube_interval_hours", 2))
             youtube_min_views = int(cfg.get("youtube_min_views", 100))
             youtube_min_likes = int(cfg.get("youtube_min_likes", 50))
-            youtube_max_per_check = int(cfg.get("youtube_max_per_check", 5))
+            youtube_max_per_check = int(cfg.get("youtube_max_per_check", 10))
             youtube_download_shorts = cfg.get("youtube_download_shorts", True)
+            youtube_lookback_days = int(cfg.get("youtube_lookback_days", 90))
 
             self.youtube_task = asyncio.create_task(
                 run_youtube_monitor(
@@ -247,9 +248,11 @@ class DayZNewsMonitor:
                     notify_callback=self._notify_moderation,
                     web_panel_url=self.web_panel_url,
                     web_panel_api_key=self.web_panel_api_key,
+                    lookback_days=youtube_lookback_days,
                 )
             )
-            logger.info("YouTube монитор запущен (интервал: %dч, min_views: %d)", youtube_interval, youtube_min_views)
+            logger.info("YouTube монитор запущен (интервал: %dч, min_views: %d, lookback: %dд)",
+                        youtube_interval, youtube_min_views, youtube_lookback_days)
         else:
             logger.info("YouTube монитор отключён")
 

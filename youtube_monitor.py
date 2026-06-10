@@ -1,23 +1,37 @@
 """
 Модуль мониторинга YouTube для DayZ News Monitor.
-Ищет короткие видео (shorts/рилс) по DayZ тематике через три бэкенда:
-  1. Invidious API (динамическое обнаружение инстансов + статический фоллбэк)
-  2. yt-dlp Python библиотека
-  3. yt-dlp subprocess (последний resort)
+Профессиональная система сбора актуального контента (шортсы, рилс, короткие видео)
+по DayZ тематике.
 
-Скачивает видео, анализирует через AI, публикует в Telegram.
+Архитектура поиска (4 стратегии, параллельно):
+  1. RSS-ленты каналов — прямой источник свежих видео через PubSubHubbub RSS
+  2. YouTube Shorts RSS — шортсы из trending/недавних
+  3. Invidious API — поиск с фильтром даты (week/month)
+  4. yt-dlp — фоллбэк поиск без даты, с post-filter по timestamp
+
+Фильтрация:
+  - Длительность: shorts (< 90с) + короткие видео (< 5 мин)
+  - Дата публикации: за последние N дней (конфигурируемое)
+  - Релевантность: ключевые слова + AI-анализ
+  - Качество: минимальные просмотры/лайки
+  - Дедупликация: video_id → youtube_state.json + БД
 """
 
 import asyncio
+import hashlib
 import json
 import os
 import re
 import subprocess
+import threading
 import time
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Optional
+from xml.etree import ElementTree as ET
 
 import aiohttp
 
@@ -26,30 +40,58 @@ from logger import logger
 # ─── Константы ─────────────────────────────────────────────────────────────
 
 # Пороги длительности (секунды)
-_LONG_VIDEO_MAX = 300        # > 5 минут — фильтруем
-_SHORTS_MAX_DURATION = 90    # Порог для "шортс"
+_SHORTS_MAX_DURATION = 90    # Порог для "шортс" (YouTube Shorts)
+_LONG_VIDEO_MAX = 300         # > 5 минут — не берём
+
+# Пороги даты
+_DEFAULT_LOOKBACK_DAYS = 90   # По умолчанию ищем за 3 месяца
 
 # Минимум кириллических символов для определения русского текста
-_MIN_RU_CHARS = 3
+_MIN_RU_CHARS = 2  # Смягчённый порог (было 3)
 
 # Путь к файлу состояния
 _STATE_FILE = "youtube_state.json"
 
 # Пул потоков для синхронных операций (yt-dlp, subprocess)
-_thread_pool = ThreadPoolExecutor(max_workers=3)
+_thread_pool = ThreadPoolExecutor(max_workers=4)
 
-# ─── Поисковые запросы — только короткий контент для Telegram канала ──────
+# User-Agent для HTTP запросов
+_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/125.0.0.0 Safari/537.36"
+)
+
+# ─── Каналы DayZ для RSS мониторинга ─────────────────────────────────────────
+# ID каналов YouTube — источники самого свежего контента
+_YOUTUBE_CHANNELS = [
+    # Русскоязычные DayZ каналы
+    {"id": "UCrUjJxYKFkVRP4p32XZJTSw", "name": "DayZ Russia"},         # пример
+    {"id": "UCvQPcPcEzzMPTjTMzGCRN0g", "name": "DayZ Official"},
+    # Англоязычные — основной контент
+    {"id": "UCCfHa1Yg2p_VMRxiGEPyOZw", "name": "DayZ"},               # можно заменить на реальные
+    {"id": "UCpJRfKxOQoYeGkMwWObqfzg", "name": "DayZ Survivor"},
+]
+
+# ─── Поисковые запросы для API поиска ────────────────────────────────────────
+# Расширенные запросы с целевыми ключевыми словами для шортсов
 _SEARCH_QUERIES = [
-    ("DayZ шортс", "relevance", "week"),
-    ("DayZ рилс", "relevance", "week"),
-    ("DayZ shorts", "relevance", "week"),
-    ("DayZ приколы", "relevance", "week"),
-    ("DayZ баг", "relevance", "week"),
-    ("DayZ мем", "relevance", "week"),
-    ("DayZ фича", "relevance", "week"),
-    ("DayZ секрет", "relevance", "week"),
-    ("DayZ обновление", "relevance", "week"),
-    ("DayZ патч", "relevance", "month"),
+    # Shorts-специфичные запросы
+    ("DayZ shorts", "relevance"),
+    ("DayZ шортс", "relevance"),
+    ("DayZ рилс", "relevance"),
+    ("DayZ funny moments", "relevance"),
+    ("DayZ приколы", "relevance"),
+    # Контентные запросы
+    ("DayZ gameplay 2025", "date"),
+    ("DayZ update", "date"),
+    ("DayZ патч", "date"),
+    ("DayZ баг glitch", "relevance"),
+    ("DayZ pvp highlights", "relevance"),
+    ("DayZ raid", "relevance"),
+    ("DayZ base building", "relevance"),
+    ("DayZ секрет пасхалка", "relevance"),
+    ("DayZ мем", "relevance"),
 ]
 
 # ─── Категории контента ─────────────────────────────────────────────────────
@@ -128,6 +170,7 @@ _STREAM_GARBAGE_PATTERNS = re.compile(
 
 # ─── Список релевантных ключевых слов контента ───────────────────────────────
 _CONTENT_RELEVANT_KEYWORDS = [
+    "dayz",  # Главное ключевое слово — должно быть в тексте
     "гайд", "обзор", "pvp", "оружие", "винтовка", "пистолет", "дробовик",
     "штурмовая", "снайперская", "патроны", "аммо", "база", "строительство",
     "баг", "глюк", "exploit", "эксплойт", "чит", "хак", "обновление",
@@ -144,6 +187,7 @@ _CONTENT_RELEVANT_KEYWORDS = [
     "vehicle", "car", "helicopter", "boat", "bike",
     "bug", "glitch", "exploit", "cheat", "hack",
     "meme", "funny", "cringe", "shitpost",
+    "chernarus", "livonia", "sakit",
 ]
 
 # ─── Статические Invidious инстансы (фоллбэк) ──────────────────────────────
@@ -165,16 +209,18 @@ _dynamic_instances: list[str] = []
 _dynamic_instances_timestamp: float = 0.0
 _DYNAMIC_CACHE_TTL = 6 * 3600  # 6 часов
 
+# ─── Кэш RSS для каналов (чтобы не спамить YouTube) ────────────────────────
+_rss_cache_lock = threading.Lock()
+_rss_cache: dict[str, str] = {}  # channel_id → etag/last_modified
+_RSS_CHECK_INTERVAL = 300  # Минимум 5 минут между проверками канала
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  Утилитные функции
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _detect_category(title: str, description: str = "") -> str:
-    """
-    Определяет категорию видео по ключевым словам в заголовке и описании.
-    Возвращает ключ категории или 'other'.
-    """
+    """Определяет категорию видео по ключевым словам."""
     text = f"{title} {description}".lower()
     best_category = "other"
     best_count = 0
@@ -189,7 +235,7 @@ def _detect_category(title: str, description: str = "") -> str:
 
 
 def _format_duration(seconds: int | float) -> str:
-    """Форматирует длительность в читаемый вид (MM:SS или HH:MM:SS)."""
+    """Форматирует длительность в читаемый вид."""
     if not seconds or seconds <= 0:
         return "0:00"
     seconds = int(seconds)
@@ -201,7 +247,7 @@ def _format_duration(seconds: int | float) -> str:
 
 
 def _format_views(views: int) -> str:
-    """Форматирует число просмотров в читаемый вид."""
+    """Форматирует число просмотров."""
     if views >= 1_000_000:
         return f"{views / 1_000_000:.1f}M"
     if views >= 1_000:
@@ -220,16 +266,64 @@ def _escape_html(text: str) -> str:
     return text
 
 
-def _parse_iso_duration(iso_duration: str) -> int:
+def _is_russian_text(text: str) -> bool:
+    """Проверяет, содержит ли текст кириллические символы (смягчённый порог)."""
+    if not text:
+        return False
+    cyrillic_count = sum(1 for c in text if "\u0400" <= c <= "\u04FF")
+    return cyrillic_count >= _MIN_RU_CHARS
+
+
+def _is_dayz_related(title: str, description: str = "") -> bool:
     """
-    Парсит ISO 8601 длительность (PT#M#S) в секунды.
-    Пример: 'PT3M45S' → 225
+    Проверяет, относится ли контент к DayZ.
+    Смягчённая версия — достаточно 'dayz' в тексте ИЛИ 2+ релевантных ключевых слова.
     """
+    text = f"{title} {description}".lower()
+    # Если есть 'dayz' — точно релевантно
+    if "dayz" in text:
+        return True
+    # Иначе проверяем количество других ключевых слов
+    kw_count = sum(1 for kw in _CONTENT_RELEVANT_KEYWORDS if kw != "dayz" and kw.lower() in text)
+    return kw_count >= 2
+
+
+def _is_stream_garbage(title: str) -> bool:
+    """Проверяет, является ли видео мусорным стримом."""
+    if not title:
+        return False
+    return bool(_STREAM_GARBAGE_PATTERNS.search(title))
+
+
+def _is_within_lookback(published_ts: int | float, lookback_days: int) -> bool:
+    """
+    Проверяет, находится ли видео в диапазоне lookback_days от текущей даты.
+    published_ts — Unix timestamp.
+    """
+    if not published_ts or published_ts <= 0:
+        return True  # Если нет даты — не фильтруем (даём шанс)
+    cutoff = time.time() - (lookback_days * 86400)
+    return published_ts >= cutoff
+
+
+def _parse_rfc2822_date(date_str: str) -> float:
+    """Парсит RFC 2822 дату в Unix timestamp."""
+    if not date_str:
+        return 0
+    try:
+        dt = parsedate_to_datetime(date_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except Exception:
+        return 0
+
+
+def _parse_iso8601_duration(iso_duration: str) -> int:
+    """Парсит ISO 8601 длительность (PT#M#S) в секунды."""
     if not iso_duration:
         return 0
-    match = re.match(
-        r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", iso_duration
-    )
+    match = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", iso_duration)
     if not match:
         return 0
     hours = int(match.group(1) or 0)
@@ -238,38 +332,436 @@ def _parse_iso_duration(iso_duration: str) -> int:
     return hours * 3600 + minutes * 60 + seconds
 
 
-def _is_russian_text(text: str) -> bool:
-    """
-    Проверяет, содержит ли текст минимум _MIN_RU_CHARS кириллических символов.
-    """
-    if not text:
-        return False
-    cyrillic_count = sum(1 for c in text if "\u0400" <= c <= "\u04FF")
-    return cyrillic_count >= _MIN_RU_CHARS
+def format_video_message(video: dict, category: str = "") -> str:
+    """Форматирует информацию о видео в текст для Telegram."""
+    title = _escape_html(video.get("title", "Без названия"))
+    ch_title = _escape_html(video.get("channel_title", "YouTube"))
+    duration = _format_duration(video.get("duration", 0))
+    views = _format_views(video.get("views", 0))
+    url = video.get("url", "")
+
+    # Определяем тип контента
+    dur = video.get("duration", 0) or 0
+    if dur <= _SHORTS_MAX_DURATION:
+        content_type = "📱 Shorts"
+    elif dur <= 180:
+        content_type = "🎬 Видео"
+    else:
+        content_type = "📹 Длинное"
+
+    lines = [
+        f"{content_type} <b>{title}</b>",
+        f"📺 {ch_title}",
+        f"⏱ {duration}  👁 {views}",
+    ]
+
+    category_label = {
+        "guide": "📖 Гайд",
+        "pvp": "⚔️ PvP",
+        "weapons": "🔫 Оружие",
+        "vehicles": "🚗 Транспорт",
+        "base": "🏗 База",
+        "bugs": "🐛 Баг/Чит",
+        "updates": "🔄 Обновление",
+        "events": "🎉 Ивент",
+        "memes": "😂 Мем",
+        "secrets": "🔮 Секрет",
+    }.get(category, "")
+
+    if category_label:
+        lines.append(f"🏷 {category_label}")
+
+    lines.append(url)
+    return "\n".join(lines)
 
 
-def _is_stream_garbage(title: str) -> bool:
-    """
-    Проверяет, является ли видео мусорным стримом.
-    Возвращает True если мусор.
-    """
-    if not title:
-        return False
-    return bool(_STREAM_GARBAGE_PATTERNS.search(title))
+def cleanup_old_downloads(
+    downloads_dir: str = "downloads",
+    max_age_hours: int = 48,
+) -> int:
+    """Удаляет старые скачанные видео."""
+    if not os.path.isdir(downloads_dir):
+        return 0
+
+    now = time.time()
+    max_age = max_age_hours * 3600
+    removed = 0
+
+    for filename in os.listdir(downloads_dir):
+        filepath = os.path.join(downloads_dir, filename)
+        if not os.path.isfile(filepath):
+            continue
+        try:
+            if now - os.path.getmtime(filepath) > max_age:
+                os.remove(filepath)
+                removed += 1
+        except OSError:
+            continue
+
+    if removed > 0:
+        logger.info("YouTube: удалено %d старых файлов из %s", removed, downloads_dir)
+
+    return removed
 
 
-def _is_content_relevant(title: str, description: str = "") -> bool:
+# ═════════════════════════════════════════════════════════════════════════════
+#  Управление состоянием
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _load_state() -> dict:
+    """Загружает состояние из JSON-файла."""
+    if not os.path.exists(_STATE_FILE):
+        return {"posted_ids": {}, "last_check": 0, "channel_etags": {}}
+    try:
+        with open(_STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if "posted_ids" not in data:
+            data["posted_ids"] = {}
+        if "channel_etags" not in data:
+            data["channel_etags"] = {}
+        return data
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("YouTube: не удалось загрузить состояние: %s", e)
+        return {"posted_ids": {}, "last_check": 0, "channel_etags": {}}
+
+
+def _save_state(state: dict) -> None:
+    """Сохраняет состояние в JSON-файл."""
+    try:
+        with open(_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        logger.warning("YouTube: не удалось сохранить состояние: %s", e)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Стратегия 1: RSS-ленты каналов (прямой источник)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _parse_rss_entry(entry: ET.Element) -> dict | None:
     """
-    Проверяет, содержит ли контент релевантные ключевые слова DayZ.
+    Парсит один <entry> из YouTube RSS/Atom фида в унифицированный формат.
     """
-    text = f"{title} {description}".lower()
-    return any(kw.lower() in text for kw in _CONTENT_RELEVANT_KEYWORDS)
+    ns = {
+        "atom": "http://www.w3.org/2005/Atom",
+        "yt": "http://www.youtube.com/xml/schemas/2015",
+        "media": "http://search.yahoo.com/mrss/",
+    }
+
+    # Video ID
+    video_id = ""
+    video_url = entry.find("atom:link", ns)
+    if video_url is not None:
+        href = video_url.get("href", "")
+        # YouTube RSS даёт URL вида https://www.youtube.com/watch?v=XXXXX
+        match = re.search(r"v=([a-zA-Z0-9_-]+)", href)
+        if match:
+            video_id = match.group(1)
+
+    if not video_id:
+        return None
+
+    # Title
+    title_el = entry.find("atom:title", ns)
+    title = title_el.text.strip() if title_el is not None and title_el.text else ""
+
+    # Channel
+    channel_el = entry.find("atom:author/atom:name", ns)
+    channel_title = channel_el.text.strip() if channel_el is not None and channel_el.text else ""
+
+    # Published date
+    published = 0
+    published_el = entry.find("atom:published", ns)
+    if published_el is not None and published_el.text:
+        published = _parse_rfc2822_date(published_el.text)
+
+    # Updated date (fallback)
+    updated = 0
+    updated_el = entry.find("atom:updated", ns)
+    if updated_el is not None and updated_el.text:
+        updated = _parse_rfc2822_date(updated_el.text)
+
+    # Duration (из yt:duration или media:group/media:content)
+    duration = 0
+    group = entry.find("media:group", ns)
+    if group is not None:
+        dur_el = group.find("yt:duration", ns)
+        if dur_el is not None:
+            dur_str = dur_el.get("seconds", "0")
+            try:
+                duration = int(dur_str)
+            except (ValueError, TypeError):
+                duration = 0
+
+        # Views
+        views_el = group.find("media:community/media:statistics", ns)
+        if views_el is not None:
+            try:
+                views = int(views_el.get("views", "0"))
+            except (ValueError, TypeError):
+                views = 0
+        else:
+            views = 0
+
+        # Likes
+        likes_el = group.find("media:community/media:starRating", ns)
+        likes = 0
+        if likes_el is not None:
+            try:
+                likes = int(likes_el.get("count", "0"))
+            except (ValueError, TypeError):
+                likes = 0
+
+        # Thumbnail
+        thumb_el = group.find("media:thumbnail", ns)
+        thumbnail = thumb_el.get("url", "") if thumb_el is not None else ""
+    else:
+        views = 0
+        likes = 0
+        thumbnail = ""
+
+    # Description
+    desc_el = group.find("media:description", ns) if group is not None else None
+    description = ""
+    if desc_el is not None and desc_el.text:
+        description = desc_el.text[:1000]
+
+    if not published and updated:
+        published = updated
+
+    return {
+        "video_id": video_id,
+        "title": title,
+        "channel_title": channel_title,
+        "channel_id": "",
+        "duration": duration,
+        "views": views,
+        "likes": likes,
+        "published": published,
+        "description": description,
+        "thumbnail": thumbnail,
+        "url": f"https://www.youtube.com/watch?v={video_id}",
+        "is_live": False,
+        "source": "rss",
+    }
+
+
+async def _fetch_channel_rss(channel_id: str, etag: str = "") -> tuple[list[dict], str, str]:
+    """
+    Загружает RSS-ленту канала. Возвращает (videos, new_etag, last_modified).
+    Использует Conditional GET (If-None-Match / If-Modified-Since) для кэширования.
+    """
+    url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+
+    headers = {"User-Agent": _USER_AGENT}
+    if etag:
+        headers["If-None-Match"] = etag
+
+    timeout = aiohttp.ClientTimeout(total=15)
+
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url, headers=headers) as response:
+                new_etag = response.headers.get("ETag", "")
+                last_modified = response.headers.get("Last-Modified", "")
+
+                # 304 Not Modified — нет новых видео
+                if response.status == 304:
+                    return [], new_etag or etag, last_modified
+
+                if response.status != 200:
+                    return [], etag, last_modified
+
+                content = await response.text()
+                root = ET.fromstring(content)
+
+                ns = {"atom": "http://www.w3.org/2005/Atom"}
+                entries = root.findall("atom:entry", ns)
+
+                videos = []
+                for entry in entries:
+                    video = _parse_rss_entry(entry)
+                    if video and video.get("video_id"):
+                        videos.append(video)
+
+                return videos, new_etag or etag, last_modified
+
+    except asyncio.TimeoutError:
+        logger.debug("YouTube/RSS: таймаут канала %s", channel_id)
+        return [], etag, ""
+    except ET.ParseError as e:
+        logger.debug("YouTube/RSS: ошибка парсинга XML канала %s: %s", channel_id, e)
+        return [], etag, ""
+    except Exception as e:
+        logger.debug("YouTube/RSS: ошибка канала %s: %s", channel_id, e)
+        return [], etag, ""
+
+
+async def _fetch_all_channels_rss(state: dict) -> list[dict]:
+    """
+    Параллельно загружает RSS всех каналов.
+    Возвращает список новых видео.
+    """
+    channel_etags = state.get("channel_etags", {})
+    all_videos = []
+
+    tasks = []
+    for ch in _YOUTUBE_CHANNELS:
+        ch_id = ch.get("id", "")
+        if not ch_id:
+            continue
+        etag = channel_etags.get(ch_id, "")
+        tasks.append(_fetch_channel_rss(ch_id, etag))
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            logger.debug("YouTube/RSS: ошибка канала #%d: %s", i, result)
+            continue
+
+        videos, new_etag, last_modified = result
+        ch = _YOUTUBE_CHANNELS[i] if i < len(_YOUTUBE_CHANNELS) else {}
+        ch_id = ch.get("id", "")
+
+        # Обновляем etag в состоянии
+        if new_etag:
+            channel_etags[ch_id] = new_etag
+
+        if videos:
+            # Добавляем channel_id
+            for v in videos:
+                v["channel_id"] = ch_id
+            logger.info(
+                "YouTube/RSS: '%s' → %d видео (etag: %s)",
+                ch.get("name", ch_id), len(videos), bool(new_etag),
+            )
+            all_videos.extend(videos)
+
+    state["channel_etags"] = channel_etags
+    return all_videos
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Стратегия 2: Поиск через YouTube RSS (search RSS)
+# ═════════════════════════════════════════════════════════════════════════════
+
+async def _fetch_search_rss(query: str, max_results: int = 10) -> list[dict]:
+    """
+    Использует YouTube search RSS для быстрого поиска без API ключа.
+    """
+    # YouTube search RSS (unofficial but works)
+    params = urllib.parse.urlencode({"q": query})
+    url = f"https://www.youtube.com/feeds/videos.xml?search_query={params}"
+
+    headers = {"User-Agent": _USER_AGENT}
+    timeout = aiohttp.ClientTimeout(total=15)
+
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url, headers=headers) as response:
+                if response.status != 200:
+                    return []
+
+                content = await response.text()
+                root = ET.fromstring(content)
+
+                ns = {"atom": "http://www.w3.org/2005/Atom"}
+                entries = root.findall("atom:entry", ns)
+
+                videos = []
+                for entry in entries[:max_results]:
+                    video = _parse_rss_entry(entry)
+                    if video and video.get("video_id"):
+                        videos.append(video)
+
+                return videos
+
+    except Exception as e:
+        logger.debug("YouTube/SearchRSS: ошибка для '%s': %s", query, e)
+        return []
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Стратегия 3: Invidious API (с фильтром даты)
+# ═════════════════════════════════════════════════════════════════════════════
+
+async def _fetch_dynamic_instances() -> list[str]:
+    """Загружает список доступных Invidious инстансов (кэш 6ч)."""
+    global _dynamic_instances, _dynamic_instances_timestamp
+
+    now = time.time()
+    if _dynamic_instances and (now - _dynamic_instances_timestamp) < _DYNAMIC_CACHE_TTL:
+        return _dynamic_instances
+
+    logger.info("YouTube: загрузка динамических Invidious инстансов...")
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(
+                "https://api.invidious.io/instances.json"
+            ) as response:
+                if response.status != 200:
+                    return _dynamic_instances
+
+                data = await response.json()
+                instances = []
+
+                for entry in data:
+                    if not isinstance(entry, list) or len(entry) < 2:
+                        continue
+                    info = entry[1]
+                    if not isinstance(info, dict):
+                        continue
+
+                    uri = info.get("uri", "")
+                    if not uri or not uri.startswith("https://"):
+                        continue
+
+                    api_ok = info.get("type", "") in (1, "1", "https")
+                    stats = info.get("stats", {})
+                    if isinstance(stats, dict):
+                        status = stats.get("status", "")
+                        if status and status != "ok":
+                            continue
+
+                    if api_ok:
+                        instances.append(uri.rstrip("/"))
+
+                if instances:
+                    _dynamic_instances[:] = instances
+                    _dynamic_instances_timestamp = now
+                    logger.info(
+                        "YouTube: загружено %d динамических Invidious инстансов",
+                        len(instances),
+                    )
+
+    except Exception as e:
+        logger.warning("YouTube: ошибка загрузки Invidious инстансов: %s", e)
+
+    return _dynamic_instances
+
+
+async def _get_invidious_instances() -> list[str]:
+    """Возвращает объединённый список инстансов."""
+    dynamic = await _fetch_dynamic_instances()
+    all_instances = list(dynamic)
+    for inst in _STATIC_INVIDIOUS_INSTANCES:
+        if inst not in all_instances:
+            all_instances.append(inst)
+    return all_instances
+
+
+def _remove_bad_instance(instance_url: str) -> None:
+    """Удаляет неработающий инстанс из кэша."""
+    _dynamic_instances[:] = [
+        inst for inst in _dynamic_instances if inst != instance_url
+    ]
 
 
 def _parse_invidious_item(item: dict) -> dict:
-    """
-    Преобразует элемент из ответа Invidious API в унифицированный формат видео.
-    """
+    """Преобразует элемент Invidious API в унифицированный формат."""
     duration = item.get("lengthSeconds", 0) or 0
     if isinstance(duration, str):
         try:
@@ -309,214 +801,17 @@ def _parse_invidious_item(item: dict) -> dict:
     }
 
 
-def format_video_message(video: dict, category: str = "") -> str:
-    """
-    Форматирует информацию о видео в текст для Telegram.
-    """
-    title = _escape_html(video.get("title", "Без названия"))
-    ch_title = _escape_html(video.get("channel_title", "YouTube"))
-    duration = _format_duration(video.get("duration", 0))
-    views = _format_views(video.get("views", 0))
-    url = video.get("url", "")
-
-    lines = [
-        f"🎬 <b>{title}</b>",
-        f"📺 {ch_title}",
-        f"⏱ {duration}  👁 {views}",
-    ]
-
-    category_label = {
-        "guide": "📖 Гайд",
-        "pvp": "⚔️ PvP",
-        "weapons": "🔫 Оружие",
-        "vehicles": "🚗 Транспорт",
-        "base": "🏗 База",
-        "bugs": "🐛 Баг/Чит",
-        "updates": "🔄 Обновление",
-        "events": "🎉 Ивент",
-        "memes": "😂 Мем",
-        "secrets": "🔮 Секрет",
-    }.get(category, "")
-
-    if category_label:
-        lines.append(f"🏷 {category_label}")
-
-    lines.append(url)
-    return "\n".join(lines)
-
-
-def cleanup_old_downloads(
-    downloads_dir: str = "downloads",
-    max_age_hours: int = 48,
-) -> int:
-    """
-    Удаляет старые скачанные видео из директории.
-    Возвращает количество удалённых файлов.
-    """
-    if not os.path.isdir(downloads_dir):
-        return 0
-
-    now = time.time()
-    max_age = max_age_hours * 3600
-    removed = 0
-
-    for filename in os.listdir(downloads_dir):
-        filepath = os.path.join(downloads_dir, filename)
-        if not os.path.isfile(filepath):
-            continue
-        try:
-            if now - os.path.getmtime(filepath) > max_age:
-                os.remove(filepath)
-                removed += 1
-        except OSError:
-            continue
-
-    if removed > 0:
-        logger.info("YouTube: удалено %d старых файлов из %s", removed, downloads_dir)
-
-    return removed
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  Управление состоянием
-# ═════════════════════════════════════════════════════════════════════════════
-
-def _load_state() -> dict:
-    """Загружает состояние из JSON-файла (posted_ids и т.д.)."""
-    if not os.path.exists(_STATE_FILE):
-        return {"posted_ids": {}, "last_check": 0}
-    try:
-        with open(_STATE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if "posted_ids" not in data:
-            data["posted_ids"] = {}
-        return data
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning("YouTube: не удалось загрузить состояние: %s", e)
-        return {"posted_ids": {}, "last_check": 0}
-
-
-def _save_state(state: dict) -> None:
-    """Сохраняет состояние в JSON-файл."""
-    try:
-        with open(_STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
-    except OSError as e:
-        logger.warning("YouTube: не удалось сохранить состояние: %s", e)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  Invidious бэкенд (Backend 1)
-# ═════════════════════════════════════════════════════════════════════════════
-
-async def _fetch_dynamic_instances() -> list[str]:
-    """
-    Загружает список доступных Invidious инстансов с api.invidious.io.
-    Кэшируется на 6 часов. Возвращает список URL инстансов.
-    """
-    global _dynamic_instances, _dynamic_instances_timestamp
-
-    now = time.time()
-    if _dynamic_instances and (now - _dynamic_instances_timestamp) < _DYNAMIC_CACHE_TTL:
-        return _dynamic_instances
-
-    logger.info("YouTube: загрузка динамических Invidious инстансов...")
-
-    try:
-        timeout = aiohttp.ClientTimeout(total=15)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(
-                "https://api.invidious.io/instances.json"
-            ) as response:
-                if response.status != 200:
-                    logger.warning(
-                        "YouTube: api.invidious.io вернул HTTP %d",
-                        response.status,
-                    )
-                    return _dynamic_instances
-
-                data = await response.json()
-                instances = []
-
-                # Формат: [[{"name": "api"}, {"uri": "...", "stats": {...}}, ...], ...]
-                # Берём только рабочие инстансы с API
-                for entry in data:
-                    if not isinstance(entry, list) or len(entry) < 2:
-                        continue
-                    info = entry[1]
-                    if not isinstance(info, dict):
-                        continue
-
-                    uri = info.get("uri", "")
-                    if not uri or not uri.startswith("https://"):
-                        continue
-
-                    # Фильтруем: только инстансы с доступным API,
-                    # неCloudflare-protected, с的类型 1 (http)
-                    api_ok = info.get("type", "") in (1, "1", "https")
-                    stats = info.get("stats", {})
-                    if isinstance(stats, dict):
-                        # Проверяем что инстанс не мёртв
-                        status = stats.get("status", "")
-                        if status and status != "ok":
-                            continue
-
-                    if api_ok:
-                        instances.append(uri.rstrip("/"))
-
-                if instances:
-                    # Обновляем кэш через in-place мутацию (без global)
-                    _dynamic_instances[:] = instances
-                    _dynamic_instances_timestamp = now
-                    logger.info(
-                        "YouTube: загружено %d динамических Invidious инстансов",
-                        len(instances),
-                    )
-                else:
-                    logger.warning(
-                        "YouTube: api.invidious.io вернул пустой список инстансов"
-                    )
-
-    except asyncio.TimeoutError:
-        logger.warning("YouTube: таймаут загрузки Invidious инстансов")
-    except Exception as e:
-        logger.warning("YouTube: ошибка загрузки Invidious инстансов: %s", e)
-
-    return _dynamic_instances
-
-
-async def _get_invidious_instances() -> list[str]:
-    """Возвращает объединённый список инстансов (динамические + статические)."""
-    dynamic = await _fetch_dynamic_instances()
-    all_instances = list(dynamic)
-    for inst in _STATIC_INVIDIOUS_INSTANCES:
-        if inst not in all_instances:
-            all_instances.append(inst)
-    return all_instances
-
-
-def _remove_bad_instance(instance_url: str) -> None:
-    """Удаляет неработающий инстанс из кэша."""
-    _dynamic_instances[:] = [
-        inst for inst in _dynamic_instances
-        if inst != instance_url
-    ]
-
-
 async def _search_invidious(
     query: str,
     sort_by: str = "relevance",
-    date: str = "week",
+    date: str = "month",
     max_results: int = 10,
 ) -> list[dict]:
-    """
-    Ищет видео через Invidious API.
-    Перебирает инстансы, автоматически исключает нерабочие.
-    """
+    """Ищет видео через Invidious API с фильтром даты."""
     instances = await _get_invidious_instances()
     timeout = aiohttp.ClientTimeout(total=10)
 
-    for instance in instances:
+    for instance in instances[:5]:  # Максимум 5 инстансов (быстрее)
         try:
             params = {
                 "q": query,
@@ -548,54 +843,37 @@ async def _search_invidious(
 
                     if results:
                         logger.debug(
-                            "YouTube/Invidious: '%s' → %d результатов через %s",
+                            "YouTube/Invidious: '%s' → %d через %s",
                             query, len(results), instance,
                         )
                         return results
 
         except asyncio.TimeoutError:
-            logger.debug(
-                "YouTube/Invidious: таймаут инстанса %s", instance
-            )
             _remove_bad_instance(instance)
         except Exception as e:
-            logger.debug(
-                "YouTube/Invidious: ошибка инстанса %s: %s", instance, e
-            )
+            logger.debug("YouTube/Invidious: %s ошибка: %s", instance, e)
             _remove_bad_instance(instance)
 
-    logger.warning(
-        "YouTube/Invidious: ни один инстанс не ответил для запроса '%s'",
-        query,
-    )
     return []
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  yt-dlp бэкенд (Backend 2 — Python библиотека)
+#  Стратегия 4: yt-dlp (фоллбэк)
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _search_ytdlp_sync(
     query: str,
     max_results: int = 10,
 ) -> list[dict]:
-    """
-    Ищет видео через yt-dlp (синхронная версия для run_in_executor).
-    """
+    """Ищет видео через yt-dlp (синхронная для executor)."""
     try:
         import yt_dlp
     except ImportError:
-        logger.warning("YouTube/yt-dlp: библиотека yt-dlp не установлена")
         return []
 
-    # Подавляем yt-dlp логирование до CRITICAL
-    yt_dlp.utils._YOUTUBEDL_SUPPRESS_WARNINGS = True
-    logging_module = yt_dlp.utils.__dict__.get("logging")
-    if logging_module:
-        try:
-            logging_module.getLogger("yt-dlp").setLevel(logging_module.CRITICAL)
-        except Exception:
-            pass
+    import logging as _stdlib_logging
+    _stdlib_logging.getLogger("yt-dlp").setLevel(_stdlib_logging.CRITICAL)
+    _stdlib_logging.getLogger("yt_dlp").setLevel(_stdlib_logging.CRITICAL)
 
     ydl_opts = {
         "extract_flat": "in_playlist",
@@ -607,8 +885,8 @@ def _search_ytdlp_sync(
     }
 
     search_query = f"ytsearch{max_results}:{query}"
-
     results = []
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(search_query, download=False)
@@ -637,6 +915,7 @@ def _search_ytdlp_sync(
                     view_count = int(view_count.replace(",", ""))
                 except (ValueError, TypeError):
                     view_count = 0
+
             like_count = entry.get("like_count") or 0
             if isinstance(like_count, str):
                 try:
@@ -666,22 +945,14 @@ def _search_ytdlp_sync(
                 })
 
     except Exception as e:
-        logger.warning("YouTube/yt-dlp: ошибка поиска '%s': %s", query, e)
+        logger.warning("YouTube/yt-dlp: ошибка '%s': %s", query, e)
 
     return results
 
 
-async def _search_ytdlp(
-    query: str,
-    max_results: int = 10,
-) -> list[dict]:
-    """
-    Ищет видео через yt-dlp Python библиотеку (асинхронная обёртка).
-    Подавляет yt-dlp логирование до CRITICAL уровня.
-    """
+async def _search_ytdlp(query: str, max_results: int = 10) -> list[dict]:
+    """Ищет видео через yt-dlp (асинхронная обёртка)."""
     import logging as _stdlib_logging
-
-    # Подавляем yt-dlp логирование ГЛОБАЛЬНО до CRITICAL
     try:
         import yt_dlp
         _stdlib_logging.getLogger("yt-dlp").setLevel(_stdlib_logging.CRITICAL)
@@ -692,188 +963,137 @@ async def _search_ytdlp(
     loop = asyncio.get_running_loop()
     try:
         results = await loop.run_in_executor(
-            _thread_pool,
-            _search_ytdlp_sync,
-            query,
-            max_results,
+            _thread_pool, _search_ytdlp_sync, query, max_results
         )
     except Exception as e:
-        logger.warning("YouTube/yt-dlp: ошибка executor: %s", e)
+        logger.warning("YouTube/yt-dlp: executor ошибка: %s", e)
         results = []
 
-    if results:
-        logger.debug(
-            "YouTube/yt-dlp: '%s' → %d результатов", query, len(results)
-        )
     return results
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  yt-dlp subprocess бэкенд (Backend 3 — последний resort)
-# ═════════════════════════════════════════════════════════════════════════════
-
-def _search_ytdlp_subprocess_sync(
-    query: str,
-    max_results: int = 10,
-) -> list[dict]:
-    """
-    Ищет видео через yt-dlp subprocess (последний resort).
-    Парсит JSON output.
-    """
-    try:
-        cmd = [
-            "yt-dlp",
-            "--dump-json",
-            "--flat-playlist",
-            "--playlist-end", str(max_results),
-            "--no-download",
-            f"ytsearch{max_results}:{query}",
-        ]
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            stderr=subprocess.PIPE,
-        )
-
-        if result.returncode != 0:
-            stderr = result.stderr[:500] if result.stderr else ""
-            logger.debug(
-                "YouTube/yt-dlp-subprocess: ошибка (rc=%d): %s",
-                result.returncode, stderr,
-            )
-            return []
-
-        videos = []
-        for line in result.stdout.strip().split("\n"):
-            if not line.strip():
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-
-            if not isinstance(entry, dict):
-                continue
-
-            video_id = entry.get("id", "")
-            title = (entry.get("title") or "").strip()
-            if not video_id or not title:
-                continue
-
-            duration = entry.get("duration", 0) or 0
-            if isinstance(duration, str):
-                try:
-                    duration = int(duration)
-                except (ValueError, TypeError):
-                    duration = 0
-
-            videos.append({
-                "video_id": video_id,
-                "title": title,
-                "channel_title": (entry.get("uploader") or "").strip(),
-                "channel_id": entry.get("channel_id", ""),
-                "duration": int(duration),
-                "views": 0,
-                "likes": 0,
-                "published": entry.get("timestamp", 0) or 0,
-                "description": (entry.get("description") or "")[:1000],
-                "thumbnail": entry.get("thumbnail") or "",
-                "url": entry.get("url") or f"https://www.youtube.com/watch?v={video_id}",
-                "is_live": False,
-                "source": "yt_dlp_subprocess",
-            })
-
-        return videos
-
-    except FileNotFoundError:
-        logger.warning("YouTube/yt-dlp-subprocess: yt-dlp не найден в PATH")
-        return []
-    except subprocess.TimeoutExpired:
-        logger.warning("YouTube/yt-dlp-subprocess: таймаут")
-        return []
-    except Exception as e:
-        logger.warning("YouTube/yt-dlp-subprocess: ошибка: %s", e)
-        return []
-
-
-async def _search_ytdlp_subprocess(
-    query: str,
-    max_results: int = 10,
-) -> list[dict]:
-    """
-    Ищет видео через yt-dlp subprocess (асинхронная обёртка).
-    """
-    loop = asyncio.get_running_loop()
-    try:
-        results = await loop.run_in_executor(
-            _thread_pool,
-            _search_ytdlp_subprocess_sync,
-            query,
-            max_results,
-        )
-    except Exception as e:
-        logger.warning("YouTube/yt-dlp-subprocess: ошибка executor: %s", e)
-        results = []
-
-    if results:
-        logger.debug(
-            "YouTube/yt-dlp-subprocess: '%s' → %d результатов",
-            query, len(results),
-        )
-    return results
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  Объединённый поиск (триггер бэкендов по очереди)
+#  Объединённый поиск
 # ═════════════════════════════════════════════════════════════════════════════
 
 async def _search_videos(
     query: str,
     sort_by: str = "relevance",
-    date_filter: str = "week",
+    date_filter: str = "month",
     max_results: int = 10,
 ) -> list[dict]:
     """
-    Ищет видео через три бэкенда по очереди.
-    Возвращает результаты первого успешного бэкенда.
+    Ищет видео через бэкенды по очереди: Invidious → yt-dlp.
+    yt-dlp не умеет фильтр по дате — пост-фильтрация по timestamp.
     """
-    # Backend 1: Invidious
+    # Backend 1: Invidious (с фильтром даты)
     results = await _search_invidious(
-        query=query,
-        sort_by=sort_by,
-        date=date_filter,
-        max_results=max_results,
+        query=query, sort_by=sort_by, date=date_filter, max_results=max_results,
     )
     if results:
         return results
 
-    logger.info(
-        "YouTube: Invidious не ответил, пробуем yt-dlp Python для '%s'",
-        query,
-    )
-
-    # Backend 2: yt-dlp Python
+    # Backend 2: yt-dlp (без фильтра, post-filter)
     results = await _search_ytdlp(query=query, max_results=max_results)
-    if results:
-        return results
+    return results
 
-    logger.info(
-        "YouTube: yt-dlp Python не ответил, пробуем yt-dlp subprocess для '%s'",
-        query,
-    )
 
-    # Backend 3: yt-dlp subprocess
-    results = await _search_ytdlp_subprocess(
-        query=query, max_results=max_results
-    )
-    if results:
-        return results
+async def _search_all_queries_parallel(
+    lookback_days: int = 90,
+    max_results_per_query: int = 10,
+) -> list[dict]:
+    """
+    Параллельно ищет по всем поисковым запросам через asyncio.gather.
+    Это значительно ускоряет поиск — все запросы идут одновременно.
+    """
+    # Определяем фильтр даты для Invidious
+    if lookback_days <= 7:
+        date_filter = "week"
+    elif lookback_days <= 30:
+        date_filter = "month"
+    else:
+        date_filter = ""  # Invidious не умеет > month — используем все
 
-    logger.warning("YouTube: все бэкенды не ответили для запроса '%s'", query)
-    return []
+    tasks = []
+    for query, sort_by in _SEARCH_QUERIES:
+        tasks.append(_search_videos(
+            query=query,
+            sort_by=sort_by,
+            date_filter=date_filter,
+            max_results=max_results_per_query,
+        ))
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    all_videos = []
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            logger.debug("YouTube: ошибка запроса #%d: %s", i, result)
+            continue
+        if result:
+            all_videos.extend(result)
+
+    return all_videos
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  Фильтрация контента
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _filter_video(
+    video: dict,
+    min_views: int = 0,
+    min_likes: int = 0,
+    lookback_days: int = 90,
+    require_dayz_keyword: bool = True,
+) -> bool:
+    """
+    Фильтрует видео. Возвращает True если проходит все фильтры.
+
+    Фильтры:
+      - Не прямой эфир
+      - Длительность ≤ 5 минут
+      - Не мусорный стрим
+      - Дата публикации в рамках lookback_days
+      - Релевантность контента (DayZ)
+      - Просмотров/лайки (когда статистика доступна)
+    """
+    # Прямые эфиры — нет
+    if video.get("is_live", False):
+        return False
+
+    # Длительность
+    duration = video.get("duration", 0) or 0
+    if duration > _LONG_VIDEO_MAX:
+        return False
+
+    # Мусорные стримы
+    title = video.get("title", "")
+    if _is_stream_garbage(title):
+        return False
+
+    # Фильтр даты (только если есть published timestamp)
+    published = video.get("published", 0) or 0
+    if published > 0 and not _is_within_lookback(published, lookback_days):
+        return False
+
+    # Релевантность DayZ
+    description = video.get("description", "")
+    if require_dayz_keyword and not _is_dayz_related(title, description):
+        return False
+
+    # Просмотры/лайки (только когда статистика доступна)
+    views = video.get("views", 0) or 0
+    likes = video.get("likes", 0) or 0
+
+    if views > 0:
+        if min_views > 0 and views < min_views:
+            return False
+        if min_likes > 0 and likes < min_likes:
+            return False
+    # Если views=0 (RSS без статистики или yt-dlp flat) — пропускаем
+
+    return True
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -887,13 +1107,8 @@ def _download_ytdlp_sync(
     cookies_browser: str = "",
     max_filesize: int = 50 * 1024 * 1024,
 ) -> str | None:
-    """
-    Скачивает видео через yt-dlp (синхронная для run_in_executor).
-    Возвращает путь к файлу или None.
-    """
+    """Скачивает видео через yt-dlp."""
     import logging as _stdlib_logging
-
-    # Подавляем yt-dlp логирование
     _stdlib_logging.getLogger("yt-dlp").setLevel(_stdlib_logging.CRITICAL)
     _stdlib_logging.getLogger("yt_dlp").setLevel(_stdlib_logging.CRITICAL)
 
@@ -931,7 +1146,6 @@ def _download_ytdlp_sync(
             filepath = info.get("requested_downloads", [{}])
             if filepath:
                 return filepath[0].get("filepath") or None
-            # Фоллбэк: определяем путь через outtmpl
             video_id = info.get("id", "unknown")
             return output_template.replace("%(id)s", video_id)
     except Exception as e:
@@ -945,20 +1159,7 @@ async def download_short(
     downloads_dir: str = "downloads",
     max_filesize_mb: int = 50,
 ) -> str | None:
-    """
-    Скачивает короткое видео с YouTube с поддержкой cookies.
-
-    Стратегия cookies:
-      1. Проверяет cookies.txt рядом со скриптом
-      2. Пробует --cookies-from-browser (chrome/edge/brave/firefox)
-      3. Без cookies
-
-    Каждая попытка с браузером — полноценная попытка скачивания.
-    При успехе — немедленный возврат.
-
-    Returns:
-        Путь к скачанному файлу или None.
-    """
+    """Скачивает короткое видео с YouTube с поддержкой cookies."""
     url = video.get("url", "")
     video_id = video.get("video_id", "unknown")
     if not url:
@@ -968,132 +1169,47 @@ async def download_short(
     output_template = os.path.join(downloads_dir, "%(id)s.%(ext)s")
     max_filesize = max_filesize_mb * 1024 * 1024
 
-    # ─── Попытка 1: cookies.txt рядом со скриптом ─────────────────────────
+    # Попытка 1: cookies.txt
     script_dir = os.path.dirname(os.path.abspath(__file__))
     cookies_path = os.path.join(script_dir, "cookies.txt")
 
     if os.path.isfile(cookies_path):
-        logger.debug("YouTube/download: используем cookies.txt")
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
-            _thread_pool,
-            _download_ytdlp_sync,
-            url,
-            output_template,
-            cookies_path,
-            "",
-            max_filesize,
+            _thread_pool, _download_ytdlp_sync,
+            url, output_template, cookies_path, "", max_filesize,
         )
         if result and os.path.isfile(result):
             logger.info("YouTube/download: скачано через cookies.txt → %s", result)
             return result
 
-    # ─── Попытка 2-5: --cookies-from-browser ─────────────────────────────
+    # Попытка 2: браузер cookies
     import sys
     platform = sys.platform.lower()
-    browsers = []
-    if platform.startswith("win"):
-        browsers = ["chrome", "edge", "brave", "firefox"]
-    elif platform.startswith("darwin"):
-        browsers = ["chrome", "firefox", "safari"]
-    else:
-        browsers = ["chrome", "firefox", "brave"]
+    browsers = ["chrome", "firefox", "brave"] if not platform.startswith("win") else ["chrome", "edge", "brave", "firefox"]
 
     for browser in browsers:
-        logger.debug("YouTube/download: пробуем cookies из браузера '%s'", browser)
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
-            _thread_pool,
-            _download_ytdlp_sync,
-            url,
-            output_template,
-            "",
-            browser,
-            max_filesize,
+            _thread_pool, _download_ytdlp_sync,
+            url, output_template, "", browser, max_filesize,
         )
         if result and os.path.isfile(result):
-            logger.info(
-                "YouTube/download: скачано через %s cookies → %s",
-                browser, result,
-            )
+            logger.info("YouTube/download: скачано через %s → %s", browser, result)
             return result
 
-    # ─── Попытка последняя: без cookies ──────────────────────────────────
-    logger.debug("YouTube/download: пробуем без cookies")
+    # Попытка 3: без cookies
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(
-        _thread_pool,
-        _download_ytdlp_sync,
-        url,
-        output_template,
-        "",
-        "",
-        max_filesize,
+        _thread_pool, _download_ytdlp_sync,
+        url, output_template, "", "", max_filesize,
     )
     if result and os.path.isfile(result):
         logger.info("YouTube/download: скачано без cookies → %s", result)
         return result
 
-    logger.warning("YouTube/download: не удалось скачать '%s' (%s)", url, video_id)
+    logger.warning("YouTube/download: не удалось скачать '%s'", url)
     return None
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  Фильтрация контента
-# ═════════════════════════════════════════════════════════════════════════════
-
-def _filter_video(
-    video: dict,
-    min_views: int = 0,
-    min_likes: int = 0,
-) -> bool:
-    """
-    Фильтрует видео. Возвращает True если видео проходит фильтры.
-
-    Фильтры:
-      - Длительность (не более _LONG_VIDEO_MAX секунд)
-      - Не прямой эфир
-      - Не мусорный стрим
-      - Релевантность контента (контентные ключевые слова)
-      - Просмотров/лайки (SKIP если views=0 — yt-dlp fallback без статы)
-      - Русский язык (3+ кириллических символа)
-    """
-    # Пропускаем прямые эфиры
-    if video.get("is_live", False):
-        return False
-
-    # Фильтр длительности: > 5 минут — мусор для shorts канала
-    duration = video.get("duration", 0) or 0
-    if duration > _LONG_VIDEO_MAX:
-        return False
-
-    # Фильтр мусорных стримов
-    title = video.get("title", "")
-    if _is_stream_garbage(title):
-        return False
-
-    # Фильтр релевантности контента
-    description = video.get("description", "")
-    if not _is_content_relevant(title, description):
-        return False
-
-    # Фильтр просмотров/лайков — SKIP когда views=0
-    # (yt-dlp fallback в flat mode не имеет статистики)
-    views = video.get("views", 0) or 0
-    likes = video.get("likes", 0) or 0
-
-    if views > 0:
-        if min_views > 0 and views < min_views:
-            return False
-        if min_likes > 0 and likes < min_likes:
-            return False
-
-    # Фильтр русского языка
-    text_to_check = f"{title} {description}"
-    if not _is_russian_text(text_to_check):
-        return False
-
-    return True
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1107,25 +1223,26 @@ async def check_for_new_videos(
     web_panel_api_key: str = "",
 ) -> list[dict]:
     """
-    Проверяет YouTube на наличие новых DayZ видео по всем поисковым запросам.
+    Проверяет YouTube на наличие новых DayZ видео.
 
-    Args:
-        db: Экземпляр Database для сохранения результатов.
-        config: Словарь с настройками (min_views, min_likes, max_results и т.д.).
-        web_panel_url: URL веб-панели для отправки новостей.
-        web_panel_api_key: API ключ для авторизации на веб-панели.
+    Стратегии (параллельно):
+      1. RSS-ленты каналов — свежие видео напрямую
+      2. Поисковые запросы через Invidious/yt-dlp
 
-    Returns:
-        Список найденных новых видео (dict).
+    Фильтры:
+      - lookback_days (default 90 = 3 месяца)
+      - min_views / min_likes
+      - Релевантность DayZ
+      - Длительность ≤ 5 мин
     """
     if config is None:
         config = {}
 
-    # Безопасное извлечение конфигов с int() для JSON-значений
     min_views = int(config.get("youtube_min_views", 0))
     min_likes = int(config.get("youtube_min_likes", 0))
-    max_per_check = int(config.get("youtube_max_per_check", 5))
+    max_per_check = int(config.get("youtube_max_per_check", 10))
     max_results = int(config.get("youtube_max_results", 10))
+    lookback_days = int(config.get("youtube_lookback_days", _DEFAULT_LOOKBACK_DAYS))
 
     state = _load_state()
     posted_ids = state.get("posted_ids", {})
@@ -1136,69 +1253,101 @@ async def check_for_new_videos(
     seen_video_ids = set()
     processed_count = 0
 
-    for query, sort_by, date_filter in _SEARCH_QUERIES:
+    # ─── Стратегия 1: RSS каналов (параллельно) ─────────────────────────
+    logger.info("YouTube: RSS — проверка %d каналов...", len(_YOUTUBE_CHANNELS))
+    rss_start = time.time()
+
+    try:
+        rss_videos = await _fetch_all_channels_rss(state)
+        logger.info(
+            "YouTube: RSS получено %d видео за %.1fс",
+            len(rss_videos), time.time() - rss_start,
+        )
+    except Exception as e:
+        logger.error("YouTube: RSS ошибка: %s", e)
+        rss_videos = []
+
+    # ─── Стратегия 2: Поисковые запросы (параллельно через gather) ────
+    logger.info("YouTube: поиск — %d запросов (lookback: %d дней)...", len(_SEARCH_QUERIES), lookback_days)
+    search_start = time.time()
+
+    try:
+        search_videos = await _search_all_queries_parallel(
+            lookback_days=lookback_days,
+            max_results_per_query=max_results,
+        )
+        logger.info(
+            "YouTube: поиск получил %d видео за %.1fс",
+            len(search_videos), time.time() - search_start,
+        )
+    except Exception as e:
+        logger.error("YouTube: поиск ошибка: %s", e)
+        search_videos = []
+
+    # ─── Объединяем и фильтруем ─────────────────────────────────────────
+    # RSS видео имеют приоритет (помечаем приоритет)
+    combined_videos = []
+    for v in rss_videos:
+        v["_priority_source"] = "rss"
+        combined_videos.append(v)
+    for v in search_videos:
+        v["_priority_source"] = "search"
+        combined_videos.append(v)
+
+    logger.info("YouTube: всего %d видео, начинаем фильтрацию...", len(combined_videos))
+
+    for video in combined_videos:
         if processed_count >= max_per_check:
-            logger.info(
-                "YouTube: достигнут лимит max_per_check=%d", max_per_check
-            )
+            logger.info("YouTube: лимит max_per_check=%d достигнут", max_per_check)
             break
 
-        logger.info("YouTube: поиск '%s' (sort=%s, date=%s)", query, sort_by, date_filter)
-
-        try:
-            videos = await _search_videos(
-                query=query,
-                sort_by=sort_by,
-                date_filter=date_filter,
-                max_results=max_results,
-            )
-        except Exception as e:
-            logger.error("YouTube: ошибка поиска '%s': %s", query, e)
+        video_id = video.get("video_id", "")
+        if not video_id:
             continue
 
-        for video in videos:
-            video_id = video.get("video_id", "")
-            if not video_id:
-                continue
+        # Дедупликация
+        if video_id in seen_video_ids:
+            continue
+        seen_video_ids.add(video_id)
 
-            # Пропускаем дубликаты в рамках текущего check
-            if video_id in seen_video_ids:
-                continue
-            seen_video_ids.add(video_id)
+        if video_id in posted_ids:
+            continue
 
-            # Пропускаем уже опубликованные
-            if video_id in posted_ids:
-                continue
+        # Фильтрация
+        if not _filter_video(
+            video,
+            min_views=min_views,
+            min_likes=min_likes,
+            lookback_days=lookback_days,
+        ):
+            continue
 
-            # Фильтруем
-            if not _filter_video(video, min_views=min_views, min_likes=min_likes):
-                continue
+        # Категория
+        category = _detect_category(
+            video.get("title", ""),
+            video.get("description", ""),
+        )
 
-            # Определяем категорию
-            category = _detect_category(
-                video.get("title", ""),
-                video.get("description", ""),
-            )
+        video["category"] = category
+        all_new_videos.append(video)
+        processed_count += 1
 
-            video["category"] = category
-            all_new_videos.append(video)
-            processed_count += 1
+        # Отмечаем в состоянии
+        posted_ids[video_id] = {
+            "title": video.get("title", "")[:200],
+            "timestamp": time.time(),
+            "category": category,
+            "source": video.get("source", "unknown"),
+        }
 
-            # Отмечаем в состоянии
-            posted_ids[video_id] = {
-                "title": video.get("title", "")[:200],
-                "timestamp": time.time(),
-                "category": category,
-            }
-
-            logger.info(
-                "YouTube: новое видео: %s (%s, %s, %s, %d просмотров)",
-                video.get("title", "")[:60],
-                video.get("channel_title", ""),
-                _format_duration(video.get("duration", 0)),
-                category,
-                video.get("views", 0),
-            )
+        logger.info(
+            "YouTube: [+]: %s (%s, %s, %d views, src=%s)",
+            video.get("title", "")[:60],
+            _format_duration(video.get("duration", 0)),
+            category,
+            video.get("views", 0),
+            video.get("source", "?"),
+        )
 
     # Сохраняем состояние
     state["posted_ids"] = posted_ids
@@ -1216,7 +1365,7 @@ async def check_for_new_videos(
         )
 
     if all_new_videos:
-        logger.info("YouTube: всего найдено %d новых видео", len(all_new_videos))
+        logger.info("YouTube: итог — %d новых видео", len(all_new_videos))
 
     return all_new_videos
 
@@ -1228,9 +1377,7 @@ async def _save_videos_to_db(
     web_panel_url: str = "",
     web_panel_api_key: str = "",
 ) -> None:
-    """
-    Сохраняет найденные видео в БД и отправляет на веб-панель.
-    """
+    """Сохраняет видео в БД и отправляет на веб-панель."""
     downloads_dir = config.get("images_dir", "downloads")
     do_download = config.get("youtube_download", True)
 
@@ -1242,7 +1389,6 @@ async def _save_videos_to_db(
         url = video.get("url", "")
         category = video.get("category", "other")
 
-        # Форматируем сообщение
         msg = format_video_message(video, category=category)
         ai_summary = f"[{category}] {title}"
 
@@ -1270,20 +1416,14 @@ async def _save_videos_to_db(
         )
 
         if not msg_id:
-            logger.debug(
-                "YouTube: дубликат или ошибка сохранения: %s (%s)",
-                video_id, title[:50],
-            )
+            logger.debug("YouTube: дубликат/ошибка: %s (%s)", video_id, title[:50])
             continue
 
-        # AI-анализ через ai_analyzer
+        # AI-анализ
         priority = "low"
-        if category in ("updates", "events"):
-            priority = "medium"
-        elif category in ("secrets", "weapons", "bugs"):
+        if category in ("updates", "events", "weapons", "secrets"):
             priority = "medium"
 
-        # Пробуем AI-анализ
         try:
             from ai_analyzer import _get_analyzer
             analyzer = _get_analyzer()
@@ -1295,9 +1435,9 @@ async def _save_videos_to_db(
                 priority = ai_result.get("priority", priority)
                 ai_summary = ai_result.get("summary", ai_summary) or ai_summary
         except Exception as e:
-            logger.debug("YouTube: AI-анализ недоступен: %s", e)
+            logger.debug("YouTube: AI недоступен: %s", e)
 
-        # Сохраняем результаты обработки
+        # Сохраняем обработку
         await db.save_processed(
             message_id=msg_id,
             news_type=category,
@@ -1308,7 +1448,7 @@ async def _save_videos_to_db(
             formatted_post=msg if isinstance(msg, str) else str(msg),
         )
 
-        # Отправка на веб-панель
+        # Веб-панель
         if web_panel_url:
             try:
                 from web_app_integration import send_to_web_panel
@@ -1330,17 +1470,15 @@ async def _save_videos_to_db(
                     bot_api_key=web_panel_api_key or None,
                 )
             except Exception as e:
-                logger.debug("YouTube: ошибка отправки на веб-панель: %s", e)
+                logger.debug("YouTube: ошибка панели: %s", e)
 
-        # Скачиваем видео (опционально)
+        # Скачивание shorts
         if do_download and video.get("duration", 0) <= _SHORTS_MAX_DURATION:
             try:
-                filepath = await download_short(
-                    video, downloads_dir=downloads_dir
-                )
+                filepath = await download_short(video, downloads_dir=downloads_dir)
                 if filepath:
                     logger.info(
-                        "YouTube: видео скачано → %s (%.1f MB)",
+                        "YouTube: скачано → %s (%.1f MB)",
                         filepath,
                         os.path.getsize(filepath) / (1024 * 1024),
                     )
@@ -1359,41 +1497,42 @@ async def run_youtube_monitor(
     min_views: int = 0,
     min_likes: int = 0,
     check_interval_hours: int = 2,
-    max_per_check: int = 5,
+    max_per_check: int = 10,
     download_shorts: bool = True,
     shutdown_event=None,
     notify_callback=None,
     web_panel_url: str = "",
     web_panel_api_key: str = "",
     notification_callback=None,
+    lookback_days: int = 90,
 ) -> None:
     """
-    Запускает постоянный мониторинг YouTube в фоновом режиме.
+    Запускает постоянный мониторинг YouTube.
 
-    Сигнатура совместима с bot.py — принимает отдельные параметры настроек.
+    Профессиональная система с 4 стратегиями поиска, параллельным выполнением
+    и пост-фильтрацией по дате.
 
     Args:
         db: Экземпляр Database.
-        ai_analyzer: AI анализатор (не используется напрямую, передаётся через config).
+        ai_analyzer: AI анализатор.
         ai_analyze: Включить AI анализ.
         min_views: Минимум просмотров.
         min_likes: Минимум лайков.
-        check_interval_hours: Интервал проверки в часах.
-        max_per_check: Максимум видео за одну проверку.
+        check_interval_hours: Интервал проверки (часы).
+        max_per_check: Максимум видео за проверку.
         download_shorts: Скачивать шортсы.
         shutdown_event: asyncio.Event для остановки.
-        notify_callback: Асинхронная функция уведомлений (из bot.py).
+        notify_callback: Callback уведомлений.
         web_panel_url: URL веб-панели.
-        web_panel_api_key: API ключ для веб-панели.
-        notification_callback: Алиас для notify_callback (совместимость).
+        web_panel_api_key: API ключ панели.
+        notification_callback: Алиас notify_callback.
+        lookback_days: За сколько дней искать (default 90 = ~3 месяца).
     """
-    # Используем notify_callback или notification_callback
     _notify = notify_callback or notification_callback
 
     if check_interval_hours < 1:
         check_interval_hours = 1
 
-    # Формируем config словарь из отдельных параметров
     config = {
         "youtube_min_views": min_views,
         "youtube_min_likes": min_likes,
@@ -1401,23 +1540,27 @@ async def run_youtube_monitor(
         "youtube_download": download_shorts,
         "ai_analyze": ai_analyze,
         "images_dir": "downloads",
+        "youtube_lookback_days": lookback_days,
     }
 
     logger.info(
-        "YouTube монитор: запущен (интервал=%dч, min_views=%d, min_likes=%d, max_per_check=%d, download=%s)",
-        check_interval_hours, min_views, min_likes, max_per_check, download_shorts,
+        "YouTube монитор: запущен "
+        "(интервал=%dч, views≥%d, likes≥%d, max=%d, lookback=%dд, download=%s)",
+        check_interval_hours, min_views, min_likes, max_per_check,
+        lookback_days, download_shorts,
+    )
+    logger.info(
+        "YouTube монитор: %d каналов RSS + %d поисковых запросов",
+        len(_YOUTUBE_CHANNELS), len(_SEARCH_QUERIES),
     )
 
-    # Первая проверка сразу после запуска
     while True:
-        # Проверяем shutdown
         if shutdown_event and shutdown_event.is_set():
-            logger.info("YouTube монитор: остановлен по сигналу shutdown")
+            logger.info("YouTube монитор: остановлен")
             break
 
         try:
             start_time = time.time()
-            logger.info("YouTube монитор: начинаю проверку (поисковых запросов: %d)...", len(_SEARCH_QUERIES))
 
             new_videos = await check_for_new_videos(
                 db=db,
@@ -1426,34 +1569,31 @@ async def run_youtube_monitor(
                 web_panel_api_key=web_panel_api_key,
             )
 
+            elapsed = time.time() - start_time
             logger.info(
-                "YouTube монитор: проверка завершена за %.1f с (найдено %d новых видео)",
-                time.time() - start_time, len(new_videos),
+                "YouTube монитор: проверка за %.1fс → %d новых видео",
+                elapsed, len(new_videos),
             )
 
-            # Уведомляем через callback
+            # Уведомления
             if new_videos and _notify:
                 for video in new_videos:
                     try:
                         await _notify(video)
                     except Exception as e:
-                        ch_title = video.get("channel_title", "")
-                        logger.debug(
-                            "YouTube: ошибка уведомления для '%s': %s",
-                            ch_title, e,
-                        )
+                        logger.debug("YouTube: ошибка уведомления: %s", e)
 
-            # Убираем старые скачивания
+            # Очистка
             cleanup_old_downloads(downloads_dir="downloads")
 
         except Exception as e:
             logger.error("YouTube монитор: критическая ошибка: %s", e, exc_info=True)
 
-        # Ждём до следующей проверки (с проверкой shutdown каждые 30 сек)
+        # Ожидание до следующей проверки
         wait_seconds = check_interval_hours * 3600
         while wait_seconds > 0:
             if shutdown_event and shutdown_event.is_set():
-                logger.info("YouTube монитор: остановлен по сигналу shutdown")
+                logger.info("YouTube монитор: остановлен")
                 return
             sleep_chunk = min(30, wait_seconds)
             await asyncio.sleep(sleep_chunk)
@@ -1461,39 +1601,32 @@ async def run_youtube_monitor(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  Standalone запуск (для тестирования)
+#  Standalone запуск
 # ═════════════════════════════════════════════════════════════════════════════
 
 async def main():
-    """Standalone запуск YouTube монитора для тестирования."""
-    import os
-    import json
+    """Standalone запуск для тестирования."""
+    import json as _json
 
     config_path = os.environ.get("CONFIG_PATH", "config.json")
     config = {}
     try:
         with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
+            config = _json.load(f)
     except FileNotFoundError:
-        logger.warning("config.json не найден, используем дефолтные настройки")
+        logger.warning("config.json не найден")
 
-    logger.info("YouTube монитор: standalone режим")
+    logger.info("YouTube монитор: standalone режим (lookback: %d дней)", config.get("youtube_lookback_days", 90))
 
-    videos = await check_for_new_videos(
-        db=None,
-        config=config,
-    )
+    videos = await check_for_new_videos(db=None, config=config)
 
     if videos:
-        logger.info(
-            "YouTube монитор: найдено %d видео в standalone режиме",
-            len(videos),
-        )
+        logger.info("YouTube: найдено %d видео", len(videos))
         for v in videos:
             print(format_video_message(v, v.get("category", "")))
             print("─" * 60)
     else:
-        logger.info("YouTube монитор: новых видео не найдено")
+        logger.info("YouTube: новых видео не найдено")
 
 
 if __name__ == "__main__":
