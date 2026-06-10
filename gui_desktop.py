@@ -76,6 +76,7 @@ class DesktopGUI:
         self.log_capture = log_capture
         self.bot = bot_instance
         self._running = True
+        self.root = None  # создаётся в run()
 
     # ================================================================
     # Main entry
@@ -214,18 +215,6 @@ class DesktopGUI:
                       fg_color=self.BG_ELEVATED, hover_color=self.BORDER,
                       text_color=self.TEXT2, width=180, height=32, corner_radius=8,
                       command=self._load_and_fill_config).pack(side="right", padx=4)
-
-        ctk.CTkButton(btn_bar, text="\U0001F514  Настройки",
-                      font=("Segoe UI", 11),
-                      fg_color=self.BG_ELEVATED, hover_color=self.BORDER,
-                      text_color=self.TEXT2, width=130, height=32, corner_radius=8,
-                      command=lambda: self.notebook.set("Настройки")).pack(side="right", padx=4)
-
-        ctk.CTkButton(btn_bar, text="\U0001F4CB  Логи",
-                      font=("Segoe UI", 11),
-                      fg_color=self.BG_ELEVATED, hover_color=self.BORDER,
-                      text_color=self.TEXT2, width=100, height=32, corner_radius=8,
-                      command=lambda: self.notebook.set("Логи")).pack(side="right", padx=4)
 
         # ─── Карточки статусов (grid 4x2) ─────────────────────────────
         status_outer = ctk.CTkFrame(scroll, fg_color=self.BG_CARD, corner_radius=10)
@@ -788,36 +777,39 @@ class DesktopGUI:
         card = self._status_cards.get(component)
         if not card:
             return
+
+        def _apply():
+            try:
+                if connected:
+                    card["value"].configure(text="\u25cf  Подключён", text_color=self.GREEN)
+                else:
+                    card["value"].configure(text="\u25cf  Отключён", text_color=self.TEXT3)
+                if info:
+                    card["info"].configure(text=info)
+            except Exception:
+                pass
+        self._safe_after(_apply)
+
+    def _safe_after(self, callback, delay=0):
+        """Безопасный вызов root.after — ждёт если root ещё не создан."""
+        if self.root is None:
+            threading.Event().wait(0.5)
+            if self.root is None:
+                return
         try:
-            def _apply():
-                try:
-                    if connected:
-                        card["value"].configure(text="\u25cf  Подключён", text_color=self.GREEN)
-                    else:
-                        card["value"].configure(text="\u25cf  Отключён", text_color=self.TEXT3)
-                    if info:
-                        card["info"].configure(text=info)
-                except Exception:
-                    pass
-            self.root.after(0, _apply)
+            self.root.after(delay, callback)
         except Exception:
             pass
 
     def set_status_running(self):
-        try:
-            self.root.after(0, lambda: self.status_label.configure(
-                text="\u25cf  Работает", text_color=self.GREEN))
-        except Exception:
-            pass
+        self._safe_after(lambda: self.status_label.configure(
+            text="\u25cf  Работает", text_color=self.GREEN))
 
     def set_bot_status(self, text, color=None):
-        try:
-            if color:
-                self.root.after(0, lambda: self.status_label.configure(text=text, text_color=color))
-            else:
-                self.root.after(0, lambda: self.status_label.configure(text=text))
-        except Exception:
-            pass
+        if color:
+            self._safe_after(lambda: self.status_label.configure(text=text, text_color=color))
+        else:
+            self._safe_after(lambda: self.status_label.configure(text=text))
 
     def update_counters(self, messages=0, analyzed=0, published=0, duplicates=0):
         def _apply():
@@ -833,25 +825,16 @@ class DesktopGUI:
                     labels["duplicates"].configure(text=str(duplicates))
             except Exception:
                 pass
-        try:
-            self.root.after(0, _apply)
-        except Exception:
-            pass
+        self._safe_after(_apply)
 
     def update_source_detail(self, text):
-        try:
-            self.root.after(0, lambda: self._source_detail.configure(text=text))
-        except Exception:
-            pass
+        self._safe_after(lambda: self._source_detail.configure(text=text))
 
     def update_uptime(self, seconds):
         h, r = divmod(seconds, 3600)
         m, s = divmod(r, 60)
-        try:
-            self.root.after(0, lambda: self.uptime_label.configure(
-                text=f"{h:02d}:{m:02d}:{s:02d}"))
-        except Exception:
-            pass
+        self._safe_after(lambda: self.uptime_label.configure(
+            text=f"{h:02d}:{m:02d}:{s:02d}"))
 
     def append_log(self, level, message):
         if self.log_capture:
