@@ -539,17 +539,7 @@ class DesktopGUI:
             command=_paste_channel,
         ).pack(side="left", padx=(0, 8))
 
-        self._yt_name_entry = ctk.CTkEntry(
-            add_row,
-            border_color=self.BORDER, border_width=1,
-            text_color=self.TEXT, font=("Segoe UI", 11),
-            fg_color=self.BG_ELEVATED,
-            height=32, corner_radius=6,
-            width=140,
-            placeholder_text="Название (необяз.)",
-        )
-        self._yt_name_entry.pack(side="left", padx=(0, 8))
-        self._bind_paste(self._yt_name_entry)
+
 
         ctk.CTkButton(
             add_row, text="+ Добавить",
@@ -581,14 +571,6 @@ class DesktopGUI:
                     raw = w.get().strip()
             except Exception:
                 pass
-        name = self._yt_name_entry.get().strip()
-        if not name:
-            try:
-                w = getattr(self._yt_name_entry, "_entry", None)
-                if w:
-                    name = w.get().strip()
-            except Exception:
-                pass
         if not raw:
             self.append_log("WARNING", "YouTube: поле канала пустое")
             return
@@ -618,7 +600,7 @@ class DesktopGUI:
                 return
 
         # Добавляем
-        channels.append({"id": channel_id, "name": name})
+        channels.append({"id": channel_id, "name": ""})
         cfg["youtube_channels"] = channels
 
         try:
@@ -638,10 +620,7 @@ class DesktopGUI:
             getattr(self._yt_channel_entry, "_entry", None).delete(0, "end")
         except Exception:
             pass
-        try:
-            getattr(self._yt_name_entry, "_entry", None).delete(0, "end")
-        except Exception:
-            pass
+
 
         # Обновляем список в GUI
         self._refresh_youtube_channels_list(cfg)
@@ -786,24 +765,19 @@ class DesktopGUI:
             row = ctk.CTkFrame(self._yt_channels_listbox_frame, fg_color=self.BG_CARD, corner_radius=6)
             row.pack(fill="x", padx=4, pady=2)
 
-            label_text = f"{ch_name}  " if ch_name else ""
-            label_text += f"<span style='color: {self.TEXT3}; font-size: 9px;'>{ch_id}</span>"
+            # Если есть имя — показываем "Имя (ID)", иначе просто ID
+            if ch_name:
+                display = f"  {ch_name}  ({ch_id})"
+            else:
+                display = f"  {ch_id}"
 
             ctk.CTkLabel(
                 row,
-                text=f"  {ch_name or 'Без имени'}",
-                font=("Segoe UI", 10),
+                text=display,
+                font=("Consolas", 10),
                 text_color=self.TEXT2,
-                width=160, anchor="w",
-            ).pack(side="left", padx=(8, 0), pady=6)
-
-            ctk.CTkLabel(
-                row,
-                text=ch_id,
-                font=("Consolas", 9),
-                text_color=self.TEXT3,
                 anchor="w",
-            ).pack(side="left", fill="x", expand=True, padx=(0, 8), pady=6)
+            ).pack(side="left", fill="x", expand=True, padx=(8, 0), pady=6)
 
             # Кнопка удаления
             btn = ctk.CTkButton(
