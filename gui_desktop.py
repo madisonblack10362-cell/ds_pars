@@ -180,6 +180,9 @@ class DesktopGUI:
             ("ai", "AI Анализатор"),
             ("db", "База данных"),
             ("reddit", "Reddit"),
+            ("youtube", "YouTube"),
+            ("workshop", "Workshop"),
+            ("patchnotes", "Патчноуты"),
         ]:
             card = ctk.CTkFrame(status_frame, fg_color=self.BG2, width=160)
             card.pack(side="left", padx=4, pady=6, fill="y", expand=True)
@@ -216,10 +219,11 @@ class DesktopGUI:
 
         info_frame = ctk.CTkFrame(parent, fg_color=self.CARD)
         info_frame.pack(fill="x", padx=8, pady=4)
-        self._discord_detail = ctk.CTkLabel(
-            info_frame, text="Discord: ожидание подключения...",
-            font=("Segoe UI", 11), text_color=self.TEXT2, anchor="w")
-        self._discord_detail.pack(fill="x", padx=12, pady=10)
+        self._source_detail = ctk.CTkLabel(
+            info_frame, text="Источники: ожидание запуска...",
+            font=("Segoe UI", 11), text_color=self.TEXT2, anchor="w",
+            wraplength=860)
+        self._source_detail.pack(fill="x", padx=12, pady=10)
 
     # === Settings ===
 
@@ -267,6 +271,12 @@ class DesktopGUI:
             ("Патчноуты", [
                 ("patchnotes_interval_minutes", "Интервал проверки (мин)", "30"),
             ]),
+            ("YouTube", [
+                ("youtube_interval_hours", "Интервал проверки (часы)", "2"),
+                ("youtube_min_views", "Мин. просмотров", "100"),
+                ("youtube_min_likes", "Мин. лайков", "50"),
+                ("youtube_max_per_check", "Макс. видео за проверку", "5"),
+            ]),
             ("Веб-панель", [
                 ("web_panel_url", "URL панели", "https://dayz-monitor-web.vercel.app"),
                 ("web_panel_api_key", "API ключ панели", "Ключ для авторизации бота"),
@@ -301,6 +311,23 @@ class DesktopGUI:
                                text_color=self.TEXT2, fg_color=self.INPUT_BORDER,
                                hover_color=self.ACCENT).pack(anchor="w")
                 self._toggles["patchnotes_enabled"] = var
+
+            # Переключатели для секции YouTube
+            if section_title == "YouTube":
+                tf = ctk.CTkFrame(frame, fg_color="transparent")
+                tf.pack(fill="x", padx=12, pady=(4, 6))
+                var = tk.BooleanVar(value=True)
+                ctk.CTkCheckBox(tf, text="Включить YouTube монитор",
+                               variable=var, font=("Segoe UI", 11),
+                               text_color=self.TEXT2, fg_color=self.INPUT_BORDER,
+                               hover_color=self.ACCENT).pack(anchor="w")
+                self._toggles["youtube_enabled"] = var
+                var2 = tk.BooleanVar(value=True)
+                ctk.CTkCheckBox(tf, text="Скачивать шортсы",
+                               variable=var2, font=("Segoe UI", 11),
+                               text_color=self.TEXT2, fg_color=self.INPUT_BORDER,
+                               hover_color=self.ACCENT).pack(anchor="w")
+                self._toggles["youtube_download_shorts"] = var2
 
             # Переключатели для секции Веб-панель
             if section_title == "Веб-панель":
@@ -466,6 +493,7 @@ class DesktopGUI:
             "web_panel_url", "web_panel_api_key",
             "workshop_interval_minutes", "workshop_min_subscriptions", "steam_api_key",
             "patchnotes_interval_minutes",
+            "youtube_interval_hours", "youtube_min_views", "youtube_min_likes", "youtube_max_per_check",
         ]
         for key in simple_keys:
             entry = self._entries.get(key)
@@ -483,7 +511,8 @@ class DesktopGUI:
                 entry.insert(0, str(discord.get(cfg_key, "")))
 
         for key, var in self._toggles.items():
-            if key in ("workshop_enabled", "patchnotes_enabled", "moderation_notifications"):
+            if key in ("workshop_enabled", "patchnotes_enabled", "moderation_notifications",
+                        "youtube_enabled", "youtube_download_shorts"):
                 default = True
             else:
                 default = False
@@ -508,6 +537,7 @@ class DesktopGUI:
             "web_panel_url", "web_panel_api_key",
             "workshop_interval_minutes", "workshop_min_subscriptions", "steam_api_key",
             "patchnotes_interval_minutes",
+            "youtube_interval_hours", "youtube_min_views", "youtube_min_likes", "youtube_max_per_check",
         ]
         for key in simple_keys:
             entry = self._entries.get(key)
@@ -516,7 +546,8 @@ class DesktopGUI:
                 if key in ("check_interval_minutes", "reddit_check_interval_minutes", "daily_summary_hour", "daily_summary_minute",
                             "min_message_length", "max_retries", "retry_delay_seconds",
                             "request_timeout_seconds", "max_images_per_post", "reddit_min_score",
-                            "workshop_interval_minutes", "workshop_min_subscriptions", "patchnotes_interval_minutes"):
+                            "workshop_interval_minutes", "workshop_min_subscriptions", "patchnotes_interval_minutes",
+                            "youtube_interval_hours", "youtube_min_views", "youtube_min_likes", "youtube_max_per_check"):
                     try: val = int(val)
                     except ValueError: pass
                 elif key == "similarity_threshold":
@@ -655,14 +686,6 @@ class DesktopGUI:
                         card["value"].configure(text="Отключён", text_color=self.TEXT3)
                     if info:
                         card["info"].configure(text=info)
-                    if component == "discord":
-                        if connected:
-                            detail = f"Discord: подключён — {info}" if info else "Discord: подключён"
-                        elif info:
-                            detail = f"Discord: {info}"
-                        else:
-                            detail = "Discord: отключён"
-                        self._discord_detail.configure(text=detail)
                 except Exception:
                     pass
             self.root.after(0, _apply)
@@ -682,6 +705,33 @@ class DesktopGUI:
                 self.root.after(0, lambda: self.status_label.configure(text=text, text_color=color))
             else:
                 self.root.after(0, lambda: self.status_label.configure(text=text))
+        except Exception:
+            pass
+
+    def update_counters(self, messages=0, analyzed=0, published=0, duplicates=0):
+        """Обновляет счётчики на дашборде."""
+        def _apply():
+            try:
+                labels = self._counter_labels
+                if "messages" in labels:
+                    labels["messages"].configure(text=str(messages))
+                if "analyzed" in labels:
+                    labels["analyzed"].configure(text=str(analyzed))
+                if "published" in labels:
+                    labels["published"].configure(text=str(published))
+                if "duplicates" in labels:
+                    labels["duplicates"].configure(text=str(duplicates))
+            except Exception:
+                pass
+        try:
+            self.root.after(0, _apply)
+        except Exception:
+            pass
+
+    def update_source_detail(self, text):
+        """Обновляет информационную строку источников."""
+        try:
+            self.root.after(0, lambda: self._source_detail.configure(text=text))
         except Exception:
             pass
 

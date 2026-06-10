@@ -1035,6 +1035,89 @@ class DayZNewsMonitor:
 
 
 # =============================================================================
+# Периодическое обновление GUI
+# =============================================================================
+
+async def _periodic_gui_update(monitor, gui, interval=30):
+    """
+    Каждые interval секунд обновляет счётчики на дашборде
+    и статусную строку источников.
+    """
+    import os as _os
+
+    while not monitor._shutdown_event.is_set():
+        try:
+            await asyncio.sleep(interval)
+
+            if not monitor.db:
+                continue
+
+            # Счётчики из БД
+            stats = await monitor.db.get_daily_stats(hours=24)
+            total = stats.get("total", 0) or 0
+            published = stats.get("published_count", 0) or 0
+
+            # high + medium = проанализированные (с приоритетом)
+            analyzed = (stats.get("high_count", 0) or 0) + (stats.get("medium_count", 0) or 0) + (stats.get("low_count", 0) or 0)
+
+            # Дубликаты: собранные минус уникальные
+            cursor = await monitor.db._connection.execute(
+                "SELECT COUNT(*) FROM messages WHERE collected_at >= datetime('now', '-24 hours')"
+            )
+            row = await cursor.fetchone()
+            messages = row[0] if row else 0
+
+            # Считаем дубликаты (сообщения без processed записей)
+            cursor2 = await monitor.db._connection.execute(
+                """SELECT COUNT(*) FROM messages m
+                   LEFT JOIN processed_messages pm ON m.id = pm.message_id
+                   WHERE m.collected_at >= datetime('now', '-24 hours')
+                   AND pm.message_id IS NULL"""
+            )
+            row2 = await cursor2.fetchone()
+            duplicates = row2[0] if row2 else 0
+
+            gui.update_counters(
+                messages=messages,
+                analyzed=analyzed,
+                published=published,
+                duplicates=duplicates,
+            )
+
+            # Статусная строка источников
+            parts = []
+            if monitor.youtube_task and not monitor.youtube_task.done():
+                parts.append(f"YouTube: работает (каждые {monitor.config.get('youtube_interval_hours', 2)}ч)")
+            elif monitor.youtube_task and monitor.youtube_task.done():
+                parts.append("YouTube: остановлен")
+
+            # Cookies статус для YouTube
+            cookies_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "cookies.txt")
+            if _os.path.isfile(cookies_path):
+                parts.append("YouTube cookies: загружены")
+            else:
+                parts.append("YouTube cookies: не найден (cookies.txt)")
+
+            if monitor._workshop_task and not monitor._workshop_task.done():
+                parts.append(f"Workshop: работает")
+            elif monitor._workshop_task and monitor._workshop_task.done():
+                parts.append("Workshop: остановлен")
+
+            if monitor._patch_task and not monitor._patch_task.done():
+                parts.append("Патчноуты: работают")
+            elif monitor._patch_task and monitor._patch_task.done():
+                parts.append("Патчноуты: остановлены")
+
+            if parts:
+                gui.update_source_detail("  |  ".join(parts))
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.debug("Ошибка обновления GUI счётчиков: %s", e)
+
+
+# =============================================================================
 # Точка входа
 # =============================================================================
 
@@ -1064,6 +1147,18 @@ def _run_bot_thread(monitor, gui=None):
                     gui.update_status("vk", True)
                 if monitor.reddit_monitor:
                     gui.update_status("reddit", True)
+                if monitor.youtube_task:
+                    gui.update_status("youtube", True, f"каждые {monitor.config.get('youtube_interval_hours', 2)}ч")
+                else:
+                    gui.update_status("youtube", False, "Отключён")
+                if monitor._workshop_task:
+                    gui.update_status("workshop", True, f"каждые {monitor.config.get('workshop_interval_minutes', 60)} мин")
+                else:
+                    gui.update_status("workshop", False, "Отключён")
+                if monitor._patch_task:
+                    gui.update_status("patchnotes", True, f"каждые {monitor.config.get('patchnotes_interval_minutes', 30)} мин")
+                else:
+                    gui.update_status("patchnotes", False, "Отключён")
                 if monitor._discord_enabled:
                     gui.update_status("discord", False, "Подключение...")
                 else:
@@ -1071,6 +1166,10 @@ def _run_bot_thread(monitor, gui=None):
 
             # Сохраняем ссылку на GUI для DiscordMonitor
             monitor.gui = gui
+
+            # Периодическое обновление счётчиков и статуса источников
+            if gui and monitor.db:
+                asyncio.create_task(_periodic_gui_update(monitor, gui))
 
             await monitor.scheduler.start()
 
