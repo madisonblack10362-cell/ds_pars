@@ -38,6 +38,7 @@ from vk_monitor import VKMonitor
 from reddit_monitor import RedditMonitor
 from steam_workshop_monitor import run_workshop_monitor, fetch_popular_mods
 from patch_notes_monitor import run_patch_monitor, fetch_steam_news
+from youtube_monitor import run_youtube_monitor
 
 
 class DayZNewsMonitor:
@@ -61,6 +62,7 @@ class DayZNewsMonitor:
         self.scheduler: Optional[Scheduler] = None
         self.vk_monitor: Optional[VKMonitor] = None
         self.reddit_monitor: Optional[RedditMonitor] = None
+        self.youtube_task: Optional[asyncio.Task] = None
         self._workshop_task: Optional[asyncio.Task] = None
         self._patch_task: Optional[asyncio.Task] = None
         self.web_panel_url: str = ""
@@ -220,6 +222,36 @@ class DayZNewsMonitor:
             logger.info("Reddit-монитор инициализирован (%d сабреддитов, Playwright)", len(reddit_sources))
         else:
             logger.info("Reddit-монитор отключён: нет сабреддитов в настройках")
+
+        # -----------------------------------------------------------------
+        # YouTube монитор (шортсы и короткий контент)
+        # -----------------------------------------------------------------
+        if cfg.get("youtube_enabled", True):
+            youtube_interval = int(cfg.get("youtube_interval_hours", 2))
+            youtube_min_views = int(cfg.get("youtube_min_views", 100))
+            youtube_min_likes = int(cfg.get("youtube_min_likes", 50))
+            youtube_max_per_check = int(cfg.get("youtube_max_per_check", 5))
+            youtube_download_shorts = cfg.get("youtube_download_shorts", True)
+
+            self.youtube_task = asyncio.create_task(
+                run_youtube_monitor(
+                    db=self.db,
+                    ai_analyzer=self.ai_analyzer,
+                    ai_analyze=cfg.get("ai_analyze", True),
+                    min_views=youtube_min_views,
+                    min_likes=youtube_min_likes,
+                    check_interval_hours=youtube_interval,
+                    max_per_check=youtube_max_per_check,
+                    download_shorts=youtube_download_shorts,
+                    shutdown_event=self._shutdown_event,
+                    notify_callback=self._notify_moderation,
+                    web_panel_url=self.web_panel_url,
+                    web_panel_api_key=self.web_panel_api_key,
+                )
+            )
+            logger.info("YouTube монитор запущен (интервал: %dч, min_views: %d)", youtube_interval, youtube_min_views)
+        else:
+            logger.info("YouTube монитор отключён")
 
         # -----------------------------------------------------------------
         # Steam Workshop монитор
@@ -548,8 +580,12 @@ class DayZNewsMonitor:
                 # AI-анализ
                 author = msg.get("author", "") or msg.get("server_name", "")
                 source_type = msg.get("source_type", "")
+                result = None
 
-                if source_type == "reddit":
+                if source_type == "youtube":
+                    # YouTube контент уже обработан монитором с AI и отправлен на панель
+                    continue
+                elif source_type == "reddit":
                     subreddit = msg.get("channel_name", "")
                     result = await self.ai_analyzer.analyze_reddit(text, author=author, subreddit=subreddit)
                 else:
