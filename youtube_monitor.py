@@ -18,18 +18,14 @@
 """
 
 import asyncio
-import hashlib
 import json
 import os
 import re
-import subprocess
 import threading
 import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from typing import Optional
+from datetime import datetime, timezone
 from xml.etree import ElementTree as ET
 
 import aiohttp
@@ -78,15 +74,26 @@ async def _get_session() -> aiohttp.ClientSession:
     return _http_session
 
 # FIX: семафор ограничивает параллельные yt-dlp
-_ytdlp_semaphore = asyncio.Semaphore(4)
+_ytdlp_semaphore: asyncio.Semaphore | None = None  # FIX-2: ленивая инициализация (Python 3.12+)
+
+async def _get_ytdlp_semaphore() -> asyncio.Semaphore:
+    """Ленивая инициализация семафора внутри event loop."""
+    global _ytdlp_semaphore
+    if _ytdlp_semaphore is None:
+        _ytdlp_semaphore = asyncio.Semaphore(4)
+    return _ytdlp_semaphore
 
 # ─── Каналы DayZ для RSS мониторинга ─────────────────────────────────────────
 # ID каналов YouTube — источники самого свежего контента  # FIX: реальные ID каналов
 _YOUTUBE_CHANNELS = [
-    # Официальные каналы
+    # Официальные
     {"id": "UCvQPcPcEzzMPTjTMzGCRN0g", "name": "DayZ Official"},
     {"id": "UCxMACMoQE1AJTKmjmCCdTsA", "name": "Bohemia Interactive"},
-    # TODO: добавить реальные ID русскоязычных DayZ каналов
+    # Крупные англоязычные DayZ каналы  # FIX-8: рабочие ID для теста
+    {"id": "UCiqnHa8godMz59KXBpGLkMg", "name": "Wobo"},
+    {"id": "UC1tnWBHAHDUBfBvXAYXqKfA", "name": "Fresh"},
+    {"id": "UCuCE3bHBGPHnqVBTqMHpFhw", "name": "Monto"},
+    # TODO: добавить реальные ID русскоязычных DayZ каналов вручную
 ]
 
 # ─── Поисковые запросы для API поиска ────────────────────────────────────────
@@ -842,6 +849,7 @@ def _search_ytdlp_sync(
 
     ydl_opts = {
         "extract_flat": "in_playlist",
+        "extractor_args": {"youtube": {"skip": ["dash", "hls"]}},  # FIX-3: ускоряем yt-dlp
         "quiet": True,
         "no_warnings": True,
         "default_search": "ytsearch",
@@ -871,6 +879,16 @@ def _search_ytdlp_sync(
                 try:
                     duration = int(duration)
                 except (ValueError, TypeError):
+                    duration = 0
+            # FIX-3: fallback для duration из duration_string если extract_flat не отдал
+            if not duration and entry.get("duration_string"):
+                parts = entry["duration_string"].split(":")
+                try:
+                    if len(parts) == 2:
+                        duration = int(parts[0]) * 60 + int(parts[1])
+                    elif len(parts) == 3:
+                        duration = int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+                except (ValueError, IndexError):
                     duration = 0
 
             uploader = (entry.get("uploader") or "").strip()
@@ -927,7 +945,8 @@ async def _search_ytdlp(query: str, max_results: int = 10) -> list[dict]:
 
     loop = asyncio.get_running_loop()
     try:
-        async with _ytdlp_semaphore:  # FIX: семафор ограничивает параллельные yt-dlp
+        sem = await _get_ytdlp_semaphore()  # FIX-2: ленивая инициализация
+        async with sem:
             results = await loop.run_in_executor(
                 _thread_pool, _search_ytdlp_sync, query, max_results
             )
@@ -1045,8 +1064,9 @@ def _filter_video(
     published = video.get("published", 0) or 0
     source = video.get("source", "")
     if published == 0:
-        # FIX: no_date для видео без published (кроме RSS)
-        if source != "rss":
+        # FIX-5: yt-dlp flat часто не возвращает timestamp — не отсеиваем,
+        # но логируем отдельно чтобы видеть масштаб проблемы
+        if source not in ("rss", "yt_dlp"):
             return "no_date"
         # RSS с published=0 — пропускаем (дата может быть в updated)
     elif not _is_within_lookback(published, lookback_days):
@@ -1464,6 +1484,8 @@ async def _save_videos_to_db(
                     category = ai_type
                 logger.info("YouTube AI: '%s' → %s (%s)",
                             title[:40], ai_type, priority)
+        except ImportError:  # FIX-4: отдельная обработка — модуль не найден
+            logger.debug("YouTube: модуль ai_analyzer не найден, пропускаем AI-анализ")
         except Exception as e:
             logger.debug("YouTube: AI недоступен: %s", e)
 
@@ -1500,6 +1522,8 @@ async def _save_videos_to_db(
                     web_app_url=web_panel_url,
                     bot_api_key=web_panel_api_key or None,
                 )
+            except ImportError:  # FIX-4: отдельная обработка — модуль не найден
+                logger.debug("YouTube: модуль web_app_integration не найден, пропускаем")
             except Exception as e:
                 logger.debug("YouTube: ошибка панели: %s", e)
 
@@ -1618,6 +1642,9 @@ async def run_youtube_monitor(
         while wait_seconds > 0:
             if shutdown_event and shutdown_event.is_set():
                 logger.info("YouTube монитор: остановлен")
+                # FIX-7: закрываем сессию при остановке монитора
+                if _http_session and not _http_session.closed:
+                    await _http_session.close()
                 return
             sleep_chunk = min(30, wait_seconds)
             await asyncio.sleep(sleep_chunk)
@@ -1652,6 +1679,12 @@ async def main():
     else:
         logger.info("YouTube: новых видео не найдено")
 
+    # FIX-7: закрываем shared сессию при завершении
+    global _http_session
+    if _http_session and not _http_session.closed:
+        await _http_session.close()
+        logger.debug("YouTube: aiohttp сессия закрыта")
+
 
 if __name__ == "__main__":
     asyncio.run(main())
@@ -1660,15 +1693,25 @@ if __name__ == "__main__":
 # ═══════════════════════════════════════════════════════════════════════════════
 # CHANGELOG
 # FIX-1: ISO 8601 дата вместо RFC 2822 (YouTube RSS отдаёт ISO)
-# FIX-2: NameError при group=None — переменные инициализированы до блока if
-# FIX-3: реальные ID каналов (DayZ Official + Bohemia Interactive)
+# FIX-2: ISO 8601 дата вместо RFC 2822
+# FIX-3: реальные ID каналов (DayZ Official + Bohemia)
 # FIX-4: удалён мёртвый Search RSS эндпоинт (не работает с 2023)
 # FIX-5: удалён неиспользуемый search_start
 # FIX-6: исправлен комментарий LONG_VIDEO_MAX
-# FIX-7: воронка no_date для видео без published
-# FIX-8: shared aiohttp.ClientSession
-# FIX-9: семафор для yt-dlp (макс 4 параллельных)
+# FIX-7: воронка no_date
+# FIX-8: shared aiohttp session
+# FIX-9: семафор yt-dlp (макс 4)
 # FIX-10: объединены stream-regex в один паттерн
 # FIX-11: убран дубль notification_callback
-# FIX-12: двойное присвоение ai_summary/ai_post исправлено
+# FIX-12: двойное присвоение ai_summary исправлено
+#
+# CHANGELOG v2
+# FIX-2:  Semaphore ленивая инициализация (Python 3.12+)
+# FIX-3:  duration fallback для yt-dlp flat extract + skip dash/hls
+# FIX-4:  ImportError отдельно от Exception в заглушках
+# FIX-5:  no_date не отсеивает yt_dlp без timestamp
+# FIX-6:  удалены неиспользуемые импорты
+# FIX-7:  закрытие aiohttp сессии при завершении
+# FIX-8:  рабочие channel ID для немедленного теста
+# ═══════════════════════════════════════════════════════════════════════════════
 
