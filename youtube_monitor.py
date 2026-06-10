@@ -1305,7 +1305,7 @@ async def _save_videos_to_db(
             should_publish=False,
             summary=ai_summary or "",
             server_name=ch_title,
-            formatted_post=msg.get("text", ""),
+            formatted_post=msg if isinstance(msg, str) else str(msg),
         )
 
         # Отправка на веб-панель
@@ -1354,7 +1354,15 @@ async def _save_videos_to_db(
 
 async def run_youtube_monitor(
     db=None,
-    config: dict | None = None,
+    ai_analyzer=None,
+    ai_analyze: bool = True,
+    min_views: int = 0,
+    min_likes: int = 0,
+    check_interval_hours: int = 2,
+    max_per_check: int = 5,
+    download_shorts: bool = True,
+    shutdown_event=None,
+    notify_callback=None,
     web_panel_url: str = "",
     web_panel_api_key: str = "",
     notification_callback=None,
@@ -1362,30 +1370,54 @@ async def run_youtube_monitor(
     """
     Запускает постоянный мониторинг YouTube в фоновом режиме.
 
+    Сигнатура совместима с bot.py — принимает отдельные параметры настроек.
+
     Args:
         db: Экземпляр Database.
-        config: Словарь с настройками.
+        ai_analyzer: AI анализатор (не используется напрямую, передаётся через config).
+        ai_analyze: Включить AI анализ.
+        min_views: Минимум просмотров.
+        min_likes: Минимум лайков.
+        check_interval_hours: Интервал проверки в часах.
+        max_per_check: Максимум видео за одну проверку.
+        download_shorts: Скачивать шортсы.
+        shutdown_event: asyncio.Event для остановки.
+        notify_callback: Асинхронная функция уведомлений (из bot.py).
         web_panel_url: URL веб-панели.
         web_panel_api_key: API ключ для веб-панели.
-        notification_callback: Асинхронная функция для уведомлений.
-            Сигнатура: async def callback(video: dict) -> None
+        notification_callback: Алиас для notify_callback (совместимость).
     """
-    if config is None:
-        config = {}
+    # Используем notify_callback или notification_callback
+    _notify = notify_callback or notification_callback
 
-    # Безопасное извлечение конфигов с int() для JSON-значений
-    check_interval_hours = int(config.get("youtube_check_interval_hours", 6))
     if check_interval_hours < 1:
         check_interval_hours = 1
 
+    # Формируем config словарь из отдельных параметров
+    config = {
+        "youtube_min_views": min_views,
+        "youtube_min_likes": min_likes,
+        "youtube_max_per_check": max_per_check,
+        "youtube_download": download_shorts,
+        "ai_analyze": ai_analyze,
+        "images_dir": "downloads",
+    }
+
     logger.info(
-        "YouTube монитор: запущен (интервал=%d ч)", check_interval_hours
+        "YouTube монитор: запущен (интервал=%dч, min_views=%d, min_likes=%d, max_per_check=%d, download=%s)",
+        check_interval_hours, min_views, min_likes, max_per_check, download_shorts,
     )
 
+    # Первая проверка сразу после запуска
     while True:
+        # Проверяем shutdown
+        if shutdown_event and shutdown_event.is_set():
+            logger.info("YouTube монитор: остановлен по сигналу shutdown")
+            break
+
         try:
             start_time = time.time()
-            logger.info("YouTube монитор: проверка...")
+            logger.info("YouTube монитор: начинаю проверку (поисковых запросов: %d)...", len(_SEARCH_QUERIES))
 
             new_videos = await check_for_new_videos(
                 db=db,
@@ -1394,35 +1426,38 @@ async def run_youtube_monitor(
                 web_panel_api_key=web_panel_api_key,
             )
 
+            logger.info(
+                "YouTube монитор: проверка завершена за %.1f с (найдено %d новых видео)",
+                time.time() - start_time, len(new_videos),
+            )
+
             # Уведомляем через callback
-            if new_videos and notification_callback:
+            if new_videos and _notify:
                 for video in new_videos:
                     try:
-                        await notification_callback(video)
+                        await _notify(video)
                     except Exception as e:
                         ch_title = video.get("channel_title", "")
                         logger.debug(
-                            "YouTube: ошибка callback для '%s': %s",
+                            "YouTube: ошибка уведомления для '%s': %s",
                             ch_title, e,
                         )
 
             # Убираем старые скачивания
-            cleanup_old_downloads(
-                downloads_dir=config.get("images_dir", "downloads"),
-            )
-
-            elapsed = time.time() - start_time
-            logger.info(
-                "YouTube монитор: проверка завершена за %.1f с "
-                "(найдено %d новых видео)",
-                elapsed, len(new_videos),
-            )
+            cleanup_old_downloads(downloads_dir="downloads")
 
         except Exception as e:
-            logger.error("YouTube монитор: критическая ошибка: %s", e)
+            logger.error("YouTube монитор: критическая ошибка: %s", e, exc_info=True)
 
-        # Ждём до следующей проверки
-        await asyncio.sleep(check_interval_hours * 3600)
+        # Ждём до следующей проверки (с проверкой shutdown каждые 30 сек)
+        wait_seconds = check_interval_hours * 3600
+        while wait_seconds > 0:
+            if shutdown_event and shutdown_event.is_set():
+                logger.info("YouTube монитор: остановлен по сигналу shutdown")
+                return
+            sleep_chunk = min(30, wait_seconds)
+            await asyncio.sleep(sleep_chunk)
+            wait_seconds -= sleep_chunk
 
 
 # ═════════════════════════════════════════════════════════════════════════════
