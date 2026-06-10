@@ -1208,10 +1208,9 @@ def _download_ytdlp_sync(
     url: str,
     output_template: str,
     cookies_file: str = "",
-    cookies_browser: str = "",
     max_filesize: int = 50 * 1024 * 1024,
 ) -> str | None:
-    """Скачивает видео через yt-dlp."""
+    """Скачивает видео через yt-dlp. Только через cookies.txt — браузерный экспорт не работает."""
     import logging as _stdlib_logging
     _stdlib_logging.getLogger("yt-dlp").setLevel(_stdlib_logging.CRITICAL)
     _stdlib_logging.getLogger("yt_dlp").setLevel(_stdlib_logging.CRITICAL)
@@ -1235,12 +1234,18 @@ def _download_ytdlp_sync(
         "no_warnings": True,
         "noplaylist": True,
         "nocheckcertificate": True,
+        "extractor_args": {"youtube": {"player_client": ["ios", "web"]}},
+        "http_headers": {
+            "User-Agent": (
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
+                "Mobile/15E148 Safari/604.1"
+            ),
+        },
     }
 
     if cookies_file and os.path.isfile(cookies_file):
         ydl_opts["cookiefile"] = cookies_file
-    elif cookies_browser:
-        ydl_opts["cookiesfrombrowser"] = cookies_browser
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -1249,11 +1254,25 @@ def _download_ytdlp_sync(
         if info:
             filepath = info.get("requested_downloads", [{}])
             if filepath:
-                return filepath[0].get("filepath") or None
+                result_path = filepath[0].get("filepath") or None
+                # Проверяем что файл не пустой
+                if result_path and os.path.isfile(result_path):
+                    if os.path.getsize(result_path) > 0:
+                        return result_path
+                    else:
+                        os.remove(result_path)
+                        logger.debug("YouTube/download: скачанный файл пустой, удалён")
+                        return None
             video_id = info.get("id", "unknown")
-            return output_template.replace("%(id)s", video_id)
+            result_path = output_template.replace("%(id)s", video_id)
+            if result_path and os.path.isfile(result_path) and os.path.getsize(result_path) > 0:
+                return result_path
     except Exception as e:
-        logger.debug("YouTube/download: yt-dlp ошибка: %s", e)
+        err_str = str(e)
+        if "Sign in to confirm" in err_str or "bot" in err_str.lower():
+            logger.warning("YouTube/download: YouTube требует cookies для '%s'. Положи cookies.txt рядом с ботом.", url)
+        else:
+            logger.debug("YouTube/download: yt-dlp ошибка: %s", e)
 
     return None
 
@@ -1263,9 +1282,8 @@ async def download_short(
     downloads_dir: str = "downloads",
     max_filesize_mb: int = 50,
 ) -> str | None:
-    """Скачивает короткое видео с YouTube с поддержкой cookies."""
+    """Скачивает короткое видео с YouTube. Требует cookies.txt для обхода блокировки."""
     url = video.get("url", "")
-    video_id = video.get("video_id", "unknown")
     if not url:
         return None
 
@@ -1273,46 +1291,21 @@ async def download_short(
     output_template = os.path.join(downloads_dir, "%(id)s.%(ext)s")
     max_filesize = max_filesize_mb * 1024 * 1024
 
-    # Попытка 1: cookies.txt
+    # Ищем cookies.txt
     script_dir = os.path.dirname(os.path.abspath(__file__))
     cookies_path = os.path.join(script_dir, "cookies.txt")
 
-    if os.path.isfile(cookies_path):
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            _thread_pool, _download_ytdlp_sync,
-            url, output_template, cookies_path, "", max_filesize,
-        )
-        if result and os.path.isfile(result):
-            logger.info("YouTube/download: скачано через cookies.txt → %s", result)
-            return result
-
-    # Попытка 2: браузер cookies
-    import sys
-    platform = sys.platform.lower()
-    browsers = ["chrome", "firefox", "brave"] if not platform.startswith("win") else ["chrome", "edge", "brave", "firefox"]
-
-    for browser in browsers:
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            _thread_pool, _download_ytdlp_sync,
-            url, output_template, "", browser, max_filesize,
-        )
-        if result and os.path.isfile(result):
-            logger.info("YouTube/download: скачано через %s → %s", browser, result)
-            return result
-
-    # Попытка 3: без cookies
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(
         _thread_pool, _download_ytdlp_sync,
-        url, output_template, "", "", max_filesize,
+        url, output_template, cookies_path, max_filesize,
     )
-    if result and os.path.isfile(result):
-        logger.info("YouTube/download: скачано без cookies → %s", result)
+    if result:
+        logger.info("YouTube/download: скачано → %s", result)
         return result
 
-    logger.warning("YouTube/download: не удалось скачать '%s'", url)
+    logger.warning("YouTube/download: не удалось скачать '%s'%s", url,
+                   ". Нужен cookies.txt — экспортируй из браузера расширением Get cookies.txt LOCALLY" if not os.path.isfile(cookies_path) else "")
     return None
 
 
