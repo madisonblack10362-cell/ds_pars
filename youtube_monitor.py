@@ -129,25 +129,15 @@ def load_youtube_channels(config: dict | None = None) -> list[dict]:
 # ─── Поисковые запросы для API поиска ────────────────────────────────────────
 # Только русскоязычные запросы для поиска шортсов
 _SEARCH_QUERIES = [
-    # Shorts-специфичные запросы (русские)
-    ("DayZ шортс", "relevance"),
-    ("DayZ рилс", "relevance"),
-    ("DayZ приколы", "relevance"),
-    ("DayZ мем", "relevance"),
-    ("DayZ shorts на русском", "relevance"),
-    # Контентные запросы (русские)
-    ("DayZ гайд", "date"),
-    ("DayZ патч", "date"),
-    ("DayZ баг", "relevance"),
-    ("DayZ пвп", "relevance"),
-    ("DayZ рейд", "relevance"),
-    ("DayZ база", "relevance"),
-    ("DayZ секрет", "relevance"),
-    ("DayZ пасхалка", "relevance"),
-    ("DayZ обновление", "date"),
-    ("DayZ вайп", "relevance"),
-    ("DayZ оружие", "relevance"),
-    ("DayZ лут", "relevance"),
+    # Только запросы для поиска YouTube Shorts (вертикальные <=90с)
+    ("DayZ shorts", "date"),
+    ("DayZ шортс", "date"),
+    ("DayZ рилс", "date"),
+    ("DayZ приколы шортс", "relevance"),
+    ("DayZ мем шортс", "relevance"),
+    ("DayZ пвп шортс", "date"),
+    ("DayZ баг шортс", "relevance"),
+    ("DayZ гайд шортс", "date"),
 ]
 
 # ─── Категории контента ─────────────────────────────────────────────────────
