@@ -1129,6 +1129,9 @@ def _run_bot_thread(monitor, gui=None):
 
     async def run_and_update():
         try:
+            # Сразу показываем что бот запускается
+            if gui:
+                gui.set_status_starting()
             await monitor.initialize()
             # Обновляем GUI статусы после инициализации
             if gui:

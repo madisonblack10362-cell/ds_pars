@@ -210,11 +210,11 @@ class DesktopGUI:
         btn_bar = ctk.CTkFrame(scroll, fg_color="transparent")
         btn_bar.pack(fill="x", pady=(0, 8), padx=4)
 
-        ctk.CTkButton(btn_bar, text="\u21bb  Перезагрузить конфиг",
+        ctk.CTkButton(btn_bar, text="\u21bb  Перезагрузить бота",
                       font=("Segoe UI", 11, "bold"),
-                      fg_color=self.BG_ELEVATED, hover_color=self.BORDER,
-                      text_color=self.TEXT2, width=180, height=32, corner_radius=8,
-                      command=self._load_and_fill_config).pack(side="right", padx=4)
+                      fg_color=self.ACCENT, hover_color=self.ACCENT_HOVER,
+                      text_color="#ffffff", width=180, height=32, corner_radius=8,
+                      command=self._restart_bot).pack(side="right", padx=4)
 
         # ─── Карточки статусов (grid 4x2) ─────────────────────────────
         status_outer = ctk.CTkFrame(scroll, fg_color=self.BG_CARD, corner_radius=10)
@@ -792,24 +792,35 @@ class DesktopGUI:
 
     def _safe_after(self, callback, delay=0):
         """Безопасный вызов root.after — ждёт если root ещё не создан."""
-        if self.root is None:
+        waited = 0
+        while self.root is None and waited < 10:
             threading.Event().wait(0.5)
-            if self.root is None:
-                return
+            waited += 0.5
+        if self.root is None:
+            return
         try:
             self.root.after(delay, callback)
         except Exception:
             pass
+
+    def set_status_starting(self):
+        self._safe_after(lambda: self.status_label.configure(
+            text="\u25cf  Запуск...", text_color=self.YELLOW))
 
     def set_status_running(self):
         self._safe_after(lambda: self.status_label.configure(
             text="\u25cf  Работает", text_color=self.GREEN))
 
     def set_bot_status(self, text, color=None):
-        if color:
-            self._safe_after(lambda: self.status_label.configure(text=text, text_color=color))
-        else:
-            self._safe_after(lambda: self.status_label.configure(text=text))
+        def _apply():
+            try:
+                if color:
+                    self.status_label.configure(text=text, text_color=color)
+                else:
+                    self.status_label.configure(text=text)
+            except Exception:
+                pass
+        self._safe_after(_apply)
 
     def update_counters(self, messages=0, analyzed=0, published=0, duplicates=0):
         def _apply():
@@ -846,3 +857,18 @@ class DesktopGUI:
                 })
             except Exception:
                 pass
+
+    def _restart_bot(self):
+        """Перезапускает весь процесс бота (включая GUI)."""
+        import os
+        import sys
+        try:
+            self.append_log("INFO", "Перезапуск бота...")
+            self._safe_after(lambda: self.status_label.configure(
+                text="\u25cf  Перезапуск...", text_color=self.YELLOW))
+            # Даём время обновить GUI
+            threading.Event().wait(1)
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        except Exception as e:
+            print(f"[GUI] Ошибка перезапуска: {e}")
+            self.append_log("ERROR", f"Ошибка перезапуска: {e}")
