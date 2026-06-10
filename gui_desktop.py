@@ -598,35 +598,56 @@ class DesktopGUI:
 
     @staticmethod
     def _bind_paste(entry):
+        """Ctrl+V/A/C для CTkEntry — через root clipboard и внутренний tk entry."""
         def do_paste(event=None):
             try:
-                entry.delete("sel.first", "sel.last")
-            except Exception:
-                pass
-            try:
-                text = entry.clipboard_get()
+                root = entry.winfo_toplevel()
+                text = root.clipboard_get()
+                # Удаляем выделение если есть
+                try:
+                    sel = entry.cget("placeholder_text")  # проверка alive
+                except Exception:
+                    return
+                try:
+                    entry.delete("sel.first", "sel.last")
+                except Exception:
+                    pass
                 entry.insert("insert", text)
             except Exception:
                 pass
 
         def do_copy(event=None):
             try:
+                root = entry.winfo_toplevel()
                 text = entry.selection_get()
-                entry.clipboard_clear()
-                entry.clipboard_append(text)
+                root.clipboard_clear()
+                root.clipboard_append(text)
+            except Exception:
+                pass
+
+        def do_cut(event=None):
+            try:
+                root = entry.winfo_toplevel()
+                text = entry.selection_get()
+                root.clipboard_clear()
+                root.clipboard_append(text)
+                entry.delete("sel.first", "sel.last")
             except Exception:
                 pass
 
         def do_selall(event=None):
+            entry.focus()
             entry.select_range(0, "end")
             return "break"
 
         entry.bind("<Control-v>", do_paste)
         entry.bind("<Control-V>", do_paste)
-        entry.bind("<Control-a>", do_selall)
-        entry.bind("<Control-A>", do_selall)
         entry.bind("<Control-c>", do_copy)
         entry.bind("<Control-C>", do_copy)
+        entry.bind("<Control-x>", do_cut)
+        entry.bind("<Control-X>", do_cut)
+        entry.bind("<Control-a>", do_selall)
+        entry.bind("<Control-A>", do_selall)
 
     def _parse_youtube_channel_id(self, text: str) -> str:
         """Извлекает YouTube Channel ID из строки (ID напрямую, URL, @handle)."""
