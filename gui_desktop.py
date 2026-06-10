@@ -598,39 +598,61 @@ class DesktopGUI:
 
     @staticmethod
     def _bind_paste(entry):
-        """Ctrl+V/A/C для CTkEntry — через root clipboard и внутренний tk entry."""
+        """Ctrl+V/A/C для CTkEntry — через WinAPI (ctypes) напрямую."""
+        import ctypes
+        from ctypes import wintypes
+
+        def _win_get_clipboard():
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+            user32.OpenClipboard(0)
+            try:
+                h = user32.GetClipboardData(13)  # CF_UNICODETEXT
+                if not h:
+                    return ""
+                kernel32.GlobalLock.restype = wintypes.c_wchar_p
+                return kernel32.GlobalLock(h) or ""
+            finally:
+                user32.CloseClipboard()
+
+        def _win_set_clipboard(text):
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+            user32.OpenClipboard(0)
+            try:
+                user32.EmptyClipboard()
+                buf = ctypes.create_unicode_buffer(text)
+                h = kernel32.GlobalAlloc(0x0042, len(buf) * 2)
+                p = kernel32.GlobalLock(h)
+                ctypes.memmove(p, buf, len(buf) * 2)
+                kernel32.GlobalUnlock(h)
+                user32.SetClipboardData(13, h)
+            finally:
+                user32.CloseClipboard()
+
         def do_paste(event=None):
             try:
-                root = entry.winfo_toplevel()
-                text = root.clipboard_get()
-                # Удаляем выделение если есть
-                try:
-                    sel = entry.cget("placeholder_text")  # проверка alive
-                except Exception:
-                    return
-                try:
-                    entry.delete("sel.first", "sel.last")
-                except Exception:
-                    pass
-                entry.insert("insert", text)
+                text = _win_get_clipboard()
+                if text:
+                    try:
+                        entry.delete("sel.first", "sel.last")
+                    except Exception:
+                        pass
+                    entry.insert("insert", text)
             except Exception:
                 pass
 
         def do_copy(event=None):
             try:
-                root = entry.winfo_toplevel()
                 text = entry.selection_get()
-                root.clipboard_clear()
-                root.clipboard_append(text)
+                _win_set_clipboard(text)
             except Exception:
                 pass
 
         def do_cut(event=None):
             try:
-                root = entry.winfo_toplevel()
                 text = entry.selection_get()
-                root.clipboard_clear()
-                root.clipboard_append(text)
+                _win_set_clipboard(text)
                 entry.delete("sel.first", "sel.last")
             except Exception:
                 pass
