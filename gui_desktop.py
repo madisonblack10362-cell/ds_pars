@@ -1,5 +1,5 @@
 """
-Desktop GUI for DayZ News Monitor.
+Desktop GUI for DayZ News Monitor — Modern Design.
 """
 
 import json
@@ -40,25 +40,46 @@ class LogCapture(Handler):
 
 class DesktopGUI:
 
-    BG = "#1a1a2e"
-    BG2 = "#16213e"
-    BG3 = "#0f3460"
-    CARD = "#1e2a4a"
-    ACCENT = "#58a6ff"
-    GREEN = "#3fb950"
-    RED = "#f85149"
-    YELLOW = "#d29922"
-    TEXT = "#e6edf3"
-    TEXT2 = "#8b949e"
-    TEXT3 = "#6e7681"
-    INPUT_BG = "#0d1117"
-    INPUT_BORDER = "#30363d"
+    # ─── Цветовая палитра (GitHub Dark + accents) ─────────────────────────
+    BG           = "#0d1117"
+    BG_SURFACE   = "#161b22"
+    BG_CARD      = "#1c2128"
+    BG_ELEVATED  = "#21262d"
+    BORDER       = "#30363d"
+    ACCENT       = "#58a6ff"
+    ACCENT_HOVER = "#79b8ff"
+    GREEN        = "#3fb950"
+    GREEN_BG     = "#12261e"
+    RED          = "#f85149"
+    RED_BG       = "#2d1014"
+    YELLOW       = "#d29922"
+    YELLOW_BG    = "#2d2200"
+    ORANGE       = "#db6d28"
+    TEXT         = "#e6edf3"
+    TEXT2        = "#8b949e"
+    TEXT3        = "#484f58"
+    PURPLE       = "#bc8cff"
+
+    # Иконки для карточек (Unicode)
+    _ICONS = {
+        "discord":   "\U0001F4AC",
+        "telegram":  "\u2708",
+        "ai":        "\U0001F9E0",
+        "db":        "\U0001F4BE",
+        "youtube":   "\u25B6",
+        "workshop":  "\U0001F527",
+        "patchnotes":"\U0001F4DD",
+    }
 
     def __init__(self, config_path="config.json", log_capture=None, bot_instance=None):
         self.config_path = config_path
         self.log_capture = log_capture
         self.bot = bot_instance
         self._running = True
+
+    # ================================================================
+    # Main entry
+    # ================================================================
 
     def run(self):
         try:
@@ -69,18 +90,15 @@ class DesktopGUI:
 
         self.root = ctk.CTk()
         self.root.title("DayZ News Monitor")
-        self.root.geometry("900x650")
-        self.root.minsize(750, 500)
+        self.root.geometry("960x700")
+        self.root.minsize(800, 550)
+        self.root.configure(fg_color=self.BG)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self._build_header()
         self._build_tabs()
         self._load_and_fill_config()
 
-        # Mousewheel: call tk.Tk.bind_all DIRECTLY to bypass CTkBaseClass
-        # which raises AttributeError on bind_all/unbind_all.
-        # tk.Tk.bind_all(self.root, ...) calls the original tkinter method,
-        # skipping any override in the CTk class hierarchy.
         tk.Tk.bind_all(self.root, "<MouseWheel>", self._on_mousewheel, add="+")
         tk.Tk.bind_all(self.root, "<Button-4>", self._on_mousewheel, add="+")
         tk.Tk.bind_all(self.root, "<Button-5>", self._on_mousewheel, add="+")
@@ -102,9 +120,8 @@ class DesktopGUI:
     # ================================================================
 
     def _on_mousewheel(self, event):
-        """Scroll the log text when Логи tab is active."""
         try:
-            if self.notebook.get() != "Логи":
+            if self.notebook.get() != "\u041b\u043e\u0433\u0438":
                 return
         except Exception:
             return
@@ -125,57 +142,103 @@ class DesktopGUI:
     # ================================================================
 
     def _build_header(self):
-        header = ctk.CTkFrame(self.root, fg_color=self.BG2, height=50)
-        header.pack(fill="x")
+        header = ctk.CTkFrame(self.root, fg_color=self.BG_SURFACE, height=52, corner_radius=0)
+        header.pack(fill="x", side="top")
         header.pack_propagate(False)
 
+        # Левая часть: название + статус
+        left = ctk.CTkFrame(header, fg_color="transparent")
+        left.pack(side="left", padx=16, fill="y")
+
         ctk.CTkLabel(
-            header, text="DayZ News Monitor",
-            font=("Segoe UI", 16, "bold"),
-            text_color=self.ACCENT,
-        ).pack(side="left", padx=16)
+            left, text="\u2699  DayZ News Monitor",
+            font=("Segoe UI", 15, "bold"),
+            text_color=self.TEXT,
+        ).pack(side="left", pady=14)
+
+        # Правая часть: uptime + статус
+        right = ctk.CTkFrame(header, fg_color="transparent")
+        right.pack(side="right", padx=16, fill="y")
 
         self.status_label = ctk.CTkLabel(
-            header, text="Остановлен",
-            font=("Segoe UI", 13),
+            right, text="\u25cf  Остановлен",
+            font=("Segoe UI", 11, "bold"),
             text_color=self.RED,
         )
-        self.status_label.pack(side="right", padx=16)
+        self.status_label.pack(side="right", padx=(12, 0), pady=14)
+
+        # Uptime badge
+        uptime_badge = ctk.CTkFrame(right, fg_color=self.BG_ELEVATED, corner_radius=6, width=90, height=26)
+        uptime_badge.pack(side="right", padx=(0, 4), pady=14)
+        uptime_badge.pack_propagate(False)
 
         self.uptime_label = ctk.CTkLabel(
-            header, text="00:00:00",
-            font=("Consolas", 12),
+            uptime_badge, text="00:00:00",
+            font=("Consolas", 10),
             text_color=self.TEXT2,
         )
-        self.uptime_label.pack(side="right", padx=8)
-
-        ctk.CTkLabel(
-            header, text="Аптайм:",
-            font=("Segoe UI", 12),
-            text_color=self.TEXT3,
-        ).pack(side="right", padx=(0, 4))
+        self.uptime_label.pack(expand=True)
 
     # ================================================================
     # Tabs
     # ================================================================
 
     def _build_tabs(self):
-        self.notebook = ctk.CTkTabview(self.root)
-        self.notebook.pack(fill="both", expand=True, padx=10, pady=10)
+        self.notebook = ctk.CTkTabview(self.root, fg_color=self.BG_SURFACE,
+                                        segmented_button_fg_color=self.BG_ELEVATED,
+                                        segmented_button_selected_color=self.ACCENT,
+                                        segmented_button_selected_hover_color=self.ACCENT_HOVER,
+                                        segmented_button_unselected_color=self.BG_ELEVATED,
+                                        segmented_button_unselected_hover_color=self.BORDER)
+        self.notebook.pack(fill="both", expand=True, padx=8, pady=(6, 8))
 
         self._build_dashboard(self.notebook.add("Дашборд"))
         self._build_settings(self.notebook.add("Настройки"))
         self._build_logs(self.notebook.add("Логи"))
 
-    # === Dashboard ===
+    # ================================================================
+    # Dashboard
+    # ================================================================
 
     def _build_dashboard(self, parent):
-        status_frame = ctk.CTkFrame(parent, fg_color=self.CARD)
-        status_frame.pack(fill="x", padx=8, pady=(8, 4))
+        # Скроллируемый контейнер дашборда
+        scroll = ctk.CTkScrollableFrame(parent, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=4, pady=4)
 
-        # Настройка grid: 2 ряда, колонки одинаковой ширины
-        status_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
-        status_frame.grid_rowconfigure((0, 1), weight=1)
+        # ─── Строка кнопок ────────────────────────────────────────────
+        btn_bar = ctk.CTkFrame(scroll, fg_color="transparent")
+        btn_bar.pack(fill="x", pady=(0, 8), padx=4)
+
+        ctk.CTkButton(btn_bar, text="\u21bb  Перезагрузить конфиг",
+                      font=("Segoe UI", 11, "bold"),
+                      fg_color=self.BG_ELEVATED, hover_color=self.BORDER,
+                      text_color=self.TEXT2, width=180, height=32, corner_radius=8,
+                      command=self._load_and_fill_config).pack(side="right", padx=4)
+
+        ctk.CTkButton(btn_bar, text="\U0001F514  Настройки",
+                      font=("Segoe UI", 11),
+                      fg_color=self.BG_ELEVATED, hover_color=self.BORDER,
+                      text_color=self.TEXT2, width=130, height=32, corner_radius=8,
+                      command=lambda: self.notebook.set("Настройки")).pack(side="right", padx=4)
+
+        ctk.CTkButton(btn_bar, text="\U0001F4CB  Логи",
+                      font=("Segoe UI", 11),
+                      fg_color=self.BG_ELEVATED, hover_color=self.BORDER,
+                      text_color=self.TEXT2, width=100, height=32, corner_radius=8,
+                      command=lambda: self.notebook.set("Логи")).pack(side="right", padx=4)
+
+        # ─── Карточки статусов (grid 4x2) ─────────────────────────────
+        status_outer = ctk.CTkFrame(scroll, fg_color=self.BG_CARD, corner_radius=10)
+        status_outer.pack(fill="x", padx=4, pady=(0, 6))
+
+        status_inner = ctk.CTkFrame(status_outer, fg_color="transparent")
+        status_inner.pack(fill="x", padx=8, pady=8)
+
+        # grid layout
+        for c in range(4):
+            status_inner.grid_columnconfigure(c, weight=1, uniform="col")
+        for r in range(2):
+            status_inner.grid_rowconfigure(r, weight=1, uniform="row")
 
         self._status_cards = {}
         _cards = [
@@ -190,56 +253,80 @@ class DesktopGUI:
 
         for idx, (key, label) in enumerate(_cards):
             row, col = divmod(idx, 4)
+            icon = self._ICONS.get(key, "")
 
-            card = ctk.CTkFrame(status_frame, fg_color=self.BG2, height=70)
+            card = ctk.CTkFrame(status_inner, fg_color=self.BG_ELEVATED, corner_radius=8)
             card.grid(row=row, column=col, padx=4, pady=4, sticky="nsew")
-            card.grid_propagate(False)
 
-            # Горизонтальный layout внутри карточки
-            inner = ctk.CTkFrame(card, fg_color="transparent")
-            inner.pack(fill="both", expand=True, padx=10, pady=6)
+            # Верхняя строка: иконка + название
+            top = ctk.CTkFrame(card, fg_color="transparent")
+            top.pack(fill="x", padx=10, pady=(8, 0))
 
-            ctk.CTkLabel(inner, text=label, font=("Segoe UI", 11, "bold"),
-                        text_color=self.TEXT2, anchor="w").pack(side="left", fill="y")
-            val = ctk.CTkLabel(inner, text="Отключён", font=("Segoe UI", 11),
-                              text_color=self.TEXT3, anchor="e")
-            val.pack(side="right", fill="y")
+            ctk.CTkLabel(top, text=f"{icon}  {label}", font=("Segoe UI", 11),
+                        text_color=self.TEXT2).pack(side="left")
+
+            # Индикатор статуса (точка)
+            val = ctk.CTkLabel(card, text="\u25cf  Отключён", font=("Segoe UI", 10),
+                              text_color=self.TEXT3)
+            val.pack(anchor="w", padx=10, pady=(4, 0))
+
+            # Инфо-строка
             info = ctk.CTkLabel(card, text="", font=("Segoe UI", 9),
-                               text_color=self.TEXT3, wraplength=200, anchor="w")
-            info.pack(fill="x", padx=10, pady=(0, 2))
+                               text_color=self.TEXT3, wraplength=180, anchor="w")
+            info.pack(fill="x", padx=10, pady=(2, 8))
+
             self._status_cards[key] = {"value": val, "info": info}
 
-        counter_frame = ctk.CTkFrame(parent, fg_color=self.CARD)
-        counter_frame.pack(fill="x", padx=8, pady=4)
+        # ─── Счётчики ─────────────────────────────────────────────────
+        counter_outer = ctk.CTkFrame(scroll, fg_color=self.BG_CARD, corner_radius=10)
+        counter_outer.pack(fill="x", padx=4, pady=(0, 6))
+
+        counter_inner = ctk.CTkFrame(counter_outer, fg_color="transparent")
+        counter_inner.pack(fill="x", padx=8, pady=8)
+
+        for c in range(4):
+            counter_inner.grid_columnconfigure(c, weight=1, uniform="ccol")
+
+        _counters = [
+            ("messages",   "Сообщений",     self.ACCENT),
+            ("analyzed",   "Проанализировано", self.PURPLE),
+            ("published",  "Опубликовано",   self.GREEN),
+            ("duplicates", "Дубликатов",     self.YELLOW),
+        ]
 
         self._counter_labels = {}
-        for key, label in [
-            ("messages", "Сообщений собрано"),
-            ("analyzed", "Проанализировано"),
-            ("published", "Опубликовано"),
-            ("duplicates", "Дубликатов"),
-        ]:
-            card = ctk.CTkFrame(counter_frame, fg_color=self.BG2)
-            card.pack(side="left", padx=4, pady=6, fill="both", expand=True)
+        for idx, (key, label, color) in enumerate(_counters):
+            card = ctk.CTkFrame(counter_inner, fg_color=self.BG_ELEVATED, corner_radius=8)
+            card.grid(row=0, column=idx, padx=4, pady=4, sticky="nsew")
+
             ctk.CTkLabel(card, text=label, font=("Segoe UI", 10),
-                        text_color=self.TEXT2).pack(pady=(8, 0))
-            num = ctk.CTkLabel(card, text="0", font=("Segoe UI", 24, "bold"),
-                              text_color=self.TEXT)
-            num.pack(pady=(0, 8))
+                        text_color=self.TEXT2).pack(pady=(10, 0))
+            num = ctk.CTkLabel(card, text="0", font=("Segoe UI", 22, "bold"),
+                              text_color=color)
+            num.pack(pady=(0, 10))
             self._counter_labels[key] = num
 
-        info_frame = ctk.CTkFrame(parent, fg_color=self.CARD)
-        info_frame.pack(fill="x", padx=8, pady=4)
-        self._source_detail = ctk.CTkLabel(
-            info_frame, text="Источники: ожидание запуска...",
-            font=("Segoe UI", 11), text_color=self.TEXT2, anchor="w",
-            wraplength=860)
-        self._source_detail.pack(fill="x", padx=12, pady=10)
+        # ─── Инфо-панель источников ──────────────────────────────────
+        info_outer = ctk.CTkFrame(scroll, fg_color=self.BG_CARD, corner_radius=10)
+        info_outer.pack(fill="x", padx=4, pady=(0, 4))
 
-    # === Settings ===
+        info_header = ctk.CTkFrame(info_outer, fg_color="transparent")
+        info_header.pack(fill="x", padx=12, pady=(10, 0))
+        ctk.CTkLabel(info_header, text="\U0001F310  Статус источников",
+                    font=("Segoe UI", 11, "bold"), text_color=self.TEXT2).pack(side="left")
+
+        self._source_detail = ctk.CTkLabel(
+            info_outer, text="Ожидание запуска...",
+            font=("Segoe UI", 10), text_color=self.TEXT3, anchor="w",
+            wraplength=880, justify="left")
+        self._source_detail.pack(fill="x", padx=12, pady=(4, 12))
+
+    # ================================================================
+    # Settings
+    # ================================================================
 
     def _build_settings(self, parent):
-        canvas = ctk.CTkScrollableFrame(parent)
+        canvas = ctk.CTkScrollableFrame(parent, fg_color="transparent")
         canvas.pack(fill="both", expand=True, padx=8, pady=8)
 
         self._entries = {}
@@ -254,7 +341,7 @@ class DesktopGUI:
             ("Telegram", [
                 ("telegram_bot_token", "Bot Token", "Токен от @BotFather"),
                 ("telegram_channel_id", "Channel ID (Сводки)", "-100xxxxxxxxxx"),
-                ("telegram_news_channel_id", "Channel ID (Новости)", "-100xxxxxxxxxx (пусто = как сводки)"),
+                ("telegram_news_channel_id", "Channel ID (Новости)", "-100xxxxxxxxxx"),
             ]),
             ("AI / NVIDIA API", [
                 ("openai_api_key", "API Key", "nvapi-..."),
@@ -277,7 +364,7 @@ class DesktopGUI:
             ("Steam Workshop", [
                 ("workshop_interval_minutes", "Интервал проверки (мин)", "60"),
                 ("workshop_min_subscriptions", "Мин. подписчиков мода", "100"),
-                ("steam_api_key", "Steam API Key (необязательно)", "Пусто = scraping без ключа"),
+                ("steam_api_key", "Steam API Key", "Необязательно"),
             ]),
             ("Патчноуты", [
                 ("patchnotes_interval_minutes", "Интервал проверки (мин)", "30"),
@@ -290,164 +377,171 @@ class DesktopGUI:
             ]),
             ("Веб-панель", [
                 ("web_panel_url", "URL панели", "https://dayz-monitor-web.vercel.app"),
-                ("web_panel_api_key", "API ключ панели", "Ключ для авторизации бота"),
+                ("web_panel_api_key", "API ключ панели", "Ключ авторизации бота"),
             ]),
         ]
 
         for section_title, fields in sections:
-            frame = ctk.CTkFrame(canvas, fg_color=self.CARD)
-            frame.pack(fill="x", pady=(6, 3))
+            self._build_section(canvas, section_title, fields)
 
-            ctk.CTkLabel(frame, text=section_title, font=("Segoe UI", 13, "bold"),
-                        text_color=self.ACCENT).pack(anchor="w", padx=12, pady=(10, 4))
-
-            # Переключатели для секции Steam Workshop
-            if section_title == "Steam Workshop":
-                tf = ctk.CTkFrame(frame, fg_color="transparent")
-                tf.pack(fill="x", padx=12, pady=(4, 6))
-                var = tk.BooleanVar(value=True)
-                ctk.CTkCheckBox(tf, text="Включить монитор Steam Workshop",
-                               variable=var, font=("Segoe UI", 11),
-                               text_color=self.TEXT2, fg_color=self.INPUT_BORDER,
-                               hover_color=self.ACCENT).pack(anchor="w")
-                self._toggles["workshop_enabled"] = var
-
-            # Переключатели для секции Патчноуты
-            if section_title == "Патчноуты":
-                tf = ctk.CTkFrame(frame, fg_color="transparent")
-                tf.pack(fill="x", padx=12, pady=(4, 6))
-                var = tk.BooleanVar(value=True)
-                ctk.CTkCheckBox(tf, text="Включить монитор патчноутов",
-                               variable=var, font=("Segoe UI", 11),
-                               text_color=self.TEXT2, fg_color=self.INPUT_BORDER,
-                               hover_color=self.ACCENT).pack(anchor="w")
-                self._toggles["patchnotes_enabled"] = var
-
-            # Переключатели для секции YouTube
-            if section_title == "YouTube":
-                tf = ctk.CTkFrame(frame, fg_color="transparent")
-                tf.pack(fill="x", padx=12, pady=(4, 6))
-                var = tk.BooleanVar(value=True)
-                ctk.CTkCheckBox(tf, text="Включить YouTube монитор",
-                               variable=var, font=("Segoe UI", 11),
-                               text_color=self.TEXT2, fg_color=self.INPUT_BORDER,
-                               hover_color=self.ACCENT).pack(anchor="w")
-                self._toggles["youtube_enabled"] = var
-                var2 = tk.BooleanVar(value=True)
-                ctk.CTkCheckBox(tf, text="Скачивать шортсы",
-                               variable=var2, font=("Segoe UI", 11),
-                               text_color=self.TEXT2, fg_color=self.INPUT_BORDER,
-                               hover_color=self.ACCENT).pack(anchor="w")
-                self._toggles["youtube_download_shorts"] = var2
-
-            # Переключатели для секции Веб-панель
-            if section_title == "Веб-панель":
-                tf = ctk.CTkFrame(frame, fg_color="transparent")
-                tf.pack(fill="x", padx=12, pady=(4, 6))
-                var = tk.BooleanVar(value=True)
-                ctk.CTkCheckBox(tf, text="Уведомления о модерации в Telegram",
-                               variable=var, font=("Segoe UI", 11),
-                               text_color=self.TEXT2, fg_color=self.INPUT_BORDER,
-                               hover_color=self.ACCENT).pack(anchor="w")
-                self._toggles["moderation_notifications"] = var
-
-            for key, label, hint in fields:
-                row = ctk.CTkFrame(frame, fg_color="transparent")
-                row.pack(fill="x", padx=12, pady=2)
-
-                ctk.CTkLabel(row, text=label + ":", font=("Segoe UI", 11),
-                            text_color=self.TEXT2, width=200, anchor="w").pack(side="left")
-
-                is_secret = "token" in key or "key" in key
-                entry = ctk.CTkEntry(
-                    row, border_color=self.INPUT_BORDER, border_width=1,
-                    text_color=self.TEXT, font=("Consolas", 12), width=350,
-                    show="*" if is_secret else "",
-                )
-                entry.pack(side="left", padx=(0, 8), fill="x", expand=True)
-                self._entries[key] = entry
-
-                ctk.CTkLabel(row, text=hint, font=("Segoe UI", 10),
-                            text_color=self.TEXT3, width=200, anchor="w").pack(side="left")
-
-            if section_title == "Расписание":
-                tf = ctk.CTkFrame(frame, fg_color="transparent")
-                tf.pack(fill="x", padx=12, pady=(8, 10))
-                for key, label in [
-                    ("publish_high_priority", "Публиковать High"),
-                    ("publish_medium_priority", "Публиковать Medium"),
-                    ("publish_low_priority", "Публиковать Low"),
-                ]:
-                    var = tk.BooleanVar(value=False)
-                    ctk.CTkCheckBox(tf, text=label, variable=var, font=("Segoe UI", 11),
-                                   text_color=self.TEXT2, fg_color=self.INPUT_BORDER,
-                                   hover_color=self.ACCENT).pack(side="left", padx=(0, 20))
-                    self._toggles[key] = var
-
+        # Кнопки внизу
         bf = ctk.CTkFrame(canvas, fg_color="transparent")
-        bf.pack(fill="x", pady=12)
-        ctk.CTkButton(bf, text="Сохранить настройки", font=("Segoe UI", 12, "bold"),
-                      fg_color=self.ACCENT, hover_color="#79b8ff", width=200, height=38,
+        bf.pack(fill="x", pady=(12, 8))
+
+        ctk.CTkButton(bf, text="\u2714  Сохранить",
+                      font=("Segoe UI", 12, "bold"),
+                      fg_color=self.GREEN, hover_color="#4cc95f",
+                      text_color="#ffffff", width=160, height=36, corner_radius=8,
                       command=self._save_config).pack(side="left", padx=4)
-        ctk.CTkButton(bf, text="Перезагрузить", font=("Segoe UI", 12, "bold"),
-                      fg_color="#2a3a5e", hover_color="#3a4a6e", width=200, height=38,
+
+        ctk.CTkButton(bf, text="\u21bb  Перезагрузить",
+                      font=("Segoe UI", 12, "bold"),
+                      fg_color=self.BG_ELEVATED, hover_color=self.BORDER,
+                      text_color=self.TEXT2, width=160, height=36, corner_radius=8,
                       command=self._load_and_fill_config).pack(side="left", padx=4)
 
-    # === Logs ===
+    def _build_section(self, parent, title, fields):
+        """Строит одну секцию настроек с красивым заголовком."""
+        frame = ctk.CTkFrame(parent, fg_color=self.BG_CARD, corner_radius=10)
+        frame.pack(fill="x", pady=(4, 2))
+
+        # Заголовок секции
+        header = ctk.CTkFrame(frame, fg_color="transparent")
+        header.pack(fill="x", padx=14, pady=(10, 2))
+
+        ctk.CTkLabel(header, text=title, font=("Segoe UI", 12, "bold"),
+                    text_color=self.ACCENT).pack(side="left")
+
+        # Разделитель
+        sep = ctk.CTkFrame(frame, fg_color=self.BORDER, height=1)
+        sep.pack(fill="x", padx=14, pady=(4, 6))
+
+        # Тогглы
+        if title == "Steam Workshop":
+            self._add_toggle(frame, "workshop_enabled", "Включить монитор Steam Workshop")
+        elif title == "Патчноуты":
+            self._add_toggle(frame, "patchnotes_enabled", "Включить монитор патчноутов")
+        elif title == "YouTube":
+            self._add_toggle(frame, "youtube_enabled", "Включить YouTube монитор")
+            self._add_toggle(frame, "youtube_download_shorts", "Скачивать шортсы")
+        elif title == "Веб-панель":
+            self._add_toggle(frame, "moderation_notifications", "Уведомления о модерации в Telegram")
+
+        # Поля ввода
+        for key, label, hint in fields:
+            row = ctk.CTkFrame(frame, fg_color="transparent")
+            row.pack(fill="x", padx=14, pady=3)
+
+            ctk.CTkLabel(row, text=label, font=("Segoe UI", 11),
+                        text_color=self.TEXT2, width=180, anchor="w").pack(side="left")
+
+            is_secret = "token" in key or "key" in key
+            entry = ctk.CTkEntry(
+                row, border_color=self.BORDER, border_width=1,
+                text_color=self.TEXT, font=("Consolas", 11),
+                fg_color=self.BG_ELEVATED,
+                show="\u2022" if is_secret else "",
+                height=32, corner_radius=6,
+            )
+            entry.pack(side="left", padx=(8, 8), fill="x", expand=True)
+            self._entries[key] = entry
+
+            ctk.CTkLabel(row, text=hint, font=("Segoe UI", 9),
+                        text_color=self.TEXT3, width=160, anchor="w").pack(side="left")
+
+        # Тогглы для Расписание
+        if title == "Расписание":
+            toggle_frame = ctk.CTkFrame(frame, fg_color="transparent")
+            toggle_frame.pack(fill="x", padx=14, pady=(6, 10))
+            for key, label in [
+                ("publish_high_priority", "High"),
+                ("publish_medium_priority", "Medium"),
+                ("publish_low_priority", "Low"),
+            ]:
+                var = tk.BooleanVar(value=False)
+                ctk.CTkCheckBox(
+                    toggle_frame, text=f"Публиковать {label}",
+                    variable=var, font=("Segoe UI", 11),
+                    text_color=self.TEXT2, fg_color=self.BORDER,
+                    hover_color=self.ACCENT, checkbox_width=18, checkbox_height=18,
+                    corner_radius=4,
+                ).pack(side="left", padx=(0, 24))
+                self._toggles[key] = var
+
+    def _add_toggle(self, parent, key, label):
+        tf = ctk.CTkFrame(parent, fg_color="transparent")
+        tf.pack(fill="x", padx=14, pady=(2, 6))
+        var = tk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            tf, text=label,
+            variable=var, font=("Segoe UI", 11),
+            text_color=self.TEXT2, fg_color=self.BORDER,
+            hover_color=self.ACCENT, checkbox_width=18, checkbox_height=18,
+            corner_radius=4,
+        ).pack(anchor="w")
+        self._toggles[key] = var
+
+    # ================================================================
+    # Logs
+    # ================================================================
 
     def _build_logs(self, parent):
-        bar = ctk.CTkFrame(parent, fg_color=self.CARD)
-        bar.pack(fill="x", padx=8, pady=(8, 4))
+        bar = ctk.CTkFrame(parent, fg_color=self.BG_CARD, corner_radius=10)
+        bar.pack(fill="x", padx=4, pady=(4, 4))
+
+        bar_inner = ctk.CTkFrame(bar, fg_color="transparent")
+        bar_inner.pack(fill="x", padx=10, pady=8)
 
         self._filter_btns = {}
         for level in ("ALL", "INFO", "WARNING", "ERROR", "DEBUG"):
-            btn = ctk.CTkButton(bar, text=level, font=("Segoe UI", 11, "bold"),
-                               width=70, height=30,
-                               fg_color=self.ACCENT if level == "ALL" else self.BG3,
-                               hover_color="#79b8ff",
-                               command=lambda l=level: self._set_filter(l))
-            btn.pack(side="left", padx=3, pady=6)
+            btn = ctk.CTkButton(
+                bar_inner, text=level,
+                font=("Segoe UI", 10, "bold"), width=64, height=28,
+                corner_radius=6,
+                fg_color=self.ACCENT if level == "ALL" else self.BG_ELEVATED,
+                hover_color=self.ACCENT_HOVER,
+                text_color="#ffffff" if level == "ALL" else self.TEXT2,
+                command=lambda l=level: self._set_filter(l))
+            btn.pack(side="left", padx=2)
             self._filter_btns[level] = btn
 
-        self._log_count = ctk.CTkLabel(bar, text="0 записей", font=("Segoe UI", 10),
-                                       text_color=self.TEXT3)
-        self._log_count.pack(side="right", padx=12)
+        self._log_count = ctk.CTkLabel(bar_inner, text="0 записей",
+                                       font=("Segoe UI", 9), text_color=self.TEXT3)
+        self._log_count.pack(side="right", padx=(8, 0))
 
-        ctk.CTkButton(bar, text="Очистить", font=("Segoe UI", 10), width=80, height=30,
-                      fg_color=self.BG3, hover_color=self.RED,
-                      command=self._clear_logs).pack(side="right", padx=3, pady=6)
+        ctk.CTkButton(bar_inner, text="Очистить", font=("Segoe UI", 9),
+                      width=70, height=28, corner_radius=6,
+                      fg_color=self.BG_ELEVATED, hover_color=self.RED,
+                      text_color=self.TEXT2,
+                      command=self._clear_logs).pack(side="right", padx=2)
 
-        # Log area: tk.Text + CTkScrollbar inside a CTkFrame.
-        # No CTkTextbox — it inherits CTkBaseClass which blocks bind_all
-        # and breaks mousewheel in CTkTabview on Windows.
+        # Log area
         self._user_scrolled = False
 
-        log_frame = ctk.CTkFrame(parent, fg_color=self.INPUT_BG)
-        log_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        log_frame = ctk.CTkFrame(parent, fg_color=self.BG_CARD, corner_radius=10)
+        log_frame.pack(fill="both", expand=True, padx=4, pady=(0, 4))
 
         self._log_scrollbar = ctk.CTkScrollbar(
-            log_frame,
-            command=self._log_text_yview,
-            fg_color=self.BG3,
-            button_color=self.ACCENT,
-            button_hover_color="#79b8ff",
+            log_frame, command=self._log_text_yview,
+            fg_color=self.BG_ELEVATED,
+            button_color=self.BORDER,
+            button_hover_color=self.TEXT3,
         )
-        self._log_scrollbar.pack(side="right", fill="y", padx=(0, 2), pady=2)
+        self._log_scrollbar.pack(side="right", fill="y", padx=(0, 4), pady=4)
 
         self._log_text = tk.Text(
-            log_frame, bg=self.INPUT_BG, fg=self.TEXT, font=("Consolas", 11),
-            insertbackground=self.TEXT, selectbackground=self.BG3,
+            log_frame, bg=self.BG_SURFACE, fg=self.TEXT, font=("Consolas", 10),
+            insertbackground=self.TEXT, selectbackground=self.BG_ELEVATED,
             selectforeground=self.TEXT,
             borderwidth=0, highlightthickness=0, wrap="word",
             cursor="arrow", takefocus=True,
             yscrollcommand=self._log_scrollbar.set,
+            padx=8, pady=6,
         )
-        self._log_text.pack(side="left", fill="both", expand=True, padx=(2, 0), pady=2)
-
-        # Block keyboard typing, allow selection + copy + navigation
+        self._log_text.pack(side="left", fill="both", expand=True, padx=(4, 0), pady=4)
         self._log_text.bind("<Key>", self._block_typing)
 
-        # Colored tags
+        # Tags
         self._log_text.tag_configure("TIME", foreground=self.TEXT3)
         self._log_text.tag_configure("LEVEL_INFO", foreground=self.ACCENT)
         self._log_text.tag_configure("LEVEL_WARNING", foreground=self.YELLOW)
@@ -457,14 +551,12 @@ class DesktopGUI:
 
         self._total_lines = 0
         self._filter_level = "ALL"
-        self._all_logs = []  # store all log entries for filtering
+        self._all_logs = []
 
     def _log_text_yview(self, *args):
-        """Route scrollbar commands to the tk.Text widget."""
         self._log_text.yview(*args)
 
     def _block_typing(self, event):
-        """Block keyboard input but allow Ctrl combos and navigation."""
         if event.keysym in ("Control_L", "Control_R", "Shift_L", "Shift_R",
                              "Alt_L", "Alt_R", "Super_L", "Super_R",
                              "Caps_Lock", "Tab",
@@ -474,9 +566,9 @@ class DesktopGUI:
                              "F7", "F8", "F9", "F10", "F11", "F12",
                              "Insert", "Delete"):
             return
-        if event.state & 0x4:  # Ctrl
+        if event.state & 0x4:
             return
-        if event.state & 0x1:  # Shift
+        if event.state & 0x1:
             return
         return "break"
 
@@ -565,11 +657,15 @@ class DesktopGUI:
                             "request_timeout_seconds", "max_images_per_post", "reddit_min_score",
                             "workshop_interval_minutes", "workshop_min_subscriptions", "patchnotes_interval_minutes",
                             "youtube_interval_hours", "youtube_min_views", "youtube_min_likes", "youtube_max_per_check"):
-                    try: val = int(val)
-                    except ValueError: pass
+                    try:
+                        val = int(val)
+                    except ValueError:
+                        pass
                 elif key == "similarity_threshold":
-                    try: val = float(val)
-                    except ValueError: pass
+                    try:
+                        val = float(val)
+                    except ValueError:
+                        pass
                 cfg[key] = val
 
         if "sources" not in cfg:
@@ -598,11 +694,13 @@ class DesktopGUI:
     def _set_filter(self, level):
         self._filter_level = level
         for l, btn in self._filter_btns.items():
-            btn.configure(fg_color=self.ACCENT if l == level else self.BG3)
+            if l == level:
+                btn.configure(fg_color=self.ACCENT, text_color="#ffffff")
+            else:
+                btn.configure(fg_color=self.BG_ELEVATED, text_color=self.TEXT2)
         self._rebuild_log_display()
 
     def _rebuild_log_display(self):
-        """Re-render log text widget showing only entries matching current filter."""
         try:
             tb = self._log_text
             tb.config(state="normal")
@@ -639,14 +737,11 @@ class DesktopGUI:
                 continue
 
             level = entry["level"]
-
-            # Store all entries for filtering
             self._all_logs.append(entry)
             if len(self._all_logs) > 2000:
                 self._all_logs = self._all_logs[-1500:]
             self._total_lines = len(self._all_logs)
 
-            # Only insert into text widget if it matches current filter
             if self._filter_level != "ALL" and level != self._filter_level:
                 try:
                     self._log_count.configure(text=f"{self._count_visible()} записей")
@@ -669,7 +764,6 @@ class DesktopGUI:
                 pass
 
     def _count_visible(self):
-        """Count how many entries match current filter."""
         if self._filter_level == "ALL":
             return len(self._all_logs)
         return sum(1 for e in self._all_logs if e["level"] == self._filter_level)
@@ -698,9 +792,9 @@ class DesktopGUI:
             def _apply():
                 try:
                     if connected:
-                        card["value"].configure(text="Подключён", text_color=self.GREEN)
+                        card["value"].configure(text="\u25cf  Подключён", text_color=self.GREEN)
                     else:
-                        card["value"].configure(text="Отключён", text_color=self.TEXT3)
+                        card["value"].configure(text="\u25cf  Отключён", text_color=self.TEXT3)
                     if info:
                         card["info"].configure(text=info)
                 except Exception:
@@ -712,7 +806,7 @@ class DesktopGUI:
     def set_status_running(self):
         try:
             self.root.after(0, lambda: self.status_label.configure(
-                text="Работает", text_color=self.GREEN))
+                text="\u25cf  Работает", text_color=self.GREEN))
         except Exception:
             pass
 
@@ -726,7 +820,6 @@ class DesktopGUI:
             pass
 
     def update_counters(self, messages=0, analyzed=0, published=0, duplicates=0):
-        """Обновляет счётчики на дашборде."""
         def _apply():
             try:
                 labels = self._counter_labels
@@ -746,7 +839,6 @@ class DesktopGUI:
             pass
 
     def update_source_detail(self, text):
-        """Обновляет информационную строку источников."""
         try:
             self.root.after(0, lambda: self._source_detail.configure(text=text))
         except Exception:
