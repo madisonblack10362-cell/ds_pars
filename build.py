@@ -47,7 +47,7 @@ a = Analysis(
     hiddenimports=[
         'bot', 'logger', 'database', 'ai_analyzer', 'deduplicator',
         'publisher', 'scheduler', 'discord_monitor', 'telegram_monitor',
-        'vk_monitor', 'website_monitor', 'web_app_integration', 'gui_desktop',
+        'website_monitor', 'web_app_integration', 'gui_desktop',
         'aiohttp', 'aiosqlite', 'aiogram', 'apscheduler', 'telethon',
         'feedparser', 'bs4', 'lxml', 'lxml._elementpath', 'lxml.etree',
         'numpy', 'customtkinter', 'httpx', 'httpx._transports',

@@ -339,8 +339,6 @@ class DesktopGUI:
             ]),
             ("Расписание", [
                 ("check_interval_minutes", "Интервал проверки (мин)", "5"),
-                ("reddit_check_interval_minutes", "Reddit интервал (мин)", "30"),
-                ("reddit_min_score", "Reddit мин. рейтинг", "50"),
                 ("daily_summary_hour", "Час сводки (UTC)", "10"),
                 ("daily_summary_minute", "Минута сводки (UTC)", "0"),
                 ("min_message_length", "Мин. длина сообщения", "20"),
@@ -578,7 +576,7 @@ class DesktopGUI:
                 "discord_token", "telegram_bot_token", "telegram_channel_id",
                 "telegram_news_channel_id",
                 "openai_api_key", "openai_base_url", "openai_model",
-                "check_interval_minutes", "reddit_check_interval_minutes", "reddit_min_score",
+                "check_interval_minutes",
                 "daily_summary_hour", "daily_summary_minute",
                 "min_message_length", "similarity_threshold",
                 "max_retries", "retry_delay_seconds", "request_timeout_seconds",
@@ -627,7 +625,7 @@ class DesktopGUI:
             "discord_token", "telegram_bot_token", "telegram_channel_id",
             "telegram_news_channel_id",
             "openai_api_key", "openai_base_url", "openai_model",
-            "check_interval_minutes", "reddit_check_interval_minutes", "reddit_min_score",
+            "check_interval_minutes",
             "daily_summary_hour", "daily_summary_minute",
             "min_message_length", "similarity_threshold",
             "max_retries", "retry_delay_seconds", "request_timeout_seconds",
@@ -641,9 +639,9 @@ class DesktopGUI:
             entry = self._entries.get(key)
             if entry:
                 val = entry.get()
-                if key in ("check_interval_minutes", "reddit_check_interval_minutes", "daily_summary_hour", "daily_summary_minute",
+                if key in ("check_interval_minutes", "daily_summary_hour", "daily_summary_minute",
                             "min_message_length", "max_retries", "retry_delay_seconds",
-                            "request_timeout_seconds", "max_images_per_post", "reddit_min_score",
+                            "request_timeout_seconds", "max_images_per_post",
                             "workshop_interval_minutes", "workshop_min_subscriptions", "patchnotes_interval_minutes",
                             "youtube_interval_hours", "youtube_min_views", "youtube_min_likes", "youtube_max_per_check"):
                     try:

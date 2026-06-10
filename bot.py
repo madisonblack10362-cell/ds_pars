@@ -1,6 +1,6 @@
 """
 Главная точка входа проекта DayZ News Monitor.
-Оркестрирует мониторинг Discord (один канал), VK-групп,
+Оркестрирует мониторинг Discord (один канал),
 AI-анализ, дедупликацию и публикацию в Telegram-канал.
 """
 
@@ -34,8 +34,6 @@ from ai_analyzer import AIAnalyzer
 from deduplicator import Deduplicator
 from publisher import Publisher
 from scheduler import Scheduler
-from vk_monitor import VKMonitor
-from reddit_monitor import RedditMonitor
 from steam_workshop_monitor import run_workshop_monitor, fetch_popular_mods
 from patch_notes_monitor import run_patch_monitor, fetch_steam_news
 from youtube_monitor import run_youtube_monitor
@@ -48,7 +46,6 @@ class DayZNewsMonitor:
 
     Текущая конфигурация источников:
       - Discord: один канал, куда приходят новости всех проектов
-      - VK: группы DayZ-серверов
       - Telegram: только публикация (отправка в канал через bot API)
     """
 
@@ -60,8 +57,6 @@ class DayZNewsMonitor:
         self.deduplicator: Optional[Deduplicator] = None
         self.publisher: Optional[Publisher] = None
         self.scheduler: Optional[Scheduler] = None
-        self.vk_monitor: Optional[VKMonitor] = None
-        self.reddit_monitor: Optional[RedditMonitor] = None
         self.youtube_task: Optional[asyncio.Task] = None
         self._workshop_task: Optional[asyncio.Task] = None
         self._patch_task: Optional[asyncio.Task] = None
@@ -184,46 +179,6 @@ class DayZNewsMonitor:
             logger.warning("Publisher отключён: не указан токен Telegram-бота")
 
         # -----------------------------------------------------------------
-        # VK мониторинг
-        # -----------------------------------------------------------------
-        vk_token = cfg.get("vk_access_token", "")
-        vk_sources = cfg.get("sources", {}).get("vk", [])
-
-        if vk_token and vk_token != "YOUR_VK_ACCESS_TOKEN_HERE" and vk_sources:
-            self.vk_monitor = VKMonitor(
-                db=self.db,
-                access_token=vk_token,
-                group_configs=vk_sources,
-                api_version=cfg.get("vk_api_version", "5.199"),
-                min_message_length=cfg.get("min_message_length", 20),
-                request_timeout=cfg.get("request_timeout_seconds", 30),
-                max_retries=cfg.get("max_retries", 3),
-            )
-            await self.vk_monitor.load_initial_state()
-            logger.info("VK-монитор инициализирован (%d групп)", len(vk_sources))
-        else:
-            logger.info("VK-монитор отключён: не указан access token или нет групп")
-
-        # -----------------------------------------------------------------
-        # Reddit мониторинг
-        # -----------------------------------------------------------------
-        reddit_sources = cfg.get("sources", {}).get("reddit", [])
-        if reddit_sources:
-            self.reddit_monitor = RedditMonitor(
-                db=self.db,
-                subreddit_configs=reddit_sources,
-                min_message_length=cfg.get("min_message_length", 20),
-                min_score=cfg.get("reddit_min_score", 50),
-                request_timeout=cfg.get("request_timeout_seconds", 30),
-                max_retries=cfg.get("max_retries", 3),
-                max_posts_per_check=cfg.get("reddit_max_posts_per_check", 5),
-            )
-            await self.reddit_monitor.load_initial_state()
-            logger.info("Reddit-монитор инициализирован (%d сабреддитов, Playwright)", len(reddit_sources))
-        else:
-            logger.info("Reddit-монитор отключён: нет сабреддитов в настройках")
-
-        # -----------------------------------------------------------------
         # YouTube монитор (шортсы и короткий контент)
         # -----------------------------------------------------------------
         if cfg.get("youtube_enabled", True):
@@ -331,23 +286,6 @@ class DayZNewsMonitor:
         self.scheduler = Scheduler()
         check_interval = cfg.get("check_interval_minutes", 5)
 
-        # Периодическая проверка VK-групп
-        if self.vk_monitor:
-            self.scheduler.add_interval_job(
-                func=self._task_check_vk,
-                job_id="check_vk",
-                minutes=check_interval,
-            )
-
-        # Периодическая проверка Reddit
-        if self.reddit_monitor:
-            reddit_interval = cfg.get("reddit_check_interval_minutes", 30)
-            self.scheduler.add_interval_job(
-                func=self._task_check_reddit,
-                job_id="check_reddit",
-                minutes=reddit_interval,
-            )
-
         # AI-анализ необработанных сообщений
         if self.ai_analyzer:
             self.scheduler.add_interval_job(
@@ -407,8 +345,6 @@ class DayZNewsMonitor:
         logger.info("─── Планировщик задач ───")
         task_names = {
             "check_discord": "Discord мониторинг",
-            "check_vk": "VK мониторинг",
-            "check_reddit": "Reddit мониторинг",
             "workshop": "Steam Workshop",
             "patchnotes": "Патчноуты",
             "analyze_messages": "AI-анализ сообщений",
@@ -427,28 +363,6 @@ class DayZNewsMonitor:
     # =====================================================================
     # Задачи планировщика
     # =====================================================================
-
-    async def _task_check_vk(self) -> None:
-        """Периодическая проверка VK-групп."""
-        if not self.vk_monitor:
-            return
-        try:
-            count = await self.vk_monitor.check_all_groups()
-            if count > 0:
-                logger.info("VK: обработано %d новых записей", count)
-        except Exception as exc:
-            logger.error("Ошибка проверки VK-групп: %s", exc)
-
-    async def _task_check_reddit(self) -> None:
-        """Периодическая проверка Reddit-сабреддитов."""
-        if not self.reddit_monitor:
-            return
-        try:
-            count = await self.reddit_monitor.check_all_subreddits()
-            if count > 0:
-                logger.info("Reddit: обработано %d новых постов", count)
-        except Exception as exc:
-            logger.error("Ошибка проверки Reddit: %s", exc)
 
     async def _get_admin_chat_ids(self) -> list[int]:
         """Возвращает список chat_id всех зарегистрированных пользователей бота."""
@@ -564,17 +478,9 @@ class DayZNewsMonitor:
                     except (json.JSONDecodeError, TypeError):
                         images = []
 
-                    # Для Reddit — более строгая дедупликация (порог 0.65 вместо 0.85)
-                    old_threshold = self.deduplicator.similarity_threshold
-                    if msg.get("source_type") == "reddit":
-                        self.deduplicator.similarity_threshold = 0.65
-
                     duplicate_of = await self.deduplicator.is_duplicate(
                         msg_id, text, images
                     )
-
-                    # Возвращаем порог обратно
-                    self.deduplicator.similarity_threshold = old_threshold
 
                     if duplicate_of:
                         await self.deduplicator.mark_as_duplicate(
@@ -590,9 +496,6 @@ class DayZNewsMonitor:
                 if source_type == "youtube":
                     # YouTube контент уже обработан монитором с AI и отправлен на панель
                     continue
-                elif source_type == "reddit":
-                    subreddit = msg.get("channel_name", "")
-                    result = await self.ai_analyzer.analyze_reddit(text, author=author, subreddit=subreddit)
                 else:
                     result = await self.ai_analyzer.analyze(text, author=author)
 
@@ -1018,8 +921,6 @@ class DayZNewsMonitor:
             await self.scheduler.stop()
         if self.publisher:
             await self.publisher.close()
-        if self.reddit_monitor:
-            await self.reddit_monitor.close_browser()
         if self._workshop_task:
             self._workshop_task.cancel()
         if self._patch_task:
@@ -1151,10 +1052,6 @@ def _run_bot_thread(monitor, gui=None):
                     gui.update_status("telegram", True, monitor.config.get("telegram_channel_id", ""))
                 else:
                     gui.update_status("telegram", False, "Токен не указан")
-                if monitor.vk_monitor:
-                    gui.update_status("vk", True)
-                if monitor.reddit_monitor:
-                    gui.update_status("reddit", True)
                 if monitor.youtube_task:
                     gui.update_status("youtube", True, f"каждые {monitor.config.get('youtube_interval_hours', 2)}ч")
                 else:

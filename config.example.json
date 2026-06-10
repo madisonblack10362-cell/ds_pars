@@ -1,5 +1,5 @@
 {
-  "_comment": "DayZ News Monitor — Discord (один канал) + VK + публикация в Telegram",
+  "_comment": "DayZ News Monitor — Discord (один канал) + публикация в Telegram",
   "_comment_news_channel": "telegram_channel_id = для сводок, telegram_news_channel_id = для новостей (если пусто — используется telegram_channel_id)",
 
   "telegram_bot_token": "YOUR_BOT_TOKEN_HERE",
@@ -12,12 +12,7 @@
 
   "discord_token": "YOUR_DISCORD_TOKEN_HERE",
 
-  "vk_access_token": "YOUR_VK_ACCESS_TOKEN_HERE",
-  "vk_api_version": "5.199",
-
   "check_interval_minutes": 5,
-  "reddit_check_interval_minutes": 30,
-  "reddit_min_score": 50,
   "daily_summary_hour": 10,
   "daily_summary_minute": 0,
   "min_message_length": 20,
@@ -41,33 +36,6 @@
       "guild_id": "000000000000000000",
       "channel_id": "000000000000000000",
       "channel_name": "dayz-news"
-    },
-
-    "vk": [
-      {
-        "server": "Example DayZ Server",
-        "group_id": "-00000000"
-      }
-    ],
-    "reddit": [
-      {
-        "subreddit": "dayz",
-        "sort": "hot",
-        "min_score": 50,
-        "limit": 25
-      },
-      {
-        "subreddit": "dayzsurvivaltales",
-        "sort": "hot",
-        "min_score": 20,
-        "limit": 15
-      },
-      {
-        "subreddit": "DayZMods",
-        "sort": "hot",
-        "min_score": 10,
-        "limit": 15
-      }
-    ]
+    }
   }
 }

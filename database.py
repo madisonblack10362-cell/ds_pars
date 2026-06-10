@@ -50,7 +50,7 @@ class Database:
             -- Таблица источников
             CREATE TABLE IF NOT EXISTS sources (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                source_type     TEXT    NOT NULL,   -- 'discord', 'telegram', 'vk', 'website'
+                source_type     TEXT    NOT NULL,   -- 'discord', 'telegram', 'website'
                 server_name     TEXT    NOT NULL,
                 source_id       TEXT    NOT NULL,   -- ID канала, группы, URL и т.д.
                 extra           TEXT    DEFAULT '{}',  -- JSON с дополнительными данными
@@ -62,7 +62,7 @@ class Database:
             CREATE TABLE IF NOT EXISTS messages (
                 id                  INTEGER PRIMARY KEY AUTOINCREMENT,
                 external_id         TEXT    NOT NULL,   -- ID сообщения в источнике
-                source_type         TEXT    NOT NULL,   -- 'discord', 'telegram', 'vk', 'website'
+                source_type         TEXT    NOT NULL,   -- 'discord', 'telegram', 'website'
                 source_id           TEXT    NOT NULL,   -- ID канала/группы/URL
                 server_name         TEXT    NOT NULL,
                 channel_name        TEXT    DEFAULT '',

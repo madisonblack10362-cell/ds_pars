@@ -38,7 +38,7 @@ class ColoredFormatter(logging.Formatter):
     
     Примеры вывода:
       12:00:00  INFO  │ Конфигурация загружена (12 ключей)
-      12:00:00  ⚠️ WARN │ VK-монитор отключён
+      12:00:00  ⚠️ WARN │ Discord-монитор отключён
       12:00:00  ❌ ERR  │ Ошибка отправки: timeout
     """
 
