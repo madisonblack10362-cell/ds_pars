@@ -309,11 +309,32 @@ def _is_stream_garbage(title: str) -> bool:
 def _is_within_lookback(published_ts: int | float, lookback_days: int) -> bool:
     """
     Проверяет, находится ли видео в диапазоне lookback_days от текущей даты.
-    published_ts — Unix timestamp.
+    published_ts — Unix timestamp в секундах.
     """
     if not published_ts or published_ts <= 0:
-        return True  # Если нет даты — не фильтруем (даём шанс)
-    cutoff = time.time() - (lookback_days * 86400)
+        return True  # нет даты — не фильтруем
+
+    # FIX-4: защита от миллисекунд (повторная на случай других источников)
+    if published_ts > 9_999_999_999:
+        published_ts = published_ts // 1000
+
+    # FIX-4: защита от дат из будущего
+    now = time.time()
+    if published_ts > now + 86400:
+        logger.debug(
+            "YouTube: дата из будущего ts=%s, пропускаем фильтр", published_ts
+        )
+        return True
+
+    # FIX-4: защита от дат до выхода DayZ (декабрь 2013)
+    DAYZ_RELEASE_TS = 1386806400  # 2013-12-16 UTC
+    if published_ts < DAYZ_RELEASE_TS:
+        logger.debug(
+            "YouTube: дата до выхода DayZ ts=%s, видео невалидно", published_ts
+        )
+        return False
+
+    cutoff = now - (lookback_days * 86400)
     return published_ts >= cutoff
 
 
@@ -756,6 +777,11 @@ def _parse_invidious_item(item: dict) -> dict:
         except (ValueError, TypeError):
             likes = 0
 
+    # FIX-1: миллисекунды → секунды
+    published_raw = item.get("published", 0) or 0
+    if published_raw > 9_999_999_999:
+        published_raw = published_raw // 1000
+
     return {
         "video_id": item.get("videoId", ""),
         "title": (item.get("title") or "").strip(),
@@ -764,7 +790,7 @@ def _parse_invidious_item(item: dict) -> dict:
         "duration": duration,
         "views": views,
         "likes": likes,
-        "published": item.get("published", 0) or 0,
+        "published": published_raw,
         "description": (item.get("description") or "")[:1000],
         "thumbnail": item.get("videoThumbnails", [{}])[-1].get("url", "")
         if item.get("videoThumbnails") else "",
@@ -911,6 +937,11 @@ def _search_ytdlp_sync(
             url = entry.get("url") or f"https://www.youtube.com/watch?v={video_id}"
 
             if video_id and title:
+                # FIX-2: миллисекунды → секунды
+                ts_raw = entry.get("timestamp", 0) or 0
+                if ts_raw > 9_999_999_999:
+                    ts_raw = ts_raw // 1000
+
                 results.append({
                     "video_id": video_id,
                     "title": title,
@@ -919,7 +950,7 @@ def _search_ytdlp_sync(
                     "duration": int(duration),
                     "views": int(view_count),
                     "likes": int(like_count),
-                    "published": entry.get("timestamp", 0) or 0,
+                    "published": ts_raw,
                     "description": description,
                     "thumbnail": thumbnail,
                     "url": url,
@@ -1070,6 +1101,19 @@ def _filter_video(
             return "no_date"
         # RSS с published=0 — пропускаем (дата может быть в updated)
     elif not _is_within_lookback(published, lookback_days):
+        # FIX-3: debug-лог чтобы видеть реальные даты отсеянных видео
+        try:
+            readable = datetime.fromtimestamp(
+                published, tz=timezone.utc
+            ).strftime("%Y-%m-%d")
+        except Exception:
+            readable = str(published)
+        logger.debug(
+            "YouTube FILTER old: '%s' | published=%s | source=%s",
+            video.get("title", "")[:50],
+            readable,
+            video.get("source", "unknown"),
+        )
         return "old"
 
     # Релевантность DayZ
@@ -1233,8 +1277,8 @@ async def check_for_new_videos(
     if config is None:
         config = {}
 
-    min_views = int(config.get("youtube_min_views", 0))
-    min_likes = int(config.get("youtube_min_likes", 0))
+    min_views = int(config.get("youtube_min_views", 0))  # FIX-6: verified defaults = 0
+    min_likes = int(config.get("youtube_min_likes", 0))  # FIX-6: verified defaults = 0
     max_per_check = int(config.get("youtube_max_per_check", 10))
     max_results = int(config.get("youtube_max_results", 10))
     max_duration = int(config.get("youtube_max_duration", 0))
@@ -1291,16 +1335,19 @@ async def check_for_new_videos(
         combined_videos.append(v)
 
     # Счётчики ворнки фильтрации
-    funnel = {
+    funnel = {  # FIX-5: добавлена детализация old по источнику
         "total": len(combined_videos),
-        "dup": 0,        # Дубликаты (seen_video_ids)
-        "already": 0,    # Уже было в posted_ids
-        "live": 0,       # Стримы/трансляции (любые упоминания stream/стрим/live)
-        "long": 0,       # Длительность > 10 мин
-        "old": 0,        # Старше lookback_days
-        "irrelevant": 0, # Не релевантно DayZ
-        "views": 0,      # Мало просмотров/лайков
-        "no_date": 0,    # FIX: видео без даты
+        "dup": 0,
+        "already": 0,
+        "live": 0,
+        "long": 0,
+        "old": 0,
+        "old_rss": 0,
+        "old_invidious": 0,
+        "old_ytdlp": 0,
+        "irrelevant": 0,
+        "views": 0,
+        "no_date": 0,
     }
 
     for video in combined_videos:
@@ -1331,6 +1378,11 @@ async def check_for_new_videos(
         )
         if reject_reason:
             funnel[reject_reason] = funnel.get(reject_reason, 0) + 1
+            # FIX-5: детализация источника для "old"
+            if reject_reason == "old":
+                src = video.get("source", "unknown")
+                key = f"old_{src}"
+                funnel[key] = funnel.get(key, 0) + 1
             continue
 
         # Категория
@@ -1378,8 +1430,13 @@ async def check_for_new_videos(
         parts.append(f"стримы: {live}")
     if long:
         parts.append(f"длинные(>10мин): {long}")
-    if old:
-        parts.append(f"старые(>{lookback_days}д): {old}")
+    if old:  # FIX-5: детализация по источнику
+        parts.append(
+            f"старые(>{lookback_days}д): {old} "
+            f"[rss={funnel.get('old_rss',0)} "
+            f"inv={funnel.get('old_invidious',0)} "
+            f"ytdlp={funnel.get('old_ytdlp',0)}]"
+        )
     if irrelevant:
         parts.append(f"не-DayZ: {irrelevant}")
     if views_r:
@@ -1549,8 +1606,8 @@ async def run_youtube_monitor(
     db=None,
     ai_analyzer=None,
     ai_analyze: bool = True,
-    min_views: int = 0,
-    min_likes: int = 0,
+    min_views: int = 0,  # FIX-6: verified defaults = 0
+    min_likes: int = 0,  # FIX-6: verified defaults = 0
     check_interval_hours: int = 2,
     max_per_check: int = 10,
     max_duration: int = 0,
@@ -1713,5 +1770,13 @@ if __name__ == "__main__":
 # FIX-6:  удалены неиспользуемые импорты
 # FIX-7:  закрытие aiohttp сессии при завершении
 # FIX-8:  рабочие channel ID для немедленного теста
+#
+# CHANGELOG v3
+# FIX-1: миллисекунды → секунды в _parse_invidious_item
+# FIX-2: миллисекунды → секунды в _search_ytdlp_sync
+# FIX-3: debug-лог реальных дат для отсеянных видео
+# FIX-4: _is_within_lookback — защита от ms, будущего, до 2013
+# FIX-5: воронка детализирует old по источнику (rss/inv/ytdlp)
+# FIX-6: min_views/min_likes дефолт = 0 (верифицировано)
 # ═══════════════════════════════════════════════════════════════════════════════
 
