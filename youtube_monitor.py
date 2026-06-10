@@ -41,7 +41,7 @@ from logger import logger
 
 # Пороги длительности (секунды)
 _SHORTS_MAX_DURATION = 90    # Порог для "шортс" (YouTube Shorts)
-_LONG_VIDEO_MAX = 300         # > 5 минут — не берём
+_LONG_VIDEO_MAX = 600         # > 10 минут — не берём (DayZ гайды до 10 мин ок)
 
 # Пороги даты
 _DEFAULT_LOOKBACK_DAYS = 90   # По умолчанию ищем за 3 месяца
@@ -1254,6 +1254,19 @@ async def check_for_new_videos(
     seen_video_ids = set()
     processed_count = 0
 
+    # ─── Автоочистка posted_ids от старых записей ────────────────────────
+    # Удаляем записи старше lookback_days, чтобы не накапливать бесконечно
+    now_ts = time.time()
+    cutoff_ts = now_ts - (lookback_days * 86400)
+    stale_count = 0
+    for vid, info in list(posted_ids.items()):
+        entry_ts = info.get("timestamp", 0) or 0
+        if entry_ts > 0 and entry_ts < cutoff_ts:
+            del posted_ids[vid]
+            stale_count += 1
+    if stale_count:
+        logger.info("YouTube: очищено %d старых записей из posted_ids", stale_count)
+
     # ─── Стратегия 1: RSS каналов (параллельно) ─────────────────────────
     rss_start = time.time()
 
@@ -1586,10 +1599,6 @@ async def run_youtube_monitor(
         check_interval_hours, min_views, min_likes, max_per_check,
         lookback_days, download_shorts,
     )
-    logger.info(
-        "YouTube монитор: %d каналов RSS + %d поисковых запросов",
-        len(_YOUTUBE_CHANNELS), len(_SEARCH_QUERIES),
-    )
 
     while True:
         if shutdown_event and shutdown_event.is_set():
@@ -1607,10 +1616,6 @@ async def run_youtube_monitor(
             )
 
             elapsed = time.time() - start_time
-            logger.info(
-                "YouTube монитор: проверка за %.1fс → %d новых видео",
-                elapsed, len(new_videos),
-            )
 
             # Уведомления
             if new_videos and _notify:
