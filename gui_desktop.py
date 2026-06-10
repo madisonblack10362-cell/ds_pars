@@ -437,6 +437,7 @@ class DesktopGUI:
                 height=32, corner_radius=6,
             )
             entry.pack(side="left", padx=(8, 8), fill="x", expand=True)
+            self._bind_paste(entry)
             self._entries[key] = entry
 
             ctk.CTkLabel(row, text=hint, font=("Segoe UI", 9),
@@ -517,6 +518,7 @@ class DesktopGUI:
             placeholder_text="Название (необяз.)",
         )
         self._yt_name_entry.pack(side="left", padx=(0, 8))
+        self._bind_paste(self._yt_name_entry)
 
         ctk.CTkButton(
             add_row, text="+ Добавить",
@@ -597,71 +599,59 @@ class DesktopGUI:
             pass
 
     @staticmethod
+    def _get_inner(e):
+        """Возвращает внутренний tk.Entry из CTkEntry."""
+        return getattr(e, "_entry", e)
+
+    @staticmethod
     def _bind_paste(entry):
-        """Ctrl+V/A/C для CTkEntry — через WinAPI (ctypes) напрямую."""
-        import ctypes
-        from ctypes import wintypes
-
-        def _win_get_clipboard():
-            user32 = ctypes.windll.user32
-            kernel32 = ctypes.windll.kernel32
-            user32.OpenClipboard(0)
-            try:
-                h = user32.GetClipboardData(13)  # CF_UNICODETEXT
-                if not h:
-                    return ""
-                kernel32.GlobalLock.restype = wintypes.c_wchar_p
-                return kernel32.GlobalLock(h) or ""
-            finally:
-                user32.CloseClipboard()
-
-        def _win_set_clipboard(text):
-            user32 = ctypes.windll.user32
-            kernel32 = ctypes.windll.kernel32
-            user32.OpenClipboard(0)
-            try:
-                user32.EmptyClipboard()
-                buf = ctypes.create_unicode_buffer(text)
-                h = kernel32.GlobalAlloc(0x0042, len(buf) * 2)
-                p = kernel32.GlobalLock(h)
-                ctypes.memmove(p, buf, len(buf) * 2)
-                kernel32.GlobalUnlock(h)
-                user32.SetClipboardData(13, h)
-            finally:
-                user32.CloseClipboard()
+        """Ctrl+V/A/C/X для CTkEntry — через внутренний tk.Entry."""
+        def _inner():
+            return getattr(entry, "_entry", entry)
 
         def do_paste(event=None):
             try:
-                text = _win_get_clipboard()
-                if text:
-                    try:
-                        entry.delete("sel.first", "sel.last")
-                    except Exception:
-                        pass
-                    entry.insert("insert", text)
+                w = _inner()
+                w.delete("sel.first", "sel.last")
+                text = w.clipboard_get()
+                w.insert("insert", text)
             except Exception:
                 pass
+            return "break"
 
         def do_copy(event=None):
             try:
-                text = entry.selection_get()
-                _win_set_clipboard(text)
+                w = _inner()
+                text = w.selection_get()
+                w.clipboard_clear()
+                w.clipboard_append(text)
             except Exception:
                 pass
+            return "break"
 
         def do_cut(event=None):
             try:
-                text = entry.selection_get()
-                _win_set_clipboard(text)
-                entry.delete("sel.first", "sel.last")
+                w = _inner()
+                text = w.selection_get()
+                w.clipboard_clear()
+                w.clipboard_append(text)
+                w.delete("sel.first", "sel.last")
             except Exception:
                 pass
-
-        def do_selall(event=None):
-            entry.focus()
-            entry.select_range(0, "end")
             return "break"
 
+        def do_selall(event=None):
+            try:
+                w = _inner()
+                w.focus_set()
+                w.select_range(0, "end")
+            except Exception:
+                pass
+            return "break"
+
+        for seq in ("<Control-v>", "<Control-V>", "<Control-c>", "<Control-C>",
+                    "<Control-x>", "<Control-X>", "<Control-a>", "<Control-A>"):
+            entry.bind(seq, None)  # снимаем дефолтный биндинг
         entry.bind("<Control-v>", do_paste)
         entry.bind("<Control-V>", do_paste)
         entry.bind("<Control-c>", do_copy)
@@ -670,6 +660,16 @@ class DesktopGUI:
         entry.bind("<Control-X>", do_cut)
         entry.bind("<Control-a>", do_selall)
         entry.bind("<Control-A>", do_selall)
+        # Биндим и на внутренний виджет
+        inner = _inner()
+        inner.bind("<Control-v>", do_paste)
+        inner.bind("<Control-V>", do_paste)
+        inner.bind("<Control-c>", do_copy)
+        inner.bind("<Control-C>", do_copy)
+        inner.bind("<Control-x>", do_cut)
+        inner.bind("<Control-X>", do_cut)
+        inner.bind("<Control-a>", do_selall)
+        inner.bind("<Control-A>", do_selall)
 
     def _parse_youtube_channel_id(self, text: str) -> str:
         """Извлекает YouTube Channel ID из строки (ID напрямую, URL, @handle)."""
@@ -854,6 +854,10 @@ class DesktopGUI:
         )
         self._log_text.pack(side="left", fill="both", expand=True, padx=(4, 0), pady=4)
         self._log_text.bind("<Key>", self._block_typing)
+        self._log_text.bind("<Control-c>", self._copy_log_selection)
+        self._log_text.bind("<Control-C>", self._copy_log_selection)
+        self._log_text.bind("<Control-a>", self._select_all_logs)
+        self._log_text.bind("<Control-A>", self._select_all_logs)
 
         # Tags
         self._log_text.tag_configure("TIME", foreground=self.TEXT3)
@@ -869,6 +873,21 @@ class DesktopGUI:
 
     def _log_text_yview(self, *args):
         self._log_text.yview(*args)
+
+    def _copy_log_selection(self, event=None):
+        """Копирует выделенный текст из лога в буфер обмена."""
+        try:
+            text = self._log_text.selection_get()
+            self._log_text.clipboard_clear()
+            self._log_text.clipboard_append(text)
+        except Exception:
+            pass
+        return "break"
+
+    def _select_all_logs(self, event=None):
+        """Выделяет весь текст в логе."""
+        self._log_text.tag_add("sel", "1.0", "end")
+        return "break"
 
     def _block_typing(self, event):
         if event.keysym in ("Control_L", "Control_R", "Shift_L", "Shift_R",
