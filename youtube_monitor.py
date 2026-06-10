@@ -1223,10 +1223,10 @@ def _download_ytdlp_sync(
 
     ydl_opts = {
         "format": (
-            "best[filesize<50M]"
-            "/best[height<=720][filesize<50M]"
-            "/best[height<=480]"
-            "/worst"
+            "best[height<=720][ext=mp4]"
+            "/best[ext=mp4]"
+            "/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]"
+            "/best"
         ),
         "outtmpl": output_template,
         "max_filesize": max_filesize,
