@@ -1023,12 +1023,15 @@ async def _search_all_queries_parallel(
     Это значительно ускоряет поиск — все запросы идут одновременно.
     """
     # Определяем фильтр даты для Invidious
+    # Invidious поддерживает: hour, today, week, month, year, all
     if lookback_days <= 7:
         date_filter = "week"
     elif lookback_days <= 30:
         date_filter = "month"
+    elif lookback_days <= 365:
+        date_filter = "year"
     else:
-        date_filter = ""  # Invidious не умеет > month — используем все
+        date_filter = ""
 
     tasks = []
     for query, sort_by in _SEARCH_QUERIES:
