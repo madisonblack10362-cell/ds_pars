@@ -92,6 +92,10 @@ _DEFAULT_YOUTUBE_CHANNELS = [
     # Русскоязычные DayZ каналы (основной источник)
     {"id": "UCvQPcPcEzzMPTjTMzGCRN0g", "name": "DayZ Official"},
     {"id": "UCxMACMoQE1AJTKmjmCCdTsA", "name": "Bohemia Interactive"},
+    # Популярные русскоязычные DayZ-каналы
+    {"id": "UCdFrJ3cFV0sBcSkGyOz8o7Q", "name": "DayZ Россия"},
+    {"id": "UCnXzJG3RgDwRqbYQMq9LlgA", "name": "GIGA DayZ"},
+    {"id": "UCaOQfLYzm2Y8kGxNFbQkFRA", "name": "DayZ Twitch"},
 ]
 
 # Текущий рабочий список каналов (загружается из config или дефолтный)
@@ -1308,6 +1312,35 @@ async def download_short(
 #  Основная логика мониторинга
 # ═════════════════════════════════════════════════════════════════════════════
 
+async def _fetch_channels_from_web_panel(
+    web_panel_url: str,
+    web_panel_api_key: str = "",
+    timeout: float = 5.0,
+) -> list[dict]:
+    """Загружает список YouTube-каналов из веб-панели (API /api/youtube-channels)."""
+    if not web_panel_url:
+        return []
+    try:
+        import httpx
+        headers = {"Content-Type": "application/json"}
+        if web_panel_api_key:
+            headers["Authorization"] = f"Bearer {web_panel_api_key}"
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(
+                f"{web_panel_url}/api/youtube-channels",
+                headers=headers,
+            )
+            if response.status_code == 200:
+                data = response.json()
+                channels = data.get("channels", [])
+                if isinstance(channels, list) and channels:
+                    logger.info("YouTube: загружено %d каналов из веб-панели", len(channels))
+                    return channels
+    except Exception as e:
+        logger.debug("YouTube: не удалось загрузить каналы из веб-панели: %s", e)
+    return []
+
+
 async def check_for_new_videos(
     db=None,
     config: dict | None = None,
@@ -1322,10 +1355,11 @@ async def check_for_new_videos(
       2. Поисковые запросы через Invidious/yt-dlp
 
     Фильтры:
+      - Только русскоязычные видео (по умолчанию)
+      - Только Shorts/вертикальные <=90с (по умолчанию)
       - lookback_days (default 90 = 3 месяца)
       - min_views / min_likes
       - Релевантность DayZ
-      - Длительность ≤ 5 мин
     """
     if config is None:
         config = {}
@@ -1346,9 +1380,22 @@ async def check_for_new_videos(
     seen_video_ids = set()
     processed_count = 0
 
-    # ─── Загружаем каналы из конфига (ДО RSS-запроса!) ──────────────────
+    # ─── Загружаем каналы: config.json + веб-панель ─────────────────────
     channels = load_youtube_channels(config)
-    logger.info("YouTube: используется %d каналов для RSS", len(channels))
+
+    # Попробуем дополнительно загрузить каналы из веб-панели
+    web_channels = await _fetch_channels_from_web_panel(web_panel_url, web_panel_api_key)
+    if web_channels:
+        # Сливаем: берём уникальные каналы из веб-панели
+        existing_ids = {ch.get("id", "") for ch in channels}
+        for wc in web_channels:
+            wc_id = wc.get("id", "") or wc.get("channel_id", "")
+            if wc_id and wc_id not in existing_ids:
+                channels.append({"id": wc_id, "name": wc.get("name", "")})
+                existing_ids.add(wc_id)
+        logger.info("YouTube: всего %d каналов (config + веб-панель)", len(channels))
+    else:
+        logger.info("YouTube: используется %d каналов для RSS", len(channels))
 
     # ─── Автоочистка posted_ids от старых записей ────────────────────────
     # Удаляем записи старше lookback_days, чтобы не накапливать бесконечно
