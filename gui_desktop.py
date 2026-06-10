@@ -492,42 +492,48 @@ class DesktopGUI:
             print(f"[GUI] Ошибка загрузки конфига: {e}")
             return
 
-        simple_keys = [
-            "discord_token", "telegram_bot_token", "telegram_channel_id",
-            "telegram_news_channel_id",
-            "openai_api_key", "openai_base_url", "openai_model",
-            "check_interval_minutes", "reddit_check_interval_minutes", "reddit_min_score",
-            "daily_summary_hour", "daily_summary_minute",
-            "min_message_length", "similarity_threshold",
-            "max_retries", "retry_delay_seconds", "request_timeout_seconds",
-            "max_images_per_post",
-            "web_panel_url", "web_panel_api_key",
-            "workshop_interval_minutes", "workshop_min_subscriptions", "steam_api_key",
-            "patchnotes_interval_minutes",
-            "youtube_interval_hours", "youtube_min_views", "youtube_min_likes", "youtube_max_per_check",
-        ]
-        for key in simple_keys:
-            entry = self._entries.get(key)
-            if entry and key in cfg:
-                entry.delete(0, "end")
-                entry.insert(0, str(cfg[key]))
+        try:
+            simple_keys = [
+                "discord_token", "telegram_bot_token", "telegram_channel_id",
+                "telegram_news_channel_id",
+                "openai_api_key", "openai_base_url", "openai_model",
+                "check_interval_minutes", "reddit_check_interval_minutes", "reddit_min_score",
+                "daily_summary_hour", "daily_summary_minute",
+                "min_message_length", "similarity_threshold",
+                "max_retries", "retry_delay_seconds", "request_timeout_seconds",
+                "max_images_per_post",
+                "web_panel_url", "web_panel_api_key",
+                "workshop_interval_minutes", "workshop_min_subscriptions", "steam_api_key",
+                "patchnotes_interval_minutes",
+                "youtube_interval_hours", "youtube_min_views", "youtube_min_likes", "youtube_max_per_check",
+            ]
+            for key in simple_keys:
+                entry = self._entries.get(key)
+                if entry and key in cfg:
+                    entry.delete(0, "end")
+                    entry.insert(0, str(cfg[key]))
 
-        sources = cfg.get("sources", {})
-        discord = sources.get("discord", {})
-        for gui_key, cfg_key in [("sources_discord_guild_id", "guild_id"),
-                                  ("sources_discord_channel_id", "channel_id")]:
-            entry = self._entries.get(gui_key)
-            if entry:
-                entry.delete(0, "end")
-                entry.insert(0, str(discord.get(cfg_key, "")))
+            sources = cfg.get("sources", {})
+            discord = sources.get("discord", {})
+            for gui_key, cfg_key in [("sources_discord_guild_id", "guild_id"),
+                                      ("sources_discord_channel_id", "channel_id")]:
+                entry = self._entries.get(gui_key)
+                if entry:
+                    entry.delete(0, "end")
+                    entry.insert(0, str(discord.get(cfg_key, "")))
 
-        for key, var in self._toggles.items():
-            if key in ("workshop_enabled", "patchnotes_enabled", "moderation_notifications",
-                        "youtube_enabled", "youtube_download_shorts"):
-                default = True
-            else:
-                default = False
-            var.set(cfg.get(key, default))
+            for key, var in self._toggles.items():
+                if key in ("workshop_enabled", "patchnotes_enabled", "moderation_notifications",
+                            "youtube_enabled", "youtube_download_shorts"):
+                    default = True
+                else:
+                    default = False
+                var.set(cfg.get(key, default))
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"[GUI] Ошибка заполнения полей: {e}")
 
     def _save_config(self):
         try:
