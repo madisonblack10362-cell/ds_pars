@@ -562,6 +562,15 @@ class DesktopGUI:
 
     def _add_youtube_channel(self):
         """Добавляет канал в список и сохраняет в config."""
+        try:
+            return self._add_youtube_channel_inner()
+        except Exception as e:
+            self.append_log("ERROR", f"YouTube: ошибка добавления: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _add_youtube_channel_inner(self):
+        """Добавляет канал в список и сохраняет в config."""
         # Читаем текст: сначала из CTkEntry, fallback на внутренний _entry
         raw = self._yt_channel_entry.get().strip()
         if not raw:
@@ -606,8 +615,8 @@ class DesktopGUI:
         try:
             with open(self.config_path, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, indent=2, ensure_ascii=False)
-            logger.info("YouTube: добавлен канал %s (%s)", channel_id, name or "без имени")
-            self.append_log("INFO", f"YouTube: добавлен канал {name or channel_id}")
+            logger.info("YouTube: добавлен канал %s", channel_id)
+            self.append_log("INFO", f"YouTube: добавлен канал {channel_id}")
         except Exception as e:
             logger.error("Ошибка сохранения канала: %s", e)
             self.append_log("ERROR", f"Ошибка сохранения: {e}")
@@ -615,7 +624,6 @@ class DesktopGUI:
 
         # Очищаем оба виджета
         self._yt_channel_entry.delete(0, "end")
-        self._yt_name_entry.delete(0, "end")
         try:
             getattr(self._yt_channel_entry, "_entry", None).delete(0, "end")
         except Exception:
