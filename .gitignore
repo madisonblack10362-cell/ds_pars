@@ -37,3 +37,4 @@ logs/
 # Monitor state files
 workshop_state.json
 patchnotes_state.json
+youtube_state.json
