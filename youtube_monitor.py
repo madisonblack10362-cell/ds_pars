@@ -1302,6 +1302,7 @@ def _download_ytdlp_sync(
     output_template: str,
     cookies_file: str = "",
     max_filesize: int = 50 * 1024 * 1024,
+    _retry_with_fallback: bool = False,
 ) -> str | None:
     """Скачивает видео через yt-dlp. Только через cookies.txt — браузерный экспорт не работает."""
     import logging as _stdlib_logging
@@ -1314,19 +1315,28 @@ def _download_ytdlp_sync(
         logger.error("YouTube/download: yt-dlp не установлен")
         return None
 
-    ydl_opts = {
-        "format": (
+    # FIX-ffmpeg-crash: упрощённый формат без bestvideo+bestaudio,
+    # чтобы не требовать ffmpeg для мержа потоков (ffmpeg segfault 3199971767)
+    if _retry_with_fallback:
+        # Максимально простой фоллбэк — любой формат, любой контейнер
+        format_str = "best"
+    else:
+        format_str = (
             "best[height<=720][ext=mp4]"
             "/best[ext=mp4]"
-            "/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]"
+            "/best[height<=720]"
             "/best"
-        ),
+        )
+
+    ydl_opts = {
+        "format": format_str,
         "outtmpl": output_template,
         "max_filesize": max_filesize,
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
         "nocheckcertificate": True,
+        "merge_output_format": "mp4",
         "extractor_args": {"youtube": {"player_client": ["ios", "web"]}},
         "http_headers": {
             "User-Agent": (
@@ -1353,7 +1363,10 @@ def _download_ytdlp_sync(
                     if os.path.getsize(result_path) > 0:
                         return result_path
                     else:
-                        os.remove(result_path)
+                        try:
+                            os.remove(result_path)
+                        except OSError:
+                            pass
                         logger.debug("YouTube/download: скачанный файл пустой, удалён")
                         return None
             video_id = info.get("id", "unknown")
@@ -1364,6 +1377,16 @@ def _download_ytdlp_sync(
         err_str = str(e)
         if "Sign in to confirm" in err_str or "bot" in err_str.lower():
             logger.warning("YouTube/download: YouTube требует cookies для '%s'. Положи cookies.txt рядом с ботом.", url)
+        elif "ffmpeg" in err_str.lower() or "exited with code" in err_str.lower():
+            # FIX-ffmpeg-crash: при краше ffmpeg пробуем ещё раз с максимально простым форматом
+            logger.warning("YouTube/download: ffmpeg ошибка (%s), пробуем простой формат: %s", err_str[:120], url)
+            if not _retry_with_fallback:
+                return _download_ytdlp_sync(
+                    url, output_template, cookies_file, max_filesize,
+                    _retry_with_fallback=True,
+                )
+            else:
+                logger.debug("YouTube/download: фоллбэк тоже упал: %s", err_str[:100])
         else:
             logger.debug("YouTube/download: yt-dlp ошибка: %s", e)
 
