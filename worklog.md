@@ -89,3 +89,32 @@ Stage Summary:
 - Full flow now: find short → enrich metadata → download video → AI post → save to local moderation (with file path) → send to web panel (with sourceId=youtube, externalId=yt_xxx) → user approves in panel → scheduled → bot picks up from publish queue → detects YouTube item → finds local video file → publishes as VIDEO in Telegram
 - Three files modified: bot.py, youtube_monitor.py, dayz-monitor-web/src/app/api/publish-queue/route.ts
 
+
+---
+Task ID: 2
+Agent: main
+Task: Fix schedule page date display after midnight + source type detection across all cards
+
+Work Log:
+- Fixed schedule page midnight bug: todayStr was computed once on mount (useMemo with [] deps), never updated after midnight
+- Added live clock state (now) that updates every 30 seconds via setInterval
+- todayStr and weekDays now depend on [now], so they recalculate after midnight
+- fetchSchedule useEffect now also depends on [now], so API refetches periodically and after midnight
+- Created /src/lib/source-utils.ts with resolveSourceType() utility
+- resolveSourceType priority: DB sourceType → links pattern detection → content keyword detection → fallback
+- Link patterns: youtube.com/be→youtube, discord.com/gg→discord, steamcommunity/workshop→workshop, reddit→reddit, vk→vk, t.me→telegram
+- Applied resolveSourceType in 3 API routes: /api/news, /api/schedule, /api/publish-queue
+- Added 'unknown' entry to SourceTypeBadge config for proper styling
+
+Files modified:
+- dayz-monitor-web/src/app/dashboard/schedule/page.tsx (midnight fix)
+- dayz-monitor-web/src/lib/source-utils.ts (NEW - source type detection utility)
+- dayz-monitor-web/src/app/api/news/route.ts (resolveSourceType)
+- dayz-monitor-web/src/app/api/schedule/route.ts (resolveSourceType)
+- dayz-monitor-web/src/app/api/publish-queue/route.ts (resolveSourceType)
+- dayz-monitor-web/src/components/source-type-badge.tsx (unknown type config)
+
+Stage Summary:
+- Schedule page now properly updates "Сегодня"/"Завтра" labels after midnight (30s polling)
+- Source type is now auto-detected from links/content when DB value is empty/unknown
+- Single utility function used across all API endpoints — no duplication
