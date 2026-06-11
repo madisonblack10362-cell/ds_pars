@@ -339,12 +339,10 @@ async def _fetch_channel_videos(
 
         ytdlp_cmd = shutil.which("yt-dlp")
         if ytdlp_cmd:
-            cmd = [ytdlp_cmd, "--flat-playlist", "--dump-json", "--quiet", "--no-warnings",
-                   "--extractor-args", "youtube:player_client=ios,web", url]
+            cmd = [ytdlp_cmd, "-4", "--no-config", "--flat-playlist", "--dump-json", "--quiet", "--no-warnings", url]
         else:
-            cmd = [sys.executable, "-m", "yt_dlp", "--flat-playlist", "--dump-json",
-                   "--quiet", "--no-warnings",
-                   "--extractor-args", "youtube:player_client=ios,web", url]
+            cmd = [sys.executable, "-m", "yt_dlp", "-4", "--no-config", "--flat-playlist", "--dump-json",
+                   "--quiet", "--no-warnings", url]
 
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
@@ -437,25 +435,26 @@ def _enrich_video_metadata_sync(video: dict) -> dict:
     ytdlp_cmd = shutil.which("yt-dlp")
     base = [ytdlp_cmd] if ytdlp_cmd else [sys.executable, "-m", "yt_dlp"]
 
-    # Пробуем несколько вариантов — YouTube часто блокирует или даёт ограниченные форматы
+    # android_vr — не нужен PO token, cookies, логин. Самый надёжный.
+    # -4 — IPv4 (YouTube агрессивнее блокирует IPv6)
     attempts = []
 
-    # 1) iOS клиент (обходит бот-детект, но может не иметь всех форматов)
+    # 1) android_vr (лучший для без-cookie)
     attempts.append(base + [
-        "--no-config", "--dump-json", "--no-download", "--quiet", "--no-warnings",
-        "--extractor-args", "youtube:player_client=ios", url,
+        "-4", "--no-config", "--dump-json", "--no-download", "--quiet", "--no-warnings",
+        "--extractor-args", "youtube:player_client=android_vr", url,
     ])
 
-    # 2) Web клиент
+    # 2) ios (без PO token, но иногда format issues)
     attempts.append(base + [
-        "--no-config", "--dump-json", "--no-download", "--quiet", "--no-warnings",
-        "--extractor-args", "youtube:player_client=web", url,
+        "-4", "--no-config", "--dump-json", "--no-download", "--quiet", "--no-warnings",
+        "--extractor-args", "youtube:player_client=ios", url,
     ])
 
     # 3) С cookies если есть
     if os.path.isfile(cookies_path):
         attempts.append(base + [
-            "--no-config", "--dump-json", "--no-download", "--quiet", "--no-warnings",
+            "-4", "--no-config", "--dump-json", "--no-download", "--quiet", "--no-warnings",
             "--cookies", cookies_path, url,
         ])
 
@@ -524,8 +523,7 @@ def _fetch_channel_best_short_sync(
 
     # Шаг 1: flat-playlist — быстрый список
     cmd = base_cmd + [
-        "--no-config", "--flat-playlist", "--dump-json", "--quiet", "--no-warnings",
-        "--extractor-args", "youtube:player_client=ios,web", url
+        "-4", "--no-config", "--flat-playlist", "--dump-json", "--quiet", "--no-warnings", url
     ]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
@@ -640,6 +638,7 @@ def _download_ytdlp_sync(
 
     cmd = [sys.executable, "-m", "yt_dlp"]
     cmd += [
+        "-4", "--no-config",
         "-f", format_str,
         "-o", output_template,
         "--max-filesize", str(max_filesize),
@@ -647,11 +646,7 @@ def _download_ytdlp_sync(
         "--no-playlist",
         "--no-check-certificates",
         "--merge-output-format", "mp4",
-        "--extractor-args", "youtube:player_client=ios,web",
-        "--user-agent",
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
-        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
-        "Mobile/15E148 Safari/604.1",
+        "--extractor-args", "youtube:player_client=android_vr",
     ]
     if cookies_file and os.path.isfile(cookies_file):
         cmd += ["--cookies", cookies_file]
