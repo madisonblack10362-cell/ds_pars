@@ -438,6 +438,59 @@ async def _fetch_channel_videos(
     return videos, channel_id, channel_name
 
 
+async def _enrich_video_metadata(video: dict) -> dict:
+    """
+    Получает полные метаданные для одного видео (description, views, likes, duration).
+    Используется после extract_flat который не даёт эти данные.
+    """
+    url = video.get("url", "")
+    if not url:
+        return video
+
+    loop = asyncio.get_running_loop()
+
+    def _fetch_one():
+        import logging as _sl
+        _sl.getLogger("yt-dlp").setLevel(_sl.CRITICAL)
+        _sl.getLogger("yt_dlp").setLevel(_sl.CRITICAL)
+
+        try:
+            import yt_dlp
+        except ImportError:
+            return video
+
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "extractor_args": {"youtube": {"player_client": ["ios", "web"]}},
+        }
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                if not info:
+                    return video
+                video["description"] = (info.get("description") or "")[:2000]
+                video["views"] = info.get("view_count") or video.get("views", 0) or 0
+                video["likes"] = info.get("like_count") or video.get("likes", 0) or 0
+                dur = info.get("duration") or video.get("duration", 0) or 0
+                video["duration"] = int(dur)
+                thumb = info.get("thumbnail") or ""
+                if thumb:
+                    video["thumbnail"] = thumb
+                logger.info(
+                    "YouTube: метаданные %s — %s views, %s likes, %s",
+                    video.get("video_id", "?")[:12],
+                    _format_views(video["views"]), _format_views(video["likes"]),
+                    _format_duration(video["duration"]),
+                )
+        except Exception as e:
+            logger.warning("YouTube: не удалось получить метаданные для %s: %s", url, e)
+
+        return video
+
+    return await loop.run_in_executor(_thread_pool, _fetch_one)
+
+
 async def _fetch_channel_best_short(
     channel_id: str,
     known_ids: set[str],
@@ -450,23 +503,43 @@ async def _fetch_channel_best_short(
     if not videos:
         return None
 
-    # Фильтр: только шортсы + не стримы + не в known_ids
-    shorts = []
+    # Фильтр: не стримы + не в known_ids
+    candidates = []
     for v in videos:
         vid = v.get("video_id", "")
-        dur = v.get("duration", 0) or 0
         if not vid or vid in known_ids:
             continue
-        if dur > _SHORTS_MAX_DURATION:
-            continue
         if v.get("is_live", False):
+            continue
+        candidates.append(v)
+
+    if not candidates:
+        logger.info(
+            "YouTube: на канале нет новых видео (видео: %d, всё в known_ids)",
+            len(videos),
+        )
+        return None
+
+    # Берём первые 5 кандидатов (самые свежие) и обогащаем метаданными
+    # чтобы узнать duration, views, likes, description
+    top_candidates = candidates[:5]
+    enriched = []
+    for candidate in top_candidates:
+        enriched_video = await _enrich_video_metadata(candidate)
+        enriched.append(enriched_video)
+
+    # Фильтруем шортсы по длительности
+    shorts = []
+    for v in enriched:
+        dur = v.get("duration", 0) or 0
+        if dur > _SHORTS_MAX_DURATION:
             continue
         shorts.append(v)
 
     if not shorts:
         logger.info(
-            "YouTube: на канале нет новых шортсов (видео: %d, всё в known_ids или >90с)",
-            len(videos),
+            "YouTube: на канале нет новых шортсов (проверено %d, все >90с)",
+            len(enriched),
         )
         return None
 
@@ -680,7 +753,7 @@ async def check_for_popular_shorts(
                         logger.info("YouTube AI: '%s' -> %s (%s)",
                                     best.get("title", "")[:40], category, priority)
                 except Exception as e:
-                    logger.debug("YouTube: AI недоступен: %s", e)
+                    logger.warning("YouTube: AI ошибка: %s", e)
 
             # Фоллбэк если AI не сработал
             if not ai_post:
@@ -726,7 +799,7 @@ async def check_for_popular_shorts(
 
             # Уведомление в Telegram о новом видео на модерации
             try:
-                notify_chat_id = config.get("telegram_notify_chat_id", "")
+                notify_chat_id = config.get("telegram_notify_chat_id", "") or config.get("telegram_channel_id", "")
                 bot_token = config.get("telegram_bot_token", "")
                 if notify_chat_id and bot_token:
                     import httpx
