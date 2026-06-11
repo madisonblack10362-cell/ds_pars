@@ -580,7 +580,7 @@ def _fetch_channel_best_short_sync(
 
     # Шаг 2: обогащаем метаданные первых 5 кандидатов (чистый sync!)
     shorts = []
-    for candidate in candidates[:5]:
+    for candidate in candidates[:1]:
         enriched = _enrich_video_metadata_sync(candidate)
         dur = enriched.get("duration", 0) or 0
         if dur <= _SHORTS_MAX_DURATION:
