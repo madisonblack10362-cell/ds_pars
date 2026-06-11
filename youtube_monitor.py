@@ -364,14 +364,8 @@ async def _fetch_channel_videos(
         channel_name = ""
 
         try:
-            import io
-            _old_stderr = sys.stderr
-            sys.stderr = io.StringIO()
-            try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(url, download=False)
-            finally:
-                sys.stderr = _old_stderr
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
             if not info:
                 return [], "", ""
 
@@ -447,42 +441,39 @@ async def _fetch_channel_videos(
 
 async def _enrich_video_metadata(video: dict) -> dict:
     """
-    Получает полные метаданные для одного видео (description, views, likes, duration).
-    Используется после extract_flat который не даёт эти данные.
+    Получает полные метаданные для одного видео через yt-dlp CLI --dump-json.
+    subprocess автоматически изолирует stderr.
     """
     url = video.get("url", "")
+    video_id = video.get("video_id", "")
     if not url:
         return video
 
     loop = asyncio.get_running_loop()
 
     def _fetch_one():
-        import logging as _sl
-        _sl.getLogger("yt-dlp").setLevel(_sl.CRITICAL)
-        _sl.getLogger("yt_dlp").setLevel(_sl.CRITICAL)
-
+        import subprocess
+        cmd = [
+            sys.executable, "-m", "yt_dlp",
+            "--dump-json",
+            "--no-download",
+            "--quiet",
+            "--no-warnings",
+            "--extractor-args", "youtube:player_client=ios,web",
+            url,
+        ]
         try:
-            import yt_dlp
-        except ImportError:
-            return video
-
-        ydl_opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "skip_download": True,
-            "extractor_args": {"youtube": {"player_client": ["ios", "web"]}},
-        }
-        try:
-            import io
-            _old_stderr = sys.stderr
-            sys.stderr = io.StringIO()
-            try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(url, download=False)
-            finally:
-                sys.stderr = _old_stderr
-            if not info:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                logger.warning("YouTube: yt-dlp не смог получить метаданные %s", video_id[:12])
                 return video
+
+            info = json.loads(result.stdout)
             video["description"] = (info.get("description") or "")[:2000]
             video["views"] = info.get("view_count") or video.get("views", 0) or 0
             video["likes"] = info.get("like_count") or video.get("likes", 0) or 0
@@ -493,12 +484,16 @@ async def _enrich_video_metadata(video: dict) -> dict:
                 video["thumbnail"] = thumb
             logger.info(
                 "YouTube: метаданные %s — %s views, %s likes, %s",
-                video.get("video_id", "?")[:12],
+                video_id[:12],
                 _format_views(video["views"]), _format_views(video["likes"]),
                 _format_duration(video["duration"]),
             )
+        except subprocess.TimeoutExpired:
+            logger.warning("YouTube: таймаут метаданных %s", video_id[:12])
+        except json.JSONDecodeError:
+            logger.warning("YouTube: не удалось распарсить JSON метаданных %s", video_id[:12])
         except Exception as e:
-            logger.warning("YouTube: не удалось получить метаданные для %s: %s", url, e)
+            logger.warning("YouTube: ошибка метаданных %s: %s", video_id[:12], e)
 
         return video
 
@@ -620,14 +615,8 @@ def _download_ytdlp_sync(
         ydl_opts["cookiefile"] = cookies_file
 
     try:
-        import io
-        _old_stderr = sys.stderr
-        sys.stderr = io.StringIO()
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-        finally:
-            sys.stderr = _old_stderr
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
 
         if info:
             filepath = info.get("requested_downloads", [{}])
