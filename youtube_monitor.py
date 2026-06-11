@@ -500,6 +500,7 @@ async def _enrich_video_metadata(video: dict) -> dict:
 def _fetch_channel_best_short_sync(
     channel_id: str,
     known_ids: set[str],
+    max_candidates: int = 1,
 ) -> dict | None:
     """
     Полностью синхронная версия — без asyncio внутри.
@@ -578,9 +579,9 @@ def _fetch_channel_best_short_sync(
         logger.info("YouTube: на канале нет новых видео (канал: %s)", channel_id)
         return None
 
-    # Шаг 2: обогащаем метаданные первых 5 кандидатов (чистый sync!)
+    # Шаг 2: обогащаем метаданными кандидатов (чистый sync!)
     shorts = []
-    for candidate in candidates[:1]:
+    for candidate in candidates[:max_candidates]:
         enriched = _enrich_video_metadata_sync(candidate)
         dur = enriched.get("duration", 0) or 0
         if dur <= _SHORTS_MAX_DURATION:
@@ -601,6 +602,7 @@ def _fetch_channel_best_short_sync(
 async def _fetch_channel_best_short(
     channel_id: str,
     known_ids: set[str],
+    max_candidates: int = 1,
 ) -> dict | None:
     """Async-обёртка над sync-версией."""
     loop = asyncio.get_running_loop()
@@ -609,6 +611,7 @@ async def _fetch_channel_best_short(
         _fetch_channel_best_short_sync,
         channel_id,
         known_ids,
+        max_candidates,
     )
 
 
@@ -761,6 +764,8 @@ async def check_for_popular_shorts(
     moderation_ids = {item.get("video_id") for item in moderation_queue if item.get("video_id")}
     known_ids = set(posted_ids.keys()) | moderation_ids
 
+    max_candidates = config.get("youtube_max_candidates", 1)
+
     new_videos = []
     start = time.time()
 
@@ -771,7 +776,7 @@ async def check_for_popular_shorts(
             continue
 
         try:
-            best = await _fetch_channel_best_short(ch_id, known_ids)
+            best = await _fetch_channel_best_short(ch_id, known_ids, max_candidates)
             if not best:
                 continue
 
