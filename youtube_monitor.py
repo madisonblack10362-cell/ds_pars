@@ -270,6 +270,7 @@ def _add_to_moderation(
     ai_summary: str,
     category: str,
     priority: str,
+    downloaded_file: str = "",
 ) -> None:
     """Добавляет видео в очередь модерации со статусом 'pending'."""
     queue = _load_moderation_queue()
@@ -290,6 +291,7 @@ def _add_to_moderation(
         "status": "pending",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "moderated_at": None,
+        "downloaded_file": downloaded_file,
         "video_data": {
             "video_id": video.get("video_id", ""),
             "title": video.get("title", ""),
@@ -831,8 +833,13 @@ async def check_for_popular_shorts(
                 ai_post = format_video_message(best, category)
                 ai_summary = best.get("title", "")
 
-            # Добавляем в локальную очередь модерации (fallback)
-            _add_to_moderation(best, ai_post, ai_summary, category, priority)
+            # Скачиваем видео СРАЗУ (до модерации)
+            downloads_dir = config.get("images_dir", "downloads")
+            downloaded_file = await download_short(best, downloads_dir=downloads_dir)
+
+            # Добавляем в локальную очередь модерации (с путём к файлу)
+            _add_to_moderation(best, ai_post, ai_summary, category, priority,
+                              downloaded_file=downloaded_file or "")
 
             # Отправляем на веб-панель для модерации
             web_panel_url = config.get("web_panel_url", "")
@@ -868,7 +875,7 @@ async def check_for_popular_shorts(
                 except Exception as web_err:
                     logger.error("YouTube: ошибка отправки на веб-панель: %s", web_err)
 
-            # Уведомление в Telegram о новом видео на модерации
+            # Уведомление в Telegram — с видео прикреплённым
             try:
                 notify_chat_id = config.get("telegram_notify_chat_id", "") or config.get("telegram_channel_id", "")
                 bot_token = config.get("telegram_bot_token", "")
@@ -887,19 +894,31 @@ async def check_for_popular_shorts(
                         f"{'━' * 20}\n"
                         f"<b>{_escape_html(best.get('title', '')[:80])}</b>\n"
                         f"📺 {_escape_html(ch_name)}\n"
-                        f"⏱ {_format_duration(dur)}  👁 {_format_views(views)}\n\n"
-                        f"🔗 <a href=\"{best.get('url', '')}\">Открыть видео</a>"
+                        f"⏱ {_format_duration(dur)}  👁 {_format_views(views)}"
                     )
-                    async with httpx.AsyncClient(timeout=10) as client:
-                        await client.post(
-                            f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                            json={
-                                "chat_id": int(notify_chat_id),
-                                "text": text,
-                                "parse_mode": "HTML",
-                                "disable_web_page_preview": True,
-                            },
-                        )
+                    async with httpx.AsyncClient(timeout=30) as client:
+                        if downloaded_file and os.path.isfile(downloaded_file):
+                            with open(downloaded_file, "rb") as vf:
+                                await client.post(
+                                    f"https://api.telegram.org/bot{bot_token}/sendVideo",
+                                    data={
+                                        "chat_id": int(notify_chat_id),
+                                        "caption": text,
+                                        "parse_mode": "HTML",
+                                        "supports_streaming": True,
+                                    },
+                                    files={"video": vf},
+                                )
+                        else:
+                            await client.post(
+                                f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                                json={
+                                    "chat_id": int(notify_chat_id),
+                                    "text": text + "\n\n⚠️ Видео не скачалось",
+                                    "parse_mode": "HTML",
+                                    "disable_web_page_preview": True,
+                                },
+                            )
             except Exception as notify_err:
                 logger.debug("YouTube: не удалось отправить уведомление: %s", notify_err)
 
@@ -953,11 +972,15 @@ async def _process_approved_videos(config: dict, publisher=None) -> None:
         video_data = item.get("video_data", {})
         ai_post = item.get("ai_post", "")
 
-        logger.info("YouTube: обрабатываю одобрение для %s — скачиваю...", video_id)
-
-        # Скачивание
-        downloads_dir = config.get("images_dir", "downloads")
-        filepath = await download_short(video_data, downloads_dir=downloads_dir)
+        # Проверяем — видео уже скачано?
+        dl = item.get("downloaded_file", "")
+        if dl and os.path.isfile(dl):
+            filepath = dl
+            logger.info("YouTube: использую уже скачанный файл %s: %s", video_id, filepath)
+        else:
+            logger.info("YouTube: обрабатываю одобрение для %s — скачиваю...", video_id)
+            downloads_dir = config.get("images_dir", "downloads")
+            filepath = await download_short(video_data, downloads_dir=downloads_dir)
 
         if filepath and publisher and ai_post:
             # Публикация с видео
