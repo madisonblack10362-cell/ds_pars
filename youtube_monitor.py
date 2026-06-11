@@ -312,21 +312,6 @@ def _add_to_moderation(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  yt-dlp: подавление stderr
-# ═════════════════════════════════════════════════════════════════════════════
-
-class _SuppressYtdlpStderr:
-    """Контекст-менеджер: подавляет stderr на время вызова yt-dlp."""
-    def __enter__(self):
-        self._old = sys.stderr
-        sys.stderr = open(os.devnull, 'w')
-        return self
-    def __exit__(self, *args):
-        sys.stderr.close()
-        sys.stderr = self._old
-
-
-# ═════════════════════════════════════════════════════════════════════════════
 #  Получение видео через yt-dlp (напрямую, без Invidious)
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -379,9 +364,14 @@ async def _fetch_channel_videos(
         channel_name = ""
 
         try:
-            with _SuppressYtdlpStderr():
+            import io
+            _old_stderr = sys.stderr
+            sys.stderr = io.StringIO()
+            try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
+            finally:
+                sys.stderr = _old_stderr
             if not info:
                 return [], "", ""
 
@@ -480,13 +470,17 @@ async def _enrich_video_metadata(video: dict) -> dict:
             "quiet": True,
             "no_warnings": True,
             "skip_download": True,
-            "format": "best",
             "extractor_args": {"youtube": {"player_client": ["ios", "web"]}},
         }
         try:
-            with _SuppressYtdlpStderr():
+            import io
+            _old_stderr = sys.stderr
+            sys.stderr = io.StringIO()
+            try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
+            finally:
+                sys.stderr = _old_stderr
             if not info:
                 return video
             video["description"] = (info.get("description") or "")[:2000]
@@ -626,9 +620,14 @@ def _download_ytdlp_sync(
         ydl_opts["cookiefile"] = cookies_file
 
     try:
-        with _SuppressYtdlpStderr():
+        import io
+        _old_stderr = sys.stderr
+        sys.stderr = io.StringIO()
+        try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
+        finally:
+            sys.stderr = _old_stderr
 
         if info:
             filepath = info.get("requested_downloads", [{}])
