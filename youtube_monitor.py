@@ -474,56 +474,98 @@ async def _enrich_video_metadata(video: dict) -> dict:
     return await loop.run_in_executor(_thread_pool, _enrich_video_metadata_sync, video)
 
 
-async def _fetch_channel_best_short(
+def _fetch_channel_best_short_sync(
     channel_id: str,
     known_ids: set[str],
 ) -> dict | None:
     """
-    Находит самый популярный шортс с канала, которого ещё нет в known_ids.
-    Возвращает видео dict или None.
+    Полностью синхронная версия — без asyncio внутри.
+    Вызывается из run_in_executor.
     """
-    videos, _, _ = await _fetch_channel_videos(channel_id, max_videos=30)
-    if not videos:
+    import subprocess
+    import shutil
+
+    # Строим URL канала
+    if "youtube.com" in channel_id:
+        url = channel_id if "/videos" in channel_id else channel_id.rstrip("/") + "/videos"
+    elif channel_id.startswith("@"):
+        url = f"https://www.youtube.com/{channel_id}/videos"
+    elif channel_id.startswith("UC"):
+        url = f"https://www.youtube.com/channel/{channel_id}/videos"
+    else:
+        url = f"https://www.youtube.com/{channel_id}/videos"
+
+    ytdlp_cmd = shutil.which("yt-dlp")
+    base_cmd = [ytdlp_cmd] if ytdlp_cmd else [sys.executable, "-m", "yt_dlp"]
+
+    # Шаг 1: flat-playlist — быстрый список
+    cmd = base_cmd + [
+        "--flat-playlist", "--dump-json", "--quiet", "--no-warnings",
+        "--extractor-args", "youtube:player_client=ios,web", url
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        logger.warning("YouTube/ytdlp: таймаут списка видео для %s", channel_id)
+        return None
+    except Exception as e:
+        logger.error("YouTube/ytdlp: %s -> %s", channel_id, e)
         return None
 
-    # Фильтр: не стримы + не в known_ids
+    if result.returncode != 0 or not result.stdout.strip():
+        logger.warning("YouTube/ytdlp: %s — видео не получены", channel_id)
+        return None
+
+    # Парсим список
     candidates = []
-    for v in videos:
-        vid = v.get("video_id", "")
+    channel_name = ""
+    ch_id_from_feed = ""
+    for line in result.stdout.strip().split("\n")[:30]:
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not channel_name:
+            channel_name = (entry.get("uploader") or entry.get("channel", "")).strip()
+        if not ch_id_from_feed:
+            ch_id_from_feed = entry.get("channel_id", "") or ""
+        vid = entry.get("id", "")
         if not vid or vid in known_ids:
             continue
-        if v.get("is_live", False):
+        if entry.get("live_status") == "is_live":
             continue
-        candidates.append(v)
+        candidates.append({
+            "video_id": vid,
+            "title": (entry.get("title") or "").strip(),
+            "channel_title": channel_name,
+            "channel_id": ch_id_from_feed,
+            "duration": 0,
+            "views": 0,
+            "likes": 0,
+            "published": entry.get("timestamp", 0) or 0,
+            "description": "",
+            "thumbnail": entry.get("thumbnail", ""),
+            "url": f"https://www.youtube.com/watch?v={vid}",
+            "is_live": False,
+            "source": "ytdlp",
+        })
 
     if not candidates:
-        logger.info(
-            "YouTube: на канале нет новых видео (видео: %d, всё в known_ids)",
-            len(videos),
-        )
+        logger.info("YouTube: на канале нет новых видео (канал: %s)", channel_id)
         return None
 
-    # Берём первые 5 кандидатов (самые свежие) и обогащаем метаданными
-    # чтобы узнать duration, views, likes, description
-    top_candidates = candidates[:5]
-    enriched = []
-    for candidate in top_candidates:
-        enriched_video = await _enrich_video_metadata(candidate)
-        enriched.append(enriched_video)
-
-    # Фильтруем шортсы по длительности
+    # Шаг 2: обогащаем метаданные первых 5 кандидатов (чистый sync!)
     shorts = []
-    for v in enriched:
-        dur = v.get("duration", 0) or 0
-        if dur > _SHORTS_MAX_DURATION:
-            continue
-        shorts.append(v)
+    for candidate in candidates[:5]:
+        enriched = _enrich_video_metadata_sync(candidate)
+        dur = enriched.get("duration", 0) or 0
+        if dur <= _SHORTS_MAX_DURATION:
+            shorts.append(enriched)
 
     if not shorts:
-        logger.info(
-            "YouTube: на канале нет новых шортсов (проверено %d, все >90с)",
-            len(enriched),
-        )
+        logger.info("YouTube: на канале нет новых шортсов (проверено %d)", min(len(candidates), 5))
         return None
 
     # Сортировка: сначала по views, потом по likes
@@ -532,6 +574,20 @@ async def _fetch_channel_best_short(
         reverse=True,
     )
     return shorts[0]
+
+
+async def _fetch_channel_best_short(
+    channel_id: str,
+    known_ids: set[str],
+) -> dict | None:
+    """Async-обёртка над sync-версией."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        _thread_pool,
+        _fetch_channel_best_short_sync,
+        channel_id,
+        known_ids,
+    )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
