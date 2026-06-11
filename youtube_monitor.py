@@ -1,14 +1,14 @@
 """
 Модуль мониторинга YouTube для DayZ News Monitor.
-Переработанная версия v2 — только ручные каналы.
+Переработанная версия v3 — yt-dlp напрямую (без Invidious).
 
 Архитектура:
   1. Каналы загружаются из config.json (youtube_channels) — ТОЛЬКО вручную добавленные
-  2. Для каждого канала через Invidious API берутся видео, сортированные по популярности
-  3. Фильтруются шортсы (<=90с)
+  2. Для каждого канала через yt-dlp (extract_flat) берутся видео
+  3. Фильтруются шортсы (<=90с), сортируются по просмотрам
   4. Самый популярный шортс отправляется в AI для генерации Telegram-поста
   5. Пост уходит в очередь модерации (youtube_moderation.json)
-  6. При одобрении в GUI: скачивание видео + публикация в Telegram
+  6. При одобрении: скачивание видео + публикация в Telegram
 """
 
 import asyncio
@@ -19,8 +19,6 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-
-import aiohttp
 
 from logger import logger
 
@@ -39,45 +37,6 @@ _MODERATION_FILE = "youtube_moderation.json"
 
 # Пул потоков для yt-dlp
 _thread_pool = ThreadPoolExecutor(max_workers=4)
-
-# User-Agent
-_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/125.0.0.0 Safari/537.36"
-)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  HTTP сессия
-# ═════════════════════════════════════════════════════════════════════════════
-
-_http_session: aiohttp.ClientSession | None = None
-
-
-async def _get_session() -> aiohttp.ClientSession:
-    """Возвращает единую aiohttp сессию (shared)."""
-    global _http_session
-    if _http_session is None or _http_session.closed:
-        timeout = aiohttp.ClientTimeout(total=15)
-        connector = aiohttp.TCPConnector(limit=20)
-        _http_session = aiohttp.ClientSession(
-            timeout=timeout,
-            connector=connector,
-            headers={"User-Agent": _USER_AGENT},
-        )
-    return _http_session
-
-
-# yt-dlp семафор
-_ytdlp_semaphore: asyncio.Semaphore | None = None
-
-
-async def _get_ytdlp_semaphore() -> asyncio.Semaphore:
-    global _ytdlp_semaphore
-    if _ytdlp_semaphore is None:
-        _ytdlp_semaphore = asyncio.Semaphore(4)
-    return _ytdlp_semaphore
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -106,78 +65,6 @@ def load_youtube_channels(config: dict | None = None) -> list[dict]:
             return valid
     _YOUTUBE_CHANNELS = []
     return []
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  Invidious инстансы
-# ═════════════════════════════════════════════════════════════════════════════
-
-_STATIC_INVIDIOUS_INSTANCES = [
-    "https://inv.tux.pizza",
-    "https://invidious.nerdvpn.de",
-    "https://invidious.jing.rocks",
-    "https://invidious.lunar.icu",
-    "https://inv.nadeko.net",
-    "https://iv.datura.network",
-    "https://invidious.privacyredirect.com",
-    "https://invidious.protokolla.fi",
-    "https://yt.cdaut.de",
-    "https://invidious.perennialte.ch",
-]
-
-_dynamic_instances: list[str] = []
-_dynamic_instances_timestamp: float = 0.0
-_DYNAMIC_CACHE_TTL = 6 * 3600
-
-
-async def _fetch_dynamic_instances() -> list[str]:
-    global _dynamic_instances, _dynamic_instances_timestamp
-    now = time.time()
-    if _dynamic_instances and (now - _dynamic_instances_timestamp) < _DYNAMIC_CACHE_TTL:
-        return _dynamic_instances
-    try:
-        session = await _get_session()
-        async with session.get("https://api.invidious.io/instances.json") as response:
-            if response.status != 200:
-                return _dynamic_instances
-            data = await response.json()
-            instances = []
-            for entry in data:
-                if not isinstance(entry, list) or len(entry) < 2:
-                    continue
-                info = entry[1]
-                if not isinstance(info, dict):
-                    continue
-                uri = info.get("uri", "")
-                if not uri or not uri.startswith("https://"):
-                    continue
-                api_ok = info.get("type", "") in (1, "1", "https")
-                stats = info.get("stats", {})
-                if isinstance(stats, dict):
-                    status = stats.get("status", "")
-                    if status and status != "ok":
-                        continue
-                if api_ok:
-                    instances.append(uri.rstrip("/"))
-            if instances:
-                _dynamic_instances[:] = instances
-                _dynamic_instances_timestamp = now
-    except Exception as e:
-        logger.debug("YouTube: ошибка загрузки Invidious инстансов: %s", e)
-    return _dynamic_instances
-
-
-async def _get_invidious_instances() -> list[str]:
-    dynamic = await _fetch_dynamic_instances()
-    all_instances = list(dynamic)
-    for inst in _STATIC_INVIDIOUS_INSTANCES:
-        if inst not in all_instances:
-            all_instances.append(inst)
-    return all_instances
-
-
-def _remove_bad_instance(instance_url: str) -> None:
-    _dynamic_instances[:] = [inst for inst in _dynamic_instances if inst != instance_url]
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -339,13 +226,13 @@ def _save_moderation_queue(queue: list[dict]) -> None:
 
 
 def get_pending_moderation() -> list[dict]:
-    """Возвращает ожидающие модерации видео (для GUI)."""
+    """Возвращает ожидающие модерации видео (для веб-панели)."""
     queue = _load_moderation_queue()
     return [item for item in queue if item.get("status") == "pending"]
 
 
 def approve_video(video_id: str) -> bool:
-    """Одобряет видео в очереди модерации (вызывается из GUI)."""
+    """Одобряет видео в очереди модерации (вызывается из веб-панели)."""
     queue = _load_moderation_queue()
     found = False
     for item in queue:
@@ -361,7 +248,7 @@ def approve_video(video_id: str) -> bool:
 
 
 def reject_video(video_id: str) -> bool:
-    """Отклоняет видео в очереди модерации (вызывается из GUI)."""
+    """Отклоняет видео в очереди модерации (вызывается из веб-панели)."""
     queue = _load_moderation_queue()
     found = False
     for item in queue:
@@ -424,137 +311,131 @@ def _add_to_moderation(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  Invidious: парсинг и получение видео каналов
+#  Получение видео через yt-dlp (напрямую, без Invidious)
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _parse_invidious_item(item: dict) -> dict:
-    """Преобразует элемент Invidious API в унифицированный формат."""
-    duration = item.get("lengthSeconds", 0) or 0
-    if isinstance(duration, str):
-        try:
-            duration = int(duration)
-        except (ValueError, TypeError):
-            duration = 0
-
-    views = item.get("viewCount", 0) or 0
-    if isinstance(views, str):
-        try:
-            views = int(views.replace(",", ""))
-        except (ValueError, TypeError):
-            views = 0
-
-    likes = item.get("likes", 0) or 0
-    if isinstance(likes, str):
-        try:
-            likes = int(likes.replace(",", ""))
-        except (ValueError, TypeError):
-            likes = 0
-
-    published_raw = item.get("published", 0) or 0
-    if published_raw > 9_999_999_999:
-        published_raw = published_raw // 1000
-
-    return {
-        "video_id": item.get("videoId", ""),
-        "title": (item.get("title") or "").strip(),
-        "channel_title": (item.get("author") or "").strip(),
-        "channel_id": item.get("authorId", ""),
-        "duration": duration,
-        "views": views,
-        "likes": likes,
-        "published": published_raw,
-        "description": (item.get("description") or "")[:1000],
-        "thumbnail": item.get("videoThumbnails", [{}])[-1].get("url", "")
-        if item.get("videoThumbnails") else "",
-        "url": f"https://www.youtube.com/watch?v={item.get('videoId', '')}",
-        "is_live": bool(item.get("liveNow", False)),
-        "source": "invidious",
-    }
-
-
-async def _resolve_handle_to_id(handle: str) -> str:
-    """Резолвит @handle в UC... Channel ID через Invidious API."""
-    if not handle.startswith("@"):
-        return handle
-    clean_handle = handle.lstrip("@")
-    instances = await _get_invidious_instances()
-    for inst in instances[:5]:
-        try:
-            session = await _get_session()
-            async with session.get(
-                f"{inst}/api/v1/resolveurl",
-                params={"url": f"https://www.youtube.com/@{clean_handle}"},
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as resp:
-                if resp.status != 200:
-                    _remove_bad_instance(inst)
-                    continue
-                data = await resp.json()
-                ucid = data.get("ucid", "")
-                author = data.get("author", "")
-                if ucid and ucid.startswith("UC"):
-                    logger.info("YouTube: @%s → %s (%s)", clean_handle, ucid, author)
-                    # Обновляем ID в _YOUTUBE_CHANNELS на месте
-                    for ch in _YOUTUBE_CHANNELS:
-                        if ch.get("id") == handle:
-                            ch["id"] = ucid
-                            if not ch.get("name") and author:
-                                ch["name"] = author
-                            break
-                    return ucid
-        except Exception as e:
-            logger.debug("YouTube: resolve @%s через %s ошибка: %s", clean_handle, inst, e)
-            _remove_bad_instance(inst)
-    logger.warning("YouTube: не удалось резолвить @%s в UC ID", clean_handle)
-    return ""
-
-
-async def _fetch_channel_videos_invidious(
-    channel_id: str,
+async def _fetch_channel_videos(
+    channel_input: str,
     max_videos: int = 30,
-    sort_by: str = "popular",
-) -> list[dict]:
+) -> tuple[list[dict], str, str]:
     """
-    Получает видео канала через Invidious API.
-    sort_by: 'popular', 'newest', 'oldest'
-    """
-    if channel_id.startswith("@"):
-        resolved = await _resolve_handle_to_id(channel_id)
-        if resolved:
-            channel_id = resolved
-        else:
-            return []
+    Получает видео канала через yt-dlp напрямую (без Invidious).
 
-    instances = await _get_invidious_instances()
-    for inst in instances[:5]:
+    Args:
+        channel_input: @handle, UC... ID, или URL
+        max_videos: макс. видео для обработки
+
+    Returns:
+        (videos, channel_id, channel_name)
+    """
+    # Строим URL канала
+    if "youtube.com" in channel_input:
+        url = channel_input if "/videos" in channel_input else channel_input.rstrip("/") + "/videos"
+    elif channel_input.startswith("@"):
+        url = f"https://www.youtube.com/{channel_input}/videos"
+    elif channel_input.startswith("UC"):
+        url = f"https://www.youtube.com/channel/{channel_input}/videos"
+    else:
+        url = f"https://www.youtube.com/{channel_input}/videos"
+
+    loop = asyncio.get_running_loop()
+
+    def _fetch_sync():
+        import logging as _sl
+        _sl.getLogger("yt-dlp").setLevel(_sl.CRITICAL)
+        _sl.getLogger("yt_dlp").setLevel(_sl.CRITICAL)
+
         try:
-            session = await _get_session()
-            async with session.get(
-                f"{inst}/api/v1/channels/{channel_id}/videos",
-                params={"sort_by": sort_by, "page": 1},
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as resp:
-                if resp.status != 200:
-                    _remove_bad_instance(inst)
-                    continue
-                items = await resp.json()
-                videos = []
-                for item in items[:max_videos]:
-                    if not isinstance(item, dict) or item.get("type") != "video":
+            import yt_dlp
+        except ImportError:
+            logger.error("YouTube: yt-dlp не установлен")
+            return [], "", ""
+
+        ydl_opts = {
+            "extract_flat": True,
+            "quiet": True,
+            "no_warnings": True,
+            "extractor_args": {"youtube": {"player_client": ["ios", "web"]}},
+        }
+
+        videos = []
+        channel_id = ""
+        channel_name = ""
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                if not info:
+                    return [], "", ""
+
+                channel_id = info.get("channel_id", "") or ""
+                channel_name = (info.get("uploader") or info.get("channel", "")).strip()
+
+                entries = info.get("entries", []) or []
+                for entry in entries[:max_videos]:
+                    if not isinstance(entry, dict):
                         continue
-                    video = _parse_invidious_item(item)
-                    if video.get("video_id"):
-                        videos.append(video)
-                if videos:
-                    logger.debug(
-                        "YouTube/channel: %s → %d видео через %s (sort=%s)",
-                        channel_id, len(videos), inst, sort_by,
-                    )
-                return videos
+                    vid = entry.get("id", "")
+                    if not vid:
+                        continue
+
+                    dur = entry.get("duration") or 0
+                    if isinstance(dur, str):
+                        try:
+                            dur = int(dur)
+                        except (ValueError, TypeError):
+                            dur = 0
+
+                    views = entry.get("view_count") or 0
+                    if isinstance(views, str):
+                        try:
+                            views = int(views.replace(",", ""))
+                        except (ValueError, TypeError):
+                            views = 0
+
+                    likes = entry.get("like_count") or 0
+
+                    videos.append({
+                        "video_id": vid,
+                        "title": (entry.get("title") or "").strip(),
+                        "channel_title": channel_name,
+                        "channel_id": channel_id,
+                        "duration": int(dur),
+                        "views": int(views),
+                        "likes": int(likes),
+                        "published": entry.get("timestamp", 0) or 0,
+                        "description": "",
+                        "thumbnail": entry.get("thumbnail", ""),
+                        "url": f"https://www.youtube.com/watch?v={vid}",
+                        "is_live": entry.get("live_status") == "is_live",
+                        "source": "ytdlp",
+                    })
         except Exception as e:
-            logger.debug("YouTube/channel: %s через %s ошибка: %s", channel_id, inst, e)
-            _remove_bad_instance(inst)
-    return []
+            logger.error("YouTube/ytdlp: %s -> %s", url, e)
+
+        return videos, channel_id, channel_name
+
+    videos, channel_id, channel_name = await loop.run_in_executor(_thread_pool, _fetch_sync)
+
+    if videos:
+        shorts_count = sum(1 for v in videos if (v.get("duration", 0) or 0) <= _SHORTS_MAX_DURATION)
+        logger.info(
+            "YouTube/ytdlp: %s -> %d видео, %d shorts (%s)",
+            channel_input, len(videos), shorts_count, channel_name or channel_id,
+        )
+        # Обновляем ID и имя канала в _YOUTUBE_CHANNELS
+        if channel_id and channel_id != channel_input:
+            for ch in _YOUTUBE_CHANNELS:
+                if ch.get("id") == channel_input:
+                    ch["id"] = channel_id
+                    if channel_name and not ch.get("name"):
+                        ch["name"] = channel_name
+                    logger.info("YouTube: %s -> %s (%s)", channel_input, channel_id, channel_name)
+                    break
+    else:
+        logger.warning("YouTube/ytdlp: %s — видео не получены", channel_input)
+
+    return videos, channel_id, channel_name
 
 
 async def _fetch_channel_best_short(
@@ -565,7 +446,7 @@ async def _fetch_channel_best_short(
     Находит самый популярный шортс с канала, которого ещё нет в known_ids.
     Возвращает видео dict или None.
     """
-    videos = await _fetch_channel_videos_invidious(channel_id, max_videos=30, sort_by="popular")
+    videos, _, _ = await _fetch_channel_videos(channel_id, max_videos=30)
     if not videos:
         return None
 
@@ -583,6 +464,10 @@ async def _fetch_channel_best_short(
         shorts.append(v)
 
     if not shorts:
+        logger.info(
+            "YouTube: на канале нет новых шортсов (видео: %d, всё в known_ids или >90с)",
+            len(videos),
+        )
         return None
 
     # Сортировка: сначала по views, потом по likes
@@ -708,7 +593,7 @@ async def download_short(
         url, output_template, cookies_path, max_filesize,
     )
     if result:
-        logger.info("YouTube/download: скачано → %s", result)
+        logger.info("YouTube/download: скачано -> %s", result)
         return result
 
     logger.warning("YouTube/download: не удалось скачать '%s'%s", url,
@@ -728,7 +613,7 @@ async def check_for_popular_shorts(
     Проверяет каналы на наличие популярных шортсов.
 
     Для каждого канала:
-      1. Получает видео через Invidious (sort_by=popular)
+      1. Получает видео через yt-dlp (extract_flat)
       2. Фильтрует шортсы (<=90с)
       3. Берёт самый популярный, которого ещё не было
       4. Отправляет в AI для генерации поста
@@ -763,7 +648,6 @@ async def check_for_popular_shorts(
         try:
             best = await _fetch_channel_best_short(ch_id, known_ids)
             if not best:
-                logger.debug("YouTube: на канале %s нет новых шортсов", ch_name)
                 continue
 
             video_id = best.get("video_id", "")
@@ -772,10 +656,9 @@ async def check_for_popular_shorts(
             dur = best.get("duration", 0) or 0
 
             logger.info(
-                "YouTube [+]: '%s' (%s, %s, %s views, %s likes) от %s",
+                "YouTube [+]: '%s' (%s, %s views, %s likes) от %s",
                 best.get("title", "")[:60], _format_duration(dur),
-                _format_views(views), _format_views(views),
-                _format_views(likes), ch_name,
+                _format_views(views), _format_views(likes), ch_name,
             )
 
             # AI генерация поста
@@ -794,7 +677,7 @@ async def check_for_popular_shorts(
                         ai_summary = ai_result.get("summary", "") or ""
                         category = ai_result.get("news_type", category) or category
                         priority = ai_result.get("priority", "low") or "low"
-                        logger.info("YouTube AI: '%s' → %s (%s)",
+                        logger.info("YouTube AI: '%s' -> %s (%s)",
                                     best.get("title", "")[:40], category, priority)
                 except Exception as e:
                     logger.debug("YouTube: AI недоступен: %s", e)
@@ -922,7 +805,7 @@ async def run_youtube_monitor(
         check_interval_hours = 1
 
     logger.info(
-        "YouTube монитор v2: запущен (интервал=%dч, только ручные каналы, модерация)",
+        "YouTube монитор v3: запущен (yt-dlp, интервал=%dч, модерация)",
         check_interval_hours,
     )
 
@@ -952,9 +835,6 @@ async def run_youtube_monitor(
         while wait_seconds > 0:
             if shutdown_event and shutdown_event.is_set():
                 logger.info("YouTube монитор: остановлен")
-                # Закрываем сессию
-                if _http_session and not _http_session.closed:
-                    await _http_session.close()
                 return
 
             chunk = min(approval_check_seconds, wait_seconds)
@@ -983,13 +863,13 @@ async def main():
     except FileNotFoundError:
         logger.warning("config.json не найден")
 
-    logger.info("YouTube монитор v2: standalone режим")
+    logger.info("YouTube монитор v3: standalone режим")
     videos = await check_for_popular_shorts(config=config)
 
     if videos:
         logger.info("YouTube: найдено %d шортсов", len(videos))
         for v in videos:
             print(format_video_message(v, v.get("category", "")))
-            print("─" * 60)
+            print("-" * 60)
     else:
         logger.info("YouTube: новых шортсов не найдено")
