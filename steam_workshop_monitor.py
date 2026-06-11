@@ -535,8 +535,8 @@ def _format_author_display(mod: dict) -> str:
         return _escape_html(steam_id)
 
     if steam_id:
-        # Numeric SteamID — show shortened
-        return _escape_html(steam_id)
+        # Numeric SteamID — не показываем
+        return ""
 
     return "Неизвестен"
 
@@ -557,11 +557,12 @@ def format_mod_message(mod: dict, ai_summary: Optional[str] = None) -> dict:
 
     # ── Заголовок ──
     parts = [
-        f"{category} <b>{_escape_html(mod['title'])}</b>",
+        f"<b>{_escape_html(mod['title'])}</b>",
     ]
 
     # ── Автор ──
-    parts.append(f"{'└ ' if author else ''}от {_format_author_display(mod)}")
+    if author:
+        parts.append(f"└ от {author}")
 
     # ── Разделитель ──
     parts.append("")
@@ -601,6 +602,8 @@ def format_mod_message(mod: dict, ai_summary: Optional[str] = None) -> dict:
         meta_parts.append(f"📅 {updated}")
     if tag_str:
         meta_parts.append(f"🏷 {tag_str}")
+    if category and category != _DEFAULT_CATEGORY:
+        meta_parts.insert(0, category)
     if meta_parts:
         parts.append(" ".join(meta_parts))
 
