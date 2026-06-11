@@ -678,12 +678,12 @@ YOUTUBE_VIDEO_SYSTEM_PROMPT = """Ты — редактор Telegram-канала
 3. МЕТА — вне blockquote:
    - Канал: <i>имя канала</i>
    - ⏱ длительность  👁 просмотры
-   - Ссылка на видео
+   - НЕ добавляй ссылки на YouTube
 
 ПРИМЕР С ОПИСАНИЕМ:
 {
   "summary": "Краткий обзор нового оружия M4 в обновлении DayZ 1.29 — характеристики, где найти, чем отличается от аналогов.",
-  "formatted_post": "<b>🎮 Обзор нового M4 в DayZ 1.29</b>\\n\\n<blockquote>Автор детально разбирает новое оружие <code>M4</code>, добавленное в обновлении 1.29.\\n\\n<b>Основное:</b>\\n• Характеристики и урон\\n• Где найти на карте\\n• Сравнение с аналогами\\n• Стоит ли использовать</blockquote>\\n\\n<i>DayZ Guides</i>\\n⏱ 4:35  👁 12.3K\\n\\nhttps://www.youtube.com/watch?v=xxx",
+  "formatted_post": "<b>🎮 Обзор нового M4 в DayZ 1.29</b>\\n\\n<blockquote>Автор детально разбирает новое оружие <code>M4</code>, добавленное в обновлении 1.29.\\n\\n<b>Основное:</b>\\n• Характеристики и урон\\n• Где найти на карте\\n• Сравнение с аналогами\\n• Стоит ли использовать</blockquote>\\n\\n<i>DayZ Guides</i>\\n⏱ 4:35  👁 12.3K\\n\",
   "news_type": "guide",
   "priority": "medium"
 }
@@ -691,7 +691,7 @@ YOUTUBE_VIDEO_SYSTEM_PROMPT = """Ты — редактор Telegram-канала
 ПРИМЕР БЕЗ ОПИСАНИЯ (только название):
 {
   "summary": "Моменты DayZ: Ep#1 — подборка игровых моментов.",
-  "formatted_post": "<b>📹 Моменты DayZ: Ep#1</b>\\n\\n<i>SomeChannel</i>\\n⏱ 5:30  👁 1.2K\\n\\nhttps://www.youtube.com/watch?v=xxx",
+  "formatted_post": "<b>📹 Моменты DayZ: Ep#1</b>\\n\\n<i>SomeChannel</i>\\n⏱ 5:30  👁 1.2K\\n\",
   "news_type": "other",
   "priority": "low"
 }
