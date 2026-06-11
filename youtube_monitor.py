@@ -631,10 +631,10 @@ async def check_for_popular_shorts(
 
     # Собираем все известные ID (опубликованные + в модерации)
     state = _load_state()
-    posted_ids = set(state.get("posted_ids", {}).keys())
+    posted_ids = dict(state.get("posted_ids", {}))
     moderation_queue = _load_moderation_queue()
     moderation_ids = {item.get("video_id") for item in moderation_queue if item.get("video_id")}
-    known_ids = posted_ids | moderation_ids
+    known_ids = set(posted_ids.keys()) | moderation_ids
 
     new_videos = []
     start = time.time()
