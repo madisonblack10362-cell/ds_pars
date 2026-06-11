@@ -728,6 +728,20 @@ async def download_short(
     return None
 
 
+async def download_short_by_id(
+    video_id: str,
+    downloads_dir: str = "downloads",
+    max_filesize_mb: int = 50,
+) -> str | None:
+    """Скачивает шортс по video_id (для публикации из веб-панели)."""
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    return await download_short(
+        video={"url": url, "video_id": video_id},
+        downloads_dir=downloads_dir,
+        max_filesize_mb=max_filesize_mb,
+    )
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  Основная логика
 # ═════════════════════════════════════════════════════════════════════════════
@@ -841,7 +855,7 @@ async def check_for_popular_shorts(
                             "newsType": category,
                             "priority": priority,
                             "images": images,
-                            "links": [best.get("url", "")] if best.get("url") else [],
+                            "links": [],
                             "sourceType": "youtube",
                         },
                         web_app_url=web_panel_url,
