@@ -464,7 +464,8 @@ def _enrich_video_metadata_sync(video: dict) -> dict:
     except json.JSONDecodeError:
         logger.warning("YouTube: не удалось распарсить JSON метаданных %s", video_id[:12])
     except Exception as e:
-        logger.warning("YouTube: ошибка метаданных %s: %s", video_id[:12], e)
+        import traceback
+        logger.warning("YouTube: ошибка метаданных %s: %s\n%s", video_id[:12], e, traceback.format_exc())
 
     return video
 
@@ -876,7 +877,8 @@ async def check_for_popular_shorts(
             new_videos.append(best)
 
         except Exception as e:
-            logger.error("YouTube: ошибка канала %s: %s", ch_name, e)
+            import traceback
+            logger.error("YouTube: ошибка канала %s: %s\n%s", ch_name, e, traceback.format_exc())
 
     # Сохраняем состояние
     state["posted_ids"] = posted_ids
