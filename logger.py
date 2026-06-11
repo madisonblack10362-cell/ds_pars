@@ -208,7 +208,8 @@ class WebPanelHandler(logging.Handler):
             loop = asyncio.get_running_loop()
             loop.create_task(send_log_to_panel(log_data, self.web_panel_url))
         except RuntimeError:
-            asyncio.create_task(send_log_to_panel(log_data, self.web_panel_url))
+            # Нет event loop (вызов из thread pool) — пропускаем отправку на веб-панель
+            pass
 
 
 def add_web_panel_handler(web_panel_url: str):
