@@ -1,0 +1,14 @@
+aiohttp>=3.9.5
+aiogram>=3.4.1
+aiosqlite>=0.20.0
+telethon>=1.36.0
+discord.py-self>=2.0.0
+apscheduler>=3.10.4
+beautifulsoup4>=4.12.3
+lxml>=5.2.2
+feedparser>=6.0.11
+openai>=1.30.0
+numpy>=1.26.4
+aiofiles>=23.2.1
+customtkinter>=5.2.0
+playwright>=1.40.0
