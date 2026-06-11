@@ -723,16 +723,6 @@ class DesktopGUI:
                     anchor="w",
                 ).pack(side="left", fill="x", expand=True, padx=(0, 8), pady=6)
 
-            # Кнопка сброса канала (очистить state/rejected)
-            reset_btn = ctk.CTkButton(
-                row, text="\u21bb",
-                font=("Segoe UI", 13),
-                fg_color="#3a3a2a", hover_color="#5a5a3a",
-                text_color="#bbbb55", width=28, height=28, corner_radius=6,
-                command=lambda i=idx: self._reset_youtube_channel(i),
-            )
-            reset_btn.pack(side="right", padx=(0, 4), pady=6)
-
             # Кнопка удаления
             btn = ctk.CTkButton(
                 row, text="\u2715",
@@ -777,36 +767,6 @@ class DesktopGUI:
             load_youtube_channels(cfg)
         except Exception:
             pass
-
-    def _reset_youtube_channel(self, index: int):
-        """Сбрасывает состояние канала: удаляет все видео из state/модерации/blacklist."""
-        try:
-            with open(self.config_path, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-        except Exception:
-            return
-
-        channels = cfg.get("youtube_channels", [])
-        if not isinstance(channels, list) or index >= len(channels):
-            return
-
-        ch = channels[index]
-        ch_name = ch.get("name", ch.get("id", "?")) if isinstance(ch, dict) else str(ch)
-
-        try:
-            from youtube_monitor import reset_channel
-            stats = reset_channel(ch_name)
-            msg = (
-                f"YouTube: сброс канала '{ch_name}' — "
-                f"state: {stats['removed_state']}, "
-                f"модерация: {stats['removed_moderation']}, "
-                f"blacklist: {stats['removed_blacklist']}"
-            )
-            logger.info(msg)
-            self.append_log("INFO", msg)
-        except Exception as e:
-            self.append_log("ERROR", f"YouTube: ошибка сброса канала: {e}")
-            logger.error("YouTube: ошибка сброса канала: %s", e)
 
     # ================================================================
     # Logs

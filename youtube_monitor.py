@@ -35,158 +35,9 @@ _STATE_FILE = "youtube_state.json"
 
 # Путь к файлу очереди модерации
 _MODERATION_FILE = "youtube_moderation.json"
-_REJECTED_FILE = "youtube_rejected.json"  # Навсегда отклонённые видео (blacklist)
 
 # Пул потоков для yt-dlp
 _thread_pool = ThreadPoolExecutor(max_workers=4)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  Управление rejected видео
-# ═════════════════════════════════════════════════════════════════════════════
-
-def _load_rejected() -> dict:
-    """
-    Загружает blacklist отклонённых видео.
-    Формат: {"video_id": {"channel": "...", "title": "...", "ts": 1234567890}, ...}
-    """
-    try:
-        if os.path.exists(_REJECTED_FILE):
-            with open(_REJECTED_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                return data
-            elif isinstance(data, list):
-                # Миграция старого формата (просто список ID)
-                return {vid: {"channel": "", "title": "", "ts": 0} for vid in data}
-    except (json.JSONDecodeError, OSError):
-        pass
-    return {}
-
-
-def _load_rejected_ids() -> set[str]:
-    """Возвращает только ID из blacklist."""
-    return set(_load_rejected().keys())
-
-
-def _add_to_rejected(video_id: str, channel: str = "", title: str = "") -> None:
-    """Добавляет видео в чёрный список отклонённых."""
-    rejected = _load_rejected()
-    rejected[video_id] = {
-        "channel": channel,
-        "title": title[:200] if title else "",
-        "ts": time.time(),
-    }
-    try:
-        with open(_REJECTED_FILE, "w", encoding="utf-8") as f:
-            json.dump(rejected, f, ensure_ascii=False, indent=2)
-    except OSError as e:
-        logger.error("YouTube: не удалось сохранить rejected: %s", e)
-
-
-def cleanup_rejected_videos(channel: str = None) -> dict:
-    """
-    Переносит rejected видео из youtube_state.json и youtube_moderation.json
-    в youtube_rejected.json (blacklist), затем удаляет из state/модерации.
-    
-    Blacklist всегда включается в known_ids, поэтому бот не будет их предлагать.
-    Но state очищается чтобы не раздувался.
-    
-    Если channel указан — только с этого канала.
-    Возвращает статистику.
-    """
-    stats = {"removed_state": 0, "removed_moderation": 0, "channels_affected": set()}
-    
-    # 1) Переносим из youtube_state.json в blacklist
-    state = _load_state()
-    posted_ids = state.get("posted_ids", {})
-    to_remove = []
-    for vid, info in posted_ids.items():
-        status = info.get("status", "")
-        vid_channel = info.get("channel", "")
-        if status == "rejected":
-            if channel is None or vid_channel == channel:
-                to_remove.append(vid)
-                stats["channels_affected"].add(vid_channel)
-                _add_to_rejected(vid, vid_channel, info.get("title", ""))
-    for vid in to_remove:
-        del posted_ids[vid]
-        stats["removed_state"] += 1
-    if to_remove:
-        state["posted_ids"] = posted_ids
-        _save_state(state)
-    
-    # 2) Чистим youtube_moderation.json
-    queue = _load_moderation_queue()
-    original_len = len(queue)
-    new_queue = []
-    for item in queue:
-        if item.get("status") == "rejected":
-            if channel is None or item.get("channel") == channel:
-                _add_to_rejected(item.get("video_id", ""), item.get("channel", ""))
-                stats["removed_moderation"] += 1
-                continue
-        new_queue.append(item)
-    if len(new_queue) != original_len:
-        _save_moderation_queue(new_queue)
-    
-    stats["channels_affected"] = list(stats["channels_affected"])
-    
-    if stats["removed_state"] > 0 or stats["removed_moderation"] > 0:
-        logger.info(
-            "YouTube cleanup: перенесено %d из state, %d из модерации в blacklist. Каналы: %s",
-            stats["removed_state"], stats["removed_moderation"],
-            stats["channels_affected"],
-        )
-    
-    return stats
-
-
-def reset_channel(channel: str) -> dict:
-    """
-    Полная очистка канала: удаляет ВСЕ видео канала из state, модерации и blacklist.
-    Использовать когда нужно чтобы бот заново просканировал канал с нуля.
-    """
-    stats = {"removed_state": 0, "removed_moderation": 0, "removed_blacklist": 0}
-    
-    # 1) Чистим state
-    state = _load_state()
-    posted_ids = state.get("posted_ids", {})
-    to_remove = [vid for vid, info in posted_ids.items() if info.get("channel") == channel]
-    for vid in to_remove:
-        del posted_ids[vid]
-        stats["removed_state"] += 1
-    if to_remove:
-        state["posted_ids"] = posted_ids
-        _save_state(state)
-    
-    # 2) Чистим модерацию
-    queue = _load_moderation_queue()
-    original_len = len(queue)
-    queue = [item for item in queue if item.get("channel") != channel]
-    stats["removed_moderation"] = original_len - len(queue)
-    if stats["removed_moderation"] > 0:
-        _save_moderation_queue(queue)
-    
-    # 3) Чистим blacklist — удаляем только видео этого канала
-    rejected = _load_rejected()
-    to_remove_bl = [vid for vid, info in rejected.items() if info.get("channel") == channel]
-    for vid in to_remove_bl:
-        del rejected[vid]
-        stats["removed_blacklist"] += 1
-    if to_remove_bl:
-        try:
-            with open(_REJECTED_FILE, "w", encoding="utf-8") as f:
-                json.dump(rejected, f, ensure_ascii=False, indent=2)
-        except OSError:
-            pass
-    
-    logger.info(
-        "YouTube: полный сброс канала '%s' — state: %d, модерация: %d, blacklist: очищен",
-        channel, stats["removed_state"], stats["removed_moderation"],
-    )
-    
-    return stats
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -903,16 +754,12 @@ async def check_for_popular_shorts(
         logger.info("YouTube: нет каналов для парсинга (добавьте через GUI)")
         return []
 
-    # Автоочистка: переносим rejected из state/модерации в blacklist
-    cleanup_rejected_videos()
-
-    # Собираем все известные ID (опубликованные + в модерации + отклонённые навсегда)
+    # Собираем все известные ID (опубликованные + в модерации)
     state = _load_state()
     posted_ids = dict(state.get("posted_ids", {}))
     moderation_queue = _load_moderation_queue()
     moderation_ids = {item.get("video_id") for item in moderation_queue if item.get("video_id")}
-    rejected_ids = _load_rejected_ids()
-    known_ids = set(posted_ids.keys()) | moderation_ids | rejected_ids
+    known_ids = set(posted_ids.keys()) | moderation_ids
 
     new_videos = []
     start = time.time()
