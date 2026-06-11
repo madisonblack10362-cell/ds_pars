@@ -179,37 +179,22 @@ class DayZNewsMonitor:
             logger.warning("Publisher отключён: не указан токен Telegram-бота")
 
         # -----------------------------------------------------------------
-        # YouTube монитор (шортсы и короткий контент)
+        # YouTube монитор v2 (только ручные каналы, популярные шортсы, модерация)
         # -----------------------------------------------------------------
         if cfg.get("youtube_enabled", True):
             youtube_interval = int(cfg.get("youtube_interval_hours", 2))
-            youtube_min_views = int(cfg.get("youtube_min_views", 0))
-            youtube_min_likes = int(cfg.get("youtube_min_likes", 0))
-            youtube_max_per_check = int(cfg.get("youtube_max_per_check", 15))
-            youtube_max_duration = int(cfg.get("youtube_max_duration", 0))
-            youtube_download_shorts = cfg.get("youtube_download_shorts", True)
-            youtube_lookback_days = int(cfg.get("youtube_lookback_days", 90))
 
             self.youtube_task = asyncio.create_task(
                 run_youtube_monitor(
                     db=self.db,
                     ai_analyzer=self.ai_analyzer,
-                    ai_analyze=cfg.get("ai_analyze", True),
-                    min_views=youtube_min_views,
-                    min_likes=youtube_min_likes,
                     check_interval_hours=youtube_interval,
-                    max_per_check=youtube_max_per_check,
-                    max_duration=youtube_max_duration,
-                    download_shorts=youtube_download_shorts,
                     shutdown_event=self._shutdown_event,
-                    notify_callback=self._youtube_notify_wrapper,
-                    web_panel_url=self.web_panel_url,
-                    web_panel_api_key=self.web_panel_api_key,
-                    lookback_days=youtube_lookback_days,
+                    publisher=self.publisher,
+                    config=cfg,
                 )
             )
-            logger.info("YouTube монитор запущен (интервал: %dч, min_views: %d, lookback: %dд)",
-                        youtube_interval, youtube_min_views, youtube_lookback_days)
+            logger.info("YouTube монитор v2 запущен (интервал: %dч, только ручные каналы, модерация)", youtube_interval)
         else:
             logger.info("YouTube монитор отключён")
 
