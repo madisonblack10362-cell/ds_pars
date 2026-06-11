@@ -28,7 +28,7 @@ logger = logging.getLogger("steam_workshop_monitor")
 # ─── Конфиг ────────────────────────────────────────────────────────────────────
 DAYZ_APPID = 221100
 STEAM_WORKSHOP_URL = (
-    "https://steamcommunity.com/workshop/browse/"
+    "https//steamcommunity.com/workshop/browse/"
     "?appid=221100"
     "&browsesort=mostpopular"
     "&browsefilter=trend"
@@ -36,31 +36,31 @@ STEAM_WORKSHOP_URL = (
     "&p=1&numperpage=30"
 )
 
-STEAM_API_URL = "https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/"
+STEAM_API_URL = "https//api.steampowered.com/IPublishedFileService/QueryFiles/v1/"
 
 # ─── State persistence ────────────────────────────────────────────────────────
 
-STATE_FILE = os.path.join(os.path.dirname(__file__), "workshop_state.json")
+STATE_FILE = os.path.join(os.path.dirname(__file__), "workshop_statejson")
 
 
 def _load_state() -> dict:
-    """Загрузить состояние из JSON файла."""
+    """Загрузить состояние из JSON файла"""
     if os.path.exists(STATE_FILE):
         try:
-            with open(STATE_FILE, "r", encoding="utf-8") as f:
+            with open(STATE_FILE, "r", encoding="utf8") as f:
                 return json.load(f)
         except (json.JSONDecodeError, IOError) as e:
-            logger.warning("Не удалось загрузить workshop_state.json: %s", e)
+            logger.warning("удалось загрузить workshop_statejson: %s", e)
     return {"posted_ids": [], "last_check": None, "known_ids": []}
 
 
 def _save_state(state: dict) -> None:
-    """Сохранить состояние в JSON файл."""
+    """Сохранить состояние в JSON файл"""
     try:
-        with open(STATE_FILE, "w", encoding="utf-8") as f:
+        with open(STATE_FILE, "w", encoding="utf8") as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
     except IOError as e:
-        logger.error("Не удалось сохранить workshop_state.json: %s", e)
+        logger.error("удалось сохранить workshop_statejson: %s", e)
 
 
 # ─── Steam Workshop scraping ───────────────────────────────────────────────────
@@ -74,7 +74,7 @@ async def _fetch_mod_details_via_web(mod_ids: list) -> list:
     if not mod_ids:
         return mods
 
-    url = "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/"
+    url = "https//api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/"
     batch_size = 50
 
     for i in range(0, len(mod_ids), batch_size):
@@ -82,8 +82,8 @@ async def _fetch_mod_details_via_web(mod_ids: list) -> list:
 
         data = {"itemcount": len(batch)}
         for idx, mod_id in enumerate(batch):
-            data[f"publishedfileids[{idx}]"] = mod_id
-            data[f"children[{idx}]"] = ""
+            data[f"publishedfileids{idx}]"] = mod_id
+            data[f"children{idx}]"] = ""
 
         try:
             async with aiohttp.ClientSession() as session:
@@ -91,7 +91,7 @@ async def _fetch_mod_details_via_web(mod_ids: list) -> list:
                     url, data=data, timeout=aiohttp.ClientTimeout(total=30)
                 ) as resp:
                     if resp.status != 200:
-                        logger.warning("Steam API вернул статус %d", resp.status)
+                        logger.warning("Steam API вернул статусd", resp.status)
                         continue
 
                     result = await resp.json()
@@ -105,13 +105,13 @@ async def _fetch_mod_details_via_web(mod_ids: list) -> list:
                             mods.append(mod)
 
         except Exception as e:
-            logger.error("Ошибка при получении деталей модов: %s", e)
+            logger.error("Ошибка при получении деталей модов %s", e)
 
     return mods
 
 
 def _safe_int(val, default=0) -> int:
-    """Конвертирует значение в int. Steam API часто возвращает числа как строки."""
+    """Конвертирует значение в int Steam API часто возвращает числа как строки."""
     try:
         return int(val)
     except (TypeError, ValueError):
@@ -119,12 +119,12 @@ def _safe_int(val, default=0) -> int:
 
 
 async def _resolve_author_names(mods: list) -> None:
-    """Парсит имена авторов со страниц Workshop для каждого мода (in-place).
+    """Парсит имена авторов со страниц Workshop для каждого модаin-place).
     Бесплатно, без API ключа — берёт имя из HTML страницы мода."""
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "UserAgent": "Mozilla5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
+        "AcceptLanguage": "enUS,en;q=0.9",
     }
     # Собираем уникальные creator ID для которых ещё нет имени
     to_resolve = {}
@@ -136,13 +136,13 @@ async def _resolve_author_names(mods: list) -> None:
     if not to_resolve:
         return
 
-    logger.info("Резолвим имена для %d авторов...", len(to_resolve))
+    logger.info("Резолвим имена дляd авторов...", len(to_resolve))
 
     try:
         async with aiohttp.ClientSession() as session:
             for steam_id, mod_id in to_resolve.items():
                 try:
-                    url = f"https://steamcommunity.com/workshop/filedetails/?id={mod_id}"
+                    url = f"https//steamcommunity.com/workshop/filedetails/?id={mod_id}"
                     async with session.get(
                         url, headers=headers,
                         timeout=aiohttp.ClientTimeout(total=15),
@@ -162,18 +162,18 @@ async def _resolve_author_names(mods: list) -> None:
                         for mod in mods:
                             if mod.get("author") == steam_id:
                                 mod["author_name"] = name
-                        logger.debug("Автор %s → %s", steam_id, name)
+                        logger.debug("Авторs → %s", steam_id, name)
 
                     await asyncio.sleep(0.3)  # Не спамим Steam
 
                 except Exception as e:
-                    logger.debug("Не удалось резолвить автора %s: %s", steam_id, e)
+                    logger.debug("удалось резолвить автораs: %s", steam_id, e)
     except Exception as e:
-        logger.warning("Ошибка при резолвинге авторов: %s", e)
+        logger.warning("Ошибка при резолвинге авторов %s", e)
 
 
 def _parse_api_item(item: dict) -> Optional[dict]:
-    """Парсит один элемент из Steam API ответа в формат мода."""
+    """Парсит один элемент из Steam API ответа в формат мода"""
     try:
         mod_id = str(item.get("publishedfileid", "")).strip()
         if not mod_id:
@@ -202,7 +202,7 @@ def _parse_api_item(item: dict) -> Optional[dict]:
 
         return {
             "id": mod_id,
-            "title": str(item.get("title", "Без названия")).strip(),
+            "title": str(item.get("title", "названия")).strip(),
             "description": str(item.get("description", "")).strip(),
             "author": str(item.get("creator", "")).strip(),
             "image_url": str(item.get("preview_url", "")).strip(),
@@ -210,7 +210,7 @@ def _parse_api_item(item: dict) -> Optional[dict]:
             "file_size": file_size,
             "updated": updated_str,
             "timestamp": time_updated,
-            "url": f"https://steamcommunity.com/sharedfiles/filedetails/?id={mod_id}",
+            "url": f"https//steamcommunity.com/sharedfiles/filedetails/?id={mod_id}",
             "subscriptions": _safe_int(item.get("subscriptions", 0)),
             "favorited": _safe_int(item.get("favorited", 0)),
             "lifetime_subscriptions": _safe_int(item.get("lifetime_subscriptions", 0)),
@@ -220,17 +220,17 @@ def _parse_api_item(item: dict) -> Optional[dict]:
         }
 
     except Exception as e:
-        logger.error("Ошибка парсинга элемента мода: %s", e)
+        logger.error("Ошибка парсинга элемента мода %s", e)
         return None
 
 
 async def _fetch_workshop_page_html(session: aiohttp.ClientSession) -> Optional[str]:
-    """Получает HTML страницы Steam Workshop для DayZ."""
+    """Получает HTML страницы Steam Workshop для DayZ"""
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "UserAgent": "Mozilla5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "AcceptLanguage": "enUS,en;q=0.9",
+        "Accept": "texthtml,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
 
     try:
@@ -243,10 +243,10 @@ async def _fetch_workshop_page_html(session: aiohttp.ClientSession) -> Optional[
                 return await resp.text()
             else:
                 logger.warning(
-                    "Steam Workshop вернул статус %d", resp.status
+                    "Steam Workshop вернул статусd", resp.status
                 )
     except Exception as e:
-        logger.error("Ошибка загрузки страницы Steam Workshop: %s", e)
+        logger.error("Ошибка загрузки страницы Steam Workshop %s", e)
 
     return None
 
@@ -276,7 +276,7 @@ async def fetch_popular_mods(
 
 
 async def _fetch_via_steam_api(api_key: str, max_mods: int) -> list:
-    """Получает популярные моды через Steam Web API (нужен API ключ)."""
+    """Получает популярные моды через Steam Web APIнужен API ключ)."""
     mods = []
 
     params = {
@@ -301,7 +301,7 @@ async def _fetch_via_steam_api(api_key: str, max_mods: int) -> list:
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as resp:
                 if resp.status != 200:
-                    logger.warning("Steam Web API вернул статус %d", resp.status)
+                    logger.warning("Steam Web API вернул статусd", resp.status)
                     return []
 
                 result = await resp.json()
@@ -315,7 +315,7 @@ async def _fetch_via_steam_api(api_key: str, max_mods: int) -> list:
                         mods.append(mod)
 
     except Exception as e:
-        logger.error("Ошибка Steam Web API: %s", e)
+        logger.error("Ошибка Steam Web API %s", e)
 
     return mods
 
@@ -328,12 +328,12 @@ async def _fetch_via_scraping(max_mods: int) -> list:
     async with aiohttp.ClientSession() as session:
         html = await _fetch_workshop_page_html(session)
         if not html:
-            logger.error("Не удалось получить страницу Steam Workshop")
+            logger.error("удалось получить страницу Steam Workshop")
             return []
 
-        id_pattern = re.compile(r"filedetails/\?id=(\d+)")
+        id_pattern = re.compile(r"filedetails\?id=(\d+)")
         all_ids = list(set(id_pattern.findall(html)))
-        logger.info("Найдено %d ID модов на странице Workshop", len(all_ids))
+        logger.info("Найденоd ID модов на странице Workshop", len(all_ids))
 
         if not all_ids:
             return []
@@ -372,7 +372,7 @@ async def check_for_new_mods(
 
     if is_first_run:
         # === ПЕРВЫЙ ЗАПУСК: не спамим старьём ===
-        logger.info("Первый запуск workshop-монитора: фильтруем старые моды")
+        logger.info("Первый запуск workshopмонитора: фильтруем старые моды")
         cutoff_3d = now - (3 * 24 * 3600)
 
         fresh = []
@@ -397,7 +397,7 @@ async def check_for_new_mods(
         state["last_check"] = datetime.now(timezone.utc).isoformat()
         _save_state(state)
         logger.info(
-            "Первый запуск: свежих модов=%d, старых пропущено=%d, берём топ-%d",
+            "Первый запуск свежих модов=%d, старых пропущено=%d, берём топ-%d",
             len(fresh), len(old), max_per_check,
         )
 
@@ -431,7 +431,7 @@ async def check_for_new_mods(
     result = new_mods[:max_per_check]
 
     if result:
-        logger.info("Найдено %d новых популярных модов (отфильтровано из %d)", len(result), len(new_mods))
+        logger.info("Найденоd новых популярных модов (отфильтровано из %d)", len(result), len(new_mods))
     else:
         logger.info("Новых популярных модов не найдено")
 
@@ -443,76 +443,76 @@ async def check_for_new_mods(
 # ─── Категории модов по тегам ──────────────────────────────────────────────
 
 _TAG_CATEGORY_MAP = {
-    "vehicle": "🚗 Транспорт",
-    "car": "🚗 Транспорт",
-    "boat": "🚗 Транспорт",
-    "helicopter": "🚗 Транспорт",
-    "aircraft": "🚗 Транспорт",
-    "plane": "🚗 Транспорт",
-    "truck": "🚗 Транспорт",
-    "bicycle": "🚗 Транспорт",
-    "transport": "🚗 Транспорт",
-    "weapon": "🔫 Оружие",
-    "gun": "🔫 Оружие",
-    "rifle": "🔫 Оружие",
-    "pistol": "🔫 Оружие",
-    "melee": "🔫 Оружие",
-    "ammo": "🔫 Оружие",
-    "ammunition": "🔫 Оружие",
-    "building": "🏗 Строительство",
-    "base": "🏗 Строительство",
-    "basebuilding": "🏗 Строительство",
-    "cabin": "🏗 Строительство",
-    "shelter": "🏗 Строительство",
-    "tent": "🏗 Строительство",
-    "map": "🗺 Карты",
-    "terrain": "🗺 Карты",
-    "chernarus": "🗺 Карты",
-    "livonia": "🗺 Карты",
-    "clothing": "👔 Одежда",
-    "clothes": "👔 Одежда",
-    "armor": "👔 Одежда",
-    "uniform": "👔 Одежда",
-    "backpack": "👔 Одежда",
-    "food": "🍔 Еда",
-    "drink": "🍔 Еда",
-    "medical": "💊 Медицина",
-    "health": "💊 Медицина",
-    "zombie": "🧟 Зомби",
-    "infected": "🧟 Зомби",
-    "animal": "🐾 Животные",
-    "ai": "🤖 AI / NPC",
-    "npc": "🤖 AI / NPC",
-    "trader": "🤖 AI / NPC",
-    "pvp": "⚔ PVP",
-    "pve": "🕊 PVE",
-    "roleplay": "🎭 Ролевая игра",
-    "rp": "🎭 Ролевая игра",
-    "ui": "🖥 Интерфейс",
-    "hud": "🖥 Интерфейс",
-    "menu": "🖥 Интерфейс",
-    "crafting": "🔧 Крафт",
-    "craft": "🔧 Крафт",
-    "emotes": "🎬 Анимации",
-    "animation": "🎬 Анимации",
-    "effects": "✨ Эффекты",
-    "weather": "🌤 Погода",
-    "graphics": "🎨 Графика",
-    "sound": "🔊 Звук",
-    "audio": "🔊 Звук",
-    "server": "🖥 Сервер",
-    "admin": "🖥 Сервер",
-    "tool": "🔧 Утилиты",
-    "utility": "🔧 Утилиты",
-    "mod": "🔧 Утилиты",
-    "dayz": "🎮 DayZ",
+    "vehicle": "Транспорт",
+    "car": "Транспорт",
+    "boat": "Транспорт",
+    "helicopter": "Транспорт",
+    "aircraft": "Транспорт",
+    "plane": "Транспорт",
+    "truck": "Транспорт",
+    "bicycle": "Транспорт",
+    "transport": "Транспорт",
+    "weapon": "Оружие",
+    "gun": "Оружие",
+    "rifle": "Оружие",
+    "pistol": "Оружие",
+    "melee": "Оружие",
+    "ammo": "Оружие",
+    "ammunition": "Оружие",
+    "building": "Строительство",
+    "base": "Строительство",
+    "basebuilding": "Строительство",
+    "cabin": "Строительство",
+    "shelter": "Строительство",
+    "tent": "Строительство",
+    "map": "Карты",
+    "terrain": "Карты",
+    "chernarus": "Карты",
+    "livonia": "Карты",
+    "clothing": "Одежда",
+    "clothes": "Одежда",
+    "armor": "Одежда",
+    "uniform": "Одежда",
+    "backpack": "Одежда",
+    "food": "Еда",
+    "drink": "Еда",
+    "medical": "Медицина",
+    "health": "Медицина",
+    "zombie": "Зомби",
+    "infected": "Зомби",
+    "animal": "Животные",
+    "ai": "AI / NPC",
+    "npc": "AI / NPC",
+    "trader": "AI / NPC",
+    "pvp": "PVP",
+    "pve": "PVE",
+    "roleplay": "Ролевая игра",
+    "rp": "Ролевая игра",
+    "ui": "Интерфейс",
+    "hud": "Интерфейс",
+    "menu": "Интерфейс",
+    "crafting": "Крафт",
+    "craft": "Крафт",
+    "emotes": "Анимации",
+    "animation": "Анимации",
+    "effects": "Эффекты",
+    "weather": "Погода",
+    "graphics": "Графика",
+    "sound": "Звук",
+    "audio": "Звук",
+    "server": "Сервер",
+    "admin": "Сервер",
+    "tool": "Утилиты",
+    "utility": "Утилиты",
+    "mod": "Мод",
+    "dayz": "DayZ",
 }
 
-_DEFAULT_CATEGORY = "📦 Мод"
+_DEFAULT_CATEGORY = "Мод"
 
 
 def _detect_category(tags: list) -> str:
-    """Определяет категорию мода по тегам."""
+    """Определяет категорию мода по тегам"""
     if not tags:
         return _DEFAULT_CATEGORY
     lowered = [t.lower().strip() for t in tags]
@@ -523,7 +523,7 @@ def _detect_category(tags: list) -> str:
 
 
 def _format_author_display(mod: dict) -> str:
-    """Форматирует имя автора. Если есть resolved_name — использует его, иначе обрезает длинный SteamID."""
+    """Форматирует имя автора. Скрывает цифровой SteamID."""
     resolved = mod.get("author_name", "").strip()
     steam_id = mod.get("author", "").strip()
 
@@ -531,18 +531,13 @@ def _format_author_display(mod: dict) -> str:
         return _escape_html(resolved)
 
     if steam_id and not steam_id.isdigit():
-        # Already a name, not a numeric ID
         return _escape_html(steam_id)
 
-    if steam_id:
-        # Numeric SteamID — show shortened
-        return _escape_html(steam_id)
-
-    return "Неизвестен"
+    return ""
 
 
 def format_mod_message(mod: dict, ai_summary: Optional[str] = None) -> dict:
-    """Форматирует данные мода для отправки в Telegram."""
+    """Форматирует данные мода для отправки в Telegram"""
     tags = mod.get("tags", [])
     if isinstance(tags, list):
         tag_str = ", ".join(tags[:5])
@@ -556,12 +551,11 @@ def format_mod_message(mod: dict, ai_summary: Optional[str] = None) -> dict:
     views = mod.get("views", 0)
 
     # ── Заголовок ──
-    parts = [
-        f"{category} <b>{_escape_html(mod['title'])}</b>",
-    ]
+    parts = [f"<b>{_escape_html(mod['title'])}</b>"]
 
-    # ── Автор ──
-    parts.append(f"{'└ ' if author else ''}от {_format_author_display(mod)}")
+    # ── Автор (только если есть имя, не цифровой ID) ──
+    if author:
+        parts.append(f"Автор: {author}")
 
     # ── Разделитель ──
     parts.append("")
@@ -583,30 +577,32 @@ def format_mod_message(mod: dict, ai_summary: Optional[str] = None) -> dict:
     # ── Статистика ──
     stats_parts = []
     if subs:
-        stats_parts.append(f"📥 {subs:,}")
+        stats_parts.append(f"Подписчики: {subs:,}")
     if favs:
-        stats_parts.append(f"⭐ {favs:,}")
+        stats_parts.append(f"В избранном: {favs:,}")
     if views:
-        stats_parts.append(f"👁 {views:,}")
+        stats_parts.append(f"Просмотры: {views:,}")
     if stats_parts:
-        parts.append(f"📊 {' │ '.join(stats_parts)}")
+        parts.append(" | ".join(stats_parts))
 
     # ── Мета ──
     meta_parts = []
     size = mod.get("size", "")
     if size:
-        meta_parts.append(f"💾 {size}")
+        meta_parts.append(size)
     updated = mod.get("updated", "")
     if updated:
-        meta_parts.append(f"📅 {updated}")
+        meta_parts.append(updated)
+    if category and category != "Мод":
+        meta_parts.append(category)
     if tag_str:
-        meta_parts.append(f"🏷 {tag_str}")
+        meta_parts.append(tag_str)
     if meta_parts:
-        parts.append(" ".join(meta_parts))
+        parts.append(" · ".join(meta_parts))
 
     # ── Ссылка ──
     parts.append("")
-    parts.append(f'🔗 <a href="{mod["url"]}">Steam Workshop</a>')
+    parts.append(f'<a href="{mod["url"]}">Steam Workshop</a>')
 
     text = "\n".join(parts)
 
@@ -618,7 +614,7 @@ def format_mod_message(mod: dict, ai_summary: Optional[str] = None) -> dict:
 
 
 def _escape_html(text: str) -> str:
-    """Экранирует HTML спецсимволы для Telegram."""
+    """Экранирует HTML спецсимволы для Telegram"""
     text = text.replace("&", "&amp;")
     text = text.replace("<", "&lt;")
     text = text.replace(">", "&gt;")
@@ -638,7 +634,7 @@ async def run_workshop_monitor(
     min_subscriptions: int = 100,
     ai_analyze: bool = True,
 ):
-    """Основной цикл монитора Steam Workshop.
+    """Основной цикл монитора Steam Workshop
 
     Контент идёт через модерацию:
       1. Сохраняется в БД как сообщение (source_type='workshop')
@@ -646,14 +642,14 @@ async def run_workshop_monitor(
       3. Публикуется в Telegram ТОЛЬКО после одобрения на панели
     """
     logger.info(
-        "Steam Workshop Monitor запущен (интервал: %d сек, мин. подписчиков: %d)",
+        "Steam Workshop Monitor запущенинтервал: %d сек, мин. подписчиков: %d)",
         check_interval,
         min_subscriptions,
     )
 
     while True:
         try:
-            logger.info("Проверяем Steam Workshop на новые моды...")
+            logger.info("Проверяем Steam Workshop на новые моды..")
             new_mods = await check_for_new_mods(
                 steam_api_key=steam_api_key,
                 min_subscriptions=min_subscriptions,
@@ -667,7 +663,7 @@ async def run_workshop_monitor(
             for mod in new_mods:
                 try:
                     logger.info(
-                        "Обрабатываем мод: %s (ID: %s)", mod["title"], mod["id"]
+                        "Обрабатываем мод %s (ID: %s)", mod["title"], mod["id"]
                     )
 
                     ai_summary = None
@@ -675,14 +671,14 @@ async def run_workshop_monitor(
                         try:
                             ai_summary = await ai_analyzer.analyze_workshop_mod(mod)
                         except Exception as e:
-                            logger.error("AI анализ мода %s не удался: %s", mod["id"], e)
+                            logger.error("AI анализ модаs не удался: %s", mod["id"], e)
                     elif ai_analyze:
                         # Fallback: standalone-анализ без экземпляра анализатора
                         try:
                             from ai_analyzer import analyze_workshop_mod
                             ai_summary = await analyze_workshop_mod(mod)
                         except Exception as e:
-                            logger.error("AI анализ мода %s не удался: %s", mod["id"], e)
+                            logger.error("AI анализ модаs не удался: %s", mod["id"], e)
 
                     msg = format_mod_message(mod, ai_summary)
 
@@ -721,11 +717,11 @@ async def run_workshop_monitor(
                                 )
                                 saved_to_db = True
                                 logger.info(
-                                    "Мод '%s' #%d отправлен на модерацию (type=%s, priority=%s)",
+                                    "Мод%s' #%d отправлен на модерацию (type=%s, priority=%s)",
                                     mod["title"], msg_id, news_type, priority,
                                 )
                         except Exception as e:
-                            logger.error("Ошибка сохранения мода %s в БД: %s", mod["id"], e)
+                            logger.error("Ошибка сохранения модаs в БД: %s", mod["id"], e)
 
                     # Отправляем на веб-панель для модерации
                     if web_panel_url:
@@ -746,18 +742,18 @@ async def run_workshop_monitor(
                                 bot_api_key=web_panel_api_key or None,
                             )
                             if success:
-                                logger.info("Мод '%s' отправлен на веб-панель", mod["title"])
+                                logger.info("Мод%s' отправлен на веб-панель", mod["title"])
                             else:
-                                logger.error("Веб-панель: не удалось отправить мод '%s'", mod["title"])
+                                logger.error("Вебпанель: не удалось отправить мод '%s'", mod["title"])
                         except ImportError:
-                            logger.warning("web_app_integration не найден — модерация через панель недоступна")
+                            logger.warning("web_app_integration не найден модерация через панель недоступна")
                         except Exception as e:
-                            logger.error("Ошибка отправки мода на веб-панель: %s", e)
+                            logger.error("Ошибка отправки мода на вебпанель: %s", e)
                     elif not saved_to_db:
                         # Нет БД и нет веб-панели — fallback: прямой отправ (старое поведение)
                         if telegram_bot:
                             await telegram_bot.send_workshop_post(msg)
-                            logger.info("Мод '%s' опубликован в Telegram (без модерации — нет БД/панели)", mod["title"])
+                            logger.info("Мод%s' опубликован в Telegram (без модерации — нет БД/панели)", mod["title"])
 
                     # Отмечаем как отправленный в state
                     state = _load_state()
@@ -766,34 +762,34 @@ async def run_workshop_monitor(
                         _save_state(state)
 
                 except Exception as e:
-                    logger.error("Ошибка обработки мода %s: %s", mod.get("id", "unknown"), e)
+                    logger.error("Ошибка обработки модаs: %s", mod.get("id", "unknown"), e)
 
                 # Задержка между модами — не пачкой
                 await asyncio.sleep(5)
 
         except Exception as e:
-            logger.error("Ошибка в основном цикле Workshop монитора: %s", e)
+            logger.error("Ошибка в основном цикле Workshop монитора %s", e)
 
-        logger.info("Следующая проверка через %d секунд...", check_interval)
+        logger.info("Следующая проверка черезd секунд...", check_interval)
         await asyncio.sleep(check_interval)
 
 
 # ─── Тестовый запуск ───────────────────────────────────────────────────────────
 
 async def test_fetch():
-    """Тестовая функция для проверки работы монитора."""
+    """Тестовая функция для проверки работы монитора"""
     print("=" * 60)
-    print("🔍 Тест Steam Workshop Monitor")
+    print("Тест Steam Workshop Monitor")
     print("=" * 60)
 
     print("\n📡 Получаем популярные моды DayZ...")
     mods = await fetch_popular_mods(max_mods=5)
 
     if not mods:
-        print("❌ Не удалось получить моды. Проверьте интернет-соединение.")
+        print("Не удалось получить моды. Проверьте интернет-соединение.")
         return
 
-    print(f"✅ Получено {len(mods)} модов\n")
+    print(f"Получено {len(mods)} модов\n")
 
     for i, mod in enumerate(mods, 1):
         print(f"{'─' * 50}")
