@@ -736,6 +736,7 @@ async def run_workshop_monitor(
                             from web_app_integration import send_to_web_panel
                             success = await send_to_web_panel(
                                 news_data={
+                                    "sourceId": "workshop",
                                     "externalId": mod["id"],
                                     "serverName": "Steam Workshop",
                                     "content": mod.get("description", "") or mod.get("title", ""),

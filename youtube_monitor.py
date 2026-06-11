@@ -14,7 +14,6 @@
 
 Зависимости для скачивания:
   - yt-dlp (pip install yt-dlp)
-  - deno (автоустанавливается, нужен для YouTube JS challenges)
   - ffmpeg (для мержа видео+аудио)
 """
 
@@ -644,77 +643,6 @@ async def _fetch_channel_best_short(
 #  Скачивание видео
 # ═════════════════════════════════════════════════════════════════════════════
 
-# Кеш: deno найден / установлен
-_deno_path: str | None = None
-_deno_checked = False
-
-
-def _ensure_deno() -> str | None:
-    """
-    Проверяет/устанавливает deno (нужен yt-dlp для YouTube с 2025+).
-    Возвращает путь к deno или None.
-    """
-    global _deno_path, _deno_checked
-    if _deno_checked:
-        return _deno_path
-    _deno_checked = True
-
-    import shutil
-
-    # 1) Ищем в PATH
-    deno = shutil.which("deno")
-    if deno:
-        _deno_path = deno
-        logger.info("YouTube/download: deno найден -> %s", deno)
-        return deno
-
-    # 2) Стандартные пути
-    for candidate in [
-        os.path.expanduser("~/.deno/bin/deno"),
-        "/usr/local/bin/deno",
-        "/home/linuxbrew/.linuxbrew/bin/deno",
-    ]:
-        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            _deno_path = candidate
-            logger.info("YouTube/download: deno найден -> %s", candidate)
-            return candidate
-
-    # 3) Автоустановка
-    logger.info("YouTube/download: deno не найден, устанавливаю...")
-    try:
-        import subprocess
-        result = subprocess.run(
-            ["sh", "-c", "curl -fsSL https://deno.land/install.sh | sh"],
-            capture_output=True, text=True, timeout=120,
-        )
-        installed = os.path.expanduser("~/.deno/bin/deno")
-        if os.path.isfile(installed):
-            _deno_path = installed
-            logger.info("YouTube/download: deno установлен -> %s", installed)
-            return installed
-        else:
-            logger.warning("YouTube/download: не удалось установить deno")
-    except Exception as e:
-        logger.warning("YouTube/download: ошибка установки deno: %s", e)
-
-    return None
-
-
-def _build_subprocess_env() -> dict:
-    """Строит env для subprocess с deno в PATH."""
-    import shutil
-    env = os.environ.copy()
-
-    deno = _ensure_deno()
-    if deno:
-        deno_dir = os.path.dirname(deno)
-        if deno_dir not in env.get("PATH", ""):
-            env["PATH"] = f"{deno_dir}:{env.get('PATH', '')}"
-
-    # Убеждаемся что bun/node тоже доступны (альтернативные JS runtime для yt-dlp)
-    return env
-
-
 def _build_ytdlp_base_cmd() -> list[str]:
     """Возвращает базовую команду: yt-dlp бинарник если есть, иначе python -m yt_dlp."""
     import shutil
@@ -732,9 +660,7 @@ def _download_ytdlp_sync(
 ) -> str | None:
     """
     Скачивает видео через yt-dlp.
-    - Автоматически обеспечивает deno в PATH (нужен для YouTube)
-    - Пробует несколько player_client по очереди
-    - Использует --print после --merge-output-format для точного пути
+    Пробует несколько player_client по очереди.
     """
     import subprocess
     import shutil
@@ -742,14 +668,12 @@ def _download_ytdlp_sync(
 
     base = _build_ytdlp_base_cmd()
     video_id = url.split("v=")[-1].split("&")[0]
-    env = _build_subprocess_env()
 
     # Общие флаги для ВСЕХ попыток
     common_flags = [
         "-4", "--no-config",
         "--no-playlist",
         "--max-filesize", str(max_filesize),
-        "--remote-components", "ejs:github",
     ]
 
     # Форматы: сначала mp4 720p, потом любой mp4, потом лучший
@@ -786,7 +710,7 @@ def _download_ytdlp_sync(
 
             try:
                 result = subprocess.run(
-                    cmd, capture_output=True, text=True, timeout=180, env=env,
+                    cmd, capture_output=True, text=True, timeout=180,
                 )
                 last_stderr = (result.stderr or "")[:500]
 
@@ -938,6 +862,10 @@ async def check_for_popular_shorts(
         logger.info("YouTube: нет каналов для парсинга (добавьте через GUI)")
         return []
 
+    # Перемешиваем каналы рандомно — чтобы не всегда проверять первые
+    import random
+    random.shuffle(channels)
+
     # Собираем все известные ID (опубликованные + в модерации)
     state = _load_state()
     posted_ids = dict(state.get("posted_ids", {}))
@@ -945,19 +873,24 @@ async def check_for_popular_shorts(
     moderation_ids = {item.get("video_id") for item in moderation_queue if item.get("video_id")}
     known_ids = set(posted_ids.keys()) | moderation_ids
 
-    max_candidates = config.get("youtube_max_per_check", 1)
+    max_per_check = config.get("youtube_max_per_check", 1)
 
     new_videos = []
     start = time.time()
 
     for ch in channels:
+        # Глобальный лимит — не больше max_per_check видео всего
+        if len(new_videos) >= max_per_check:
+            logger.info("YouTube: достигнут лимит %d видео, пропускаем остальные каналы", max_per_check)
+            break
+
         ch_id = ch.get("id", "")
         ch_name = ch.get("name", ch_id)
         if not ch_id:
             continue
 
         try:
-            best = await _fetch_channel_best_short(ch_id, known_ids, max_candidates)
+            best = await _fetch_channel_best_short(ch_id, known_ids, 1)
             if not best:
                 continue
 
@@ -998,13 +931,32 @@ async def check_for_popular_shorts(
                 ai_post = format_video_message(best, category)
                 ai_summary = best.get("title", "")
 
-            # Скачиваем видео СРАЗУ (до модерации)
-            downloads_dir = config.get("images_dir", "downloads")
+            # ═══ Скачиваем видео СРАЗУ ═══
+            # Если не скачалось — НИКУДА не отправляем (ни панель, ни бот, ни модерацию)
+            downloads_dir = "downloads"
             downloaded_file = await download_short(best, downloads_dir=downloads_dir)
+
+            if not downloaded_file or not os.path.isfile(downloaded_file):
+                logger.error(
+                    "YouTube: ПРОПУСК %s — видео НЕ скачалось, не отправляю в панель/бот",
+                    video_id[:12],
+                )
+                # Сохраняем ID чтобы не пытаться каждый цикл
+                known_ids.add(video_id)
+                posted_ids[video_id] = {
+                    "title": best.get("title", "")[:200],
+                    "timestamp": time.time(),
+                    "status": "download_failed",
+                    "channel": ch_name,
+                }
+                continue  # следующий канал
+
+            # ═══ Видео скачано — отправляем в модерацию, панель, бот ═══
+            logger.info("YouTube: видео %s скачано успешно, отправляю на модерацию", video_id[:12])
 
             # Добавляем в локальную очередь модерации (с путём к файлу)
             _add_to_moderation(best, ai_post, ai_summary, category, priority,
-                              downloaded_file=downloaded_file or "")
+                              downloaded_file=downloaded_file)
 
             # Отправляем на веб-панель для модерации
             web_panel_url = config.get("web_panel_url", "")
@@ -1013,8 +965,8 @@ async def check_for_popular_shorts(
                 try:
                     from web_app_integration import send_to_web_panel
 
-                    thumbnail = best.get("thumbnail", "")
-                    images = [thumbnail] if thumbnail else []
+                    # НЕ отправляем thumbnail как фото — это видео, не картинка
+                    youtube_url = best.get("url", "")
 
                     success = await send_to_web_panel(
                         news_data={
@@ -1027,8 +979,8 @@ async def check_for_popular_shorts(
                             "formattedPost": ai_post,
                             "newsType": category,
                             "priority": priority,
-                            "images": images,
-                            "links": [],
+                            "images": [],
+                            "links": [youtube_url] if youtube_url else [],
                             "sourceType": "youtube",
                         },
                         web_app_url=web_panel_url,
@@ -1063,27 +1015,16 @@ async def check_for_popular_shorts(
                         f"⏱ {_format_duration(dur)}  👁 {_format_views(views)}"
                     )
                     async with httpx.AsyncClient(timeout=30) as client:
-                        if downloaded_file and os.path.isfile(downloaded_file):
-                            with open(downloaded_file, "rb") as vf:
-                                await client.post(
-                                    f"https://api.telegram.org/bot{bot_token}/sendVideo",
-                                    data={
-                                        "chat_id": int(notify_chat_id),
-                                        "caption": text,
-                                        "parse_mode": "HTML",
-                                        "supports_streaming": True,
-                                    },
-                                    files={"video": vf},
-                                )
-                        else:
+                        with open(downloaded_file, "rb") as vf:
                             await client.post(
-                                f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                                json={
+                                f"https://api.telegram.org/bot{bot_token}/sendVideo",
+                                data={
                                     "chat_id": int(notify_chat_id),
-                                    "text": text + "\n\n⚠️ Видео не скачалось",
+                                    "caption": text,
                                     "parse_mode": "HTML",
-                                    "disable_web_page_preview": True,
+                                    "supports_streaming": True,
                                 },
+                                files={"video": vf},
                             )
             except Exception as notify_err:
                 logger.debug("YouTube: не удалось отправить уведомление: %s", notify_err)
@@ -1145,7 +1086,7 @@ async def _process_approved_videos(config: dict, publisher=None) -> None:
             logger.info("YouTube: использую уже скачанный файл %s: %s", video_id, filepath)
         else:
             logger.info("YouTube: обрабатываю одобрение для %s — скачиваю...", video_id)
-            downloads_dir = config.get("images_dir", "downloads")
+            downloads_dir = "downloads"
             filepath = await download_short(video_data, downloads_dir=downloads_dir)
 
         if filepath and publisher and ai_post:

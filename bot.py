@@ -528,6 +528,7 @@ class DayZNewsMonitor:
                             try:
                                 success = await send_to_web_panel(
                                     news_data={
+                                        "sourceId": source_type or "discord",
                                         "externalId": str(msg_id),
                                         "serverName": result.get("server_name", "") or author,
                                         "content": text,

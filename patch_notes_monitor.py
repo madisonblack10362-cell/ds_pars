@@ -511,6 +511,7 @@ async def run_patch_monitor(
                             from web_app_integration import send_to_web_panel
                             success = await send_to_web_panel(
                                 news_data={
+                                    "sourceId": "patchnotes",
                                     "externalId": item["id"],
                                     "serverName": item.get("source", "Steam News"),
                                     "content": item.get("content", "") or item.get("summary", "") or item.get("title", ""),

@@ -1,0 +1,1029 @@
+     1→'use client'
+     2→
+     3→import { sanitizeTelegramHtml } from '@/lib/sanitize'
+     4→import { useState, useEffect, useMemo, useRef } from 'react'
+     5→import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+     6→import { Button } from '@/components/ui/button'
+     7→import { Input } from '@/components/ui/input'
+     8→import { Label } from '@/components/ui/label'
+     9→import { Textarea } from '@/components/ui/textarea'
+    10→import { Badge } from '@/components/ui/badge'
+    11→import { Skeleton } from '@/components/ui/skeleton'
+    12→import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from '@/components/ui/dialog'
+    13→import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
+    14→import { Clock, Loader2, Save, CalendarClock, CheckCircle2, MinusCircle, Timer, Zap, TrendingUp, Inbox, MessageSquare, Plus, Trash2, SkipForward, ChevronLeft, ChevronRight, Pencil, CheckCircle, ImageIcon, Video, X, Upload, Eye, EyeOff, XCircle } from 'lucide-react'
+    15→import { useToast } from '@/hooks/use-toast'
+    16→
+    17→interface QueueItem {
+    18→  id: string
+    19→  title: string
+    20→  priority: string
+    21→  newsType: string
+    22→  formattedPost: string
+    23→  content: string
+    24→  images: string
+    25→  links: string
+    26→  serverName: string
+    27→  scheduledAt?: string
+    28→}
+    29→
+    30→interface SlotInfo {
+    31→  slot: number
+    32→  key: string
+    33→  time: string
+    34→  queueCount: number
+    35→  status: 'waiting' | 'published' | 'empty' | 'skipped'
+    36→  queue: QueueItem[]
+    37→}
+    38→
+    39→interface ScheduleData {
+    40→  date: string
+    41→  isToday: boolean
+    42→  slots: SlotInfo[]
+    43→  totalItems: number
+    44→}
+    45→
+    46→// ─── Media Gallery Component (from moderation page) ───
+    47→function MediaGallery({
+    48→  images,
+    49→  onRemove,
+    50→  onAdd,
+    51→  editable = false,
+    52→}: {
+    53→  images: string[]
+    54→  onRemove: (url: string) => void
+    55→  onAdd: (url: string) => void
+    56→  editable?: boolean
+    57→}) {
+    58→  const [newUrl, setNewUrl] = useState('')
+    59→  const fileInputRef = useRef<HTMLInputElement>(null)
+    60→  const [uploading, setUploading] = useState(false)
+    61→
+    62→  const handleAddUrl = () => {
+    63→    const url = newUrl.trim()
+    64→    if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+    65→      onAdd(url)
+    66→      setNewUrl('')
+    67→    }
+    68→  }
+    69→
+    70→  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    71→    const file = e.target.files?.[0]
+    72→    if (!file) return
+    73→    setUploading(true)
+    74→    try {
+    75→      const reader = new FileReader()
+    76→      reader.onload = () => {
+    77→        const dataUrl = reader.result as string
+    78→        onAdd(dataUrl)
+    79→        setUploading(false)
+    80→      }
+    81→      reader.onerror = () => setUploading(false)
+    82→      reader.readAsDataURL(file)
+    83→    } catch {
+    84→      setUploading(false)
+    85→    }
+    86→    if (fileInputRef.current) fileInputRef.current.value = ''
+    87→  }
+    88→
+    89→  if (images.length === 0 && !editable) return null
+    90→
+    91→  return (
+    92→    <div className="space-y-2">
+    93→      {images.length > 0 && (
+    94→        <div className="flex flex-wrap gap-2">
+    95→          {images.map((url, idx) => (
+    96→            <div key={idx} className="relative group rounded-lg overflow-hidden border border-[#2d3a54]">
+    97→              <img
+    98→                src={url}
+    99→                alt={`Медиа ${idx + 1}`}
+   100→                className="w-24 h-24 object-cover"
+   101→                onError={(e) => {
+   102→                  (e.target as HTMLImageElement).style.display = 'none'
+   103→                  const parent = (e.target as HTMLImageElement).parentElement
+   104→                  if (parent) {
+   105→                    parent.innerHTML = '<div class="w-24 h-24 flex items-center justify-center bg-[#2a3555] text-muted-foreground text-xs">Ошибка</div>'
+   106→                  }
+   107→                }}
+   108→              />
+   109→              {editable && (
+   110→                <button
+   111→                  onClick={() => onRemove(url)}
+   112→                  className="absolute top-1 right-1 w-5 h-5 rounded-full bg-red-500/80 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+   113→                >
+   114→                  <X className="w-3 h-3 text-white" />
+   115→                </button>
+   116→              )}
+   117→              {url.startsWith('data:') && (
+   118→                <Badge variant="outline" className="absolute bottom-1 left-1 text-[9px] py-0 px-1 bg-black/60 border-0 text-white/80">
+   119→                  {url.startsWith('data:video') ? (
+   120→                    <><Video className="w-2.5 h-2.5 mr-0.5" />Видео</>
+   121→                  ) : (
+   122→                    <><ImageIcon className="w-2.5 h-2.5 mr-0.5" />Фото</>
+   123→                  )}
+   124→                </Badge>
+   125→              )}
+   126→            </div>
+   127→          ))}
+   128→        </div>
+   129→      )}
+   130→      {editable && (
+   131→        <div className="space-y-2">
+   132→          <div className="flex gap-2">
+   133→            <Input
+   134→              value={newUrl}
+   135→              onChange={(e) => setNewUrl(e.target.value)}
+   136→              placeholder="URL изображения или видео..."
+   137→              className="bg-secondary border-border text-foreground text-sm h-8"
+   138→              onKeyDown={(e) => e.key === 'Enter' && handleAddUrl()}
+   139→            />
+   140→            <Button
+   141→              size="sm"
+   142→              variant="outline"
+   143→              className="border-border text-muted-foreground hover:text-foreground h-8 px-3"
+   144→              onClick={handleAddUrl}
+   145→              disabled={!newUrl.trim()}
+   146→            >
+   147→              <Plus className="w-3.5 h-3.5" />
+   148→            </Button>
+   149→          </div>
+   150→          <div className="flex items-center gap-3">
+   151→            <input
+   152→              ref={fileInputRef}
+   153→              type="file"
+   154→              accept="image/*,video/mp4,video/webm"
+   155→              className="hidden"
+   156→              onChange={handleFileUpload}
+   157→            />
+   158→            <Button
+   159→              size="sm"
+   160→              variant="outline"
+   161→              className="border-border text-muted-foreground hover:text-foreground h-8"
+   162→              onClick={() => fileInputRef.current?.click()}
+   163→              disabled={uploading}
+   164→            >
+   165→              {uploading ? (
+   166→                <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+   167→              ) : (
+   168→                <Upload className="w-3.5 h-3.5 mr-1.5" />
+   169→              )}
+   170→              Загрузить файл
+   171→            </Button>
+   172→            <span className="text-[11px] text-muted-foreground">Фото (JPG, PNG, WebP) или видео (MP4, WebP)</span>
+   173→          </div>
+   174→        </div>
+   175→      )}
+   176→    </div>
+   177→  )
+   178→}
+   179→
+   180→const ACCENT = '#58a6ff'
+   181→const ACCENT_DARK = '#3a8ae0'
+   182→
+   183→const SLOT_COLORS = [
+   184→  '#58a6ff', '#8b5cf6', '#06b6d4', '#10b981',
+   185→  '#f59e0b', '#ef4444', '#ec4899', '#6366f1',
+   186→  '#14b8a6', '#f97316', '#84cc16', '#a855f7',
+   187→  '#0ea5e9', '#22c55e', '#eab308', '#d946ef',
+   188→  '#fb923c', '#38bdf8', '#4ade80', '#f472b6',
+   189→]
+   190→
+   191→// ─── Telegram HTML → rich HTML ───
+   192→function telegramHtmlToRich(html: string): string {
+   193→  return html
+   194→    .replace(/([^>\n])\n(?![<])/g, '$1<br/>')
+   195→    .replace(/\n(?!<)/g, '<br/>')
+   196→    .replace(/<br\s*\/>/gi, '<br/>')
+   197→    .replace(/<br\s*>/gi, '<br/>')
+   198→    .replace(/<\/p>/gi, '<br/>')
+   199→    .replace(/<p[^>]*>/gi, '')
+   200→    .replace(/<\/div>/gi, '<br/>')
+   201→    .replace(/<div[^>]*>/gi, '')
+   202→    .replace(/<\/li>/gi, '<br/>')
+   203→    .replace(/<li[^>]*>/gi, '<span style="display:inline-block;margin-left:8px">•</span> ')
+   204→    .replace(/<ul[^>]*>|<ol[^>]*>/gi, '')
+   205→    .replace(/<\/ul>|<\/ol>/gi, '<br/>')
+   206→    .replace(/<blockquote>/gi, '<blockquote>')
+   207→    .replace(/<\/blockquote>/gi, '</blockquote><br/>')
+   208→    .replace(/(<br\s*\/>){3,}/g, '<br/><br/>')
+   209→  return sanitizeTelegramHtml(html)
+   210→}
+   211→
+   212→// ─── Извлекает YouTube video ID из URL ───
+   213→function getYoutubeVideoId(url: string): string | null {
+   214→  const match = url.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/)
+   215→  return match ? match[1] : null
+   216→}
+   217→
+   218→// ─── Mini Telegram Preview for schedule cards (FIXED: images don't stretch) ───
+   219→function MiniTelegramPreview({ item }: { item: QueueItem }) {
+   220→  const previewText = item.formattedPost || item.content || item.title || 'Без текста'
+   221→  const richHtml = telegramHtmlToRich(previewText)
+   222→
+   223→  let images: string[] = []
+   224→  try { images = JSON.parse(item.images) } catch { images = [] }
+   225→  const displayImage = images[0] || null
+   226→
+   227→  // Проверяем есть ли YouTube ссылка в links или тексте
+   228→  let links: string[] = []
+   229→  try { links = JSON.parse(item.links || '[]') } catch { links = [] }
+   230→  let youtubeId: string | null = null
+   231→  for (const link of links) {
+   232→    youtubeId = getYoutubeVideoId(link)
+   233→    if (youtubeId) break
+   234→  }
+   235→  if (!youtubeId) {
+   236→    youtubeId = getYoutubeVideoId(previewText)
+   237→  }
+   238→
+   239→  return (
+   240→    <div className="rounded-xl overflow-hidden border border-[#2d3a54]/80 shadow-md shadow-black/20 w-full" style={{minWidth:0}}>
+   241→      {/* Channel header */}
+   242→      <div className="bg-[#2b5278] px-3 py-1.5 flex items-center gap-2" style={{minWidth:0}}>
+   243→        <div className="w-5 h-5 rounded-full bg-[#58a6ff]/20 flex items-center justify-center border border-[#58a6ff]/30">
+   244→          <MessageSquare className="w-2.5 h-2.5 text-[#58a6ff]" />
+   245→        </div>
+   246→        <span className="text-[11px] font-semibold text-white/90">DayZ Monitor</span>
+   247→        <span className="text-[10px] text-white/40">канал</span>
+   248→      </div>
+   249→
+   250→      {/* Message area — fixed height with scroll */}
+   251→      <div className="bg-[#0e1621] px-3 pb-2.5 pt-1 max-h-[180px] overflow-y-auto" style={{minWidth:0,overflowX:'hidden'}}>
+   252→        {youtubeId ? (
+   253→          <a
+   254→            href={`https://www.youtube.com/watch?v=${youtubeId}`}
+   255→            target="_blank"
+   256→            rel="noopener noreferrer"
+   257→            className="mb-1.5 overflow-hidden rounded-md bg-[#1a2733] block relative group"
+   258→          >
+   259→            <img
+   260→              src={`https://img.youtube.com/vi/${youtubeId}/hqdefault.jpg`}
+   261→              alt="YouTube видео"
+   262→              className="block w-full h-auto object-cover"
+   263→              style={{maxHeight:100,maxWidth:'100%'}}
+   264→              loading="lazy"
+   265→            />
+   266→            <div className="absolute inset-0 flex items-center justify-center bg-black/30 group-hover:bg-black/50 transition-colors">
+   267→              <div className="w-10 h-10 rounded-full bg-red-600/90 flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform">
+   268→                <svg width="18" height="18" viewBox="0 0 24 24" fill="white">
+   269→                  <path d="M8 5v14l11-7z"/>
+   270→                </svg>
+   271→              </div>
+   272→            </div>
+   273→            <div className="absolute bottom-1 right-1 bg-black/70 text-white text-[9px] px-1.5 py-0.5 rounded">
+   274→              YouTube
+   275→            </div>
+   276→          </a>
+   277→        ) : displayImage ? (
+   278→          <div className="mb-1.5 overflow-hidden rounded-md bg-[#1a2733]">
+   279→            <img
+   280→              src={displayImage}
+   281→              alt=""
+   282→              className="block w-full h-auto object-cover"
+   283→              style={{maxHeight:100,maxWidth:'100%'}}
+   284→              loading="lazy"
+   285→              referrerPolicy="no-referrer"
+   286→              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+   287→            />
+   288→          </div>
+   289→        ) : null}
+   290→        <div className="bg-[#182533] rounded-xl rounded-tl-sm px-2.5 py-2 break-words" style={{maxWidth:'100%',overflowWrap:'break-word',wordBreak:'break-word'}}>
+   291→          <div
+   292→            className="text-[13px] text-[#f5f5f5] leading-[1.45] schedule-tg-content"
+   293→            style={{overflowWrap:'break-word',wordBreak:'break-word'}}
+   294→            dangerouslySetInnerHTML={{ __html: richHtml }}
+   295→          />
+   296→        </div>
+   297→      </div>
+   298→    </div>
+   299→  )
+   300→}
+   301→
+   302→// ─── Priority dot ───
+   303→function PriorityDot({ priority }: { priority: string }) {
+   304→  const config: Record<string, { color: string; label: string }> = {
+   305→    high: { color: '#ef4444', label: 'HIGH' },
+   306→    medium: { color: '#f59e0b', label: 'MED' },
+   307→    low: { color: '#71717a', label: 'LOW' },
+   308→  }
+   309→  const c = config[priority] || config.low
+   310→  return (
+   311→    <div className="flex items-center gap-1.5">
+   312→      <div
+   313→        className="w-2 h-2 rounded-full"
+   314→        style={{ backgroundColor: c.color, boxShadow: priority !== 'low' ? `0 0 6px ${c.color}66` : 'none' }}
+   315→      />
+   316→      <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: c.color }}>
+   317→        {c.label}
+   318→      </span>
+   319→    </div>
+   320→  )
+   321→}
+   322→
+   323→// ─── News type label ───
+   324→function NewsTypeLabel({ type }: { type: string }) {
+   325→  const labels: Record<string, string> = {
+   326→    wipe: 'Вайп',
+   327→    update: 'Обновление',
+   328→    event: 'Событие',
+   329→    maintenance: 'Тех. работы',
+   330→    patch: 'Патч',
+   331→    other: 'Другое',
+   332→  }
+   333→  return <span className="text-[10px] text-muted-foreground">{labels[type] || type || '—'}</span>
+   334→}
+   335→
+   336→// ─── Generate 7 days (today + 6 days) ───
+   337→function getWeekDays(): { date: string; label: string; shortLabel: string; isToday: boolean }[] {
+   338→  const days: { date: string; label: string; shortLabel: string; isToday: boolean }[] = []
+   339→  const dayNames = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб']
+   340→  const now = new Date()
+   341→
+   342→  for (let i = 0; i < 7; i++) {
+   343→    const d = new Date(now)
+   344→    d.setDate(d.getDate() + i)
+   345→
+   346→    const yyyy = d.getFullYear()
+   347→    const mm = String(d.getMonth() + 1).padStart(2, '0')
+   348→    const dd = String(d.getDate()).padStart(2, '0')
+   349→    const dateStr = `${yyyy}-${mm}-${dd}`
+   350→
+   351→    const dayName = dayNames[d.getDay()]
+   352→    const monthNames = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']
+   353→
+   354→    if (i === 0) {
+   355→      days.push({ date: dateStr, label: 'Сегодня', shortLabel: 'Сегодня', isToday: true })
+   356→    } else if (i === 1) {
+   357→      days.push({ date: dateStr, label: 'Завтра', shortLabel: 'Завтра', isToday: false })
+   358→    } else {
+   359→      days.push({
+   360→        date: dateStr,
+   361→        label: `${dayName}, ${d.getDate()} ${monthNames[d.getMonth()]}`,
+   362→        shortLabel: `${dayName}`,
+   363→        isToday: false,
+   364→      })
+   365→    }
+   366→  }
+   367→  return days
+   368→}
+   369→
+   370→export default function SchedulePage() {
+   371→  const [schedule, setSchedule] = useState<ScheduleData | null>(null)
+   372→  const [editTimes, setEditTimes] = useState<Record<string, string>>({})
+   373→  const [loading, setLoading] = useState(true)
+   374→  const [saving, setSaving] = useState(false)
+   375→  const [editDialogOpen, setEditDialogOpen] = useState(false)
+   376→  const [addDialogOpen, setAddDialogOpen] = useState(false)
+   377→  const [newSlotTime, setNewSlotTime] = useState('')
+   378→  const [addingSlot, setAddingSlot] = useState(false)
+   379→  const [deleteKey, setDeleteKey] = useState<string | null>(null)
+   380→  const [deletingSlot, setDeletingSlot] = useState(false)
+   381→  const [selectedDayIndex, setSelectedDayIndex] = useState(0)
+   382→  const [editItem, setEditItem] = useState<QueueItem | null>(null)
+   383→  const [editText, setEditText] = useState('')
+   384→  const [editImages, setEditImages] = useState<string[]>([])
+   385→  const [editMediaOpen, setEditMediaOpen] = useState(false)
+   386→  const [editSaving, setEditSaving] = useState(false)
+   387→  const { toast } = useToast()
+   388→
+   389→  const weekDays = useMemo(() => getWeekDays(), [])
+   390→
+   391→  const fetchSchedule = async (signal?: AbortSignal) => {
+   392→    setLoading(true)
+   393→    try {
+   394→      const dateStr = weekDays[selectedDayIndex].date
+   395→      const res = await fetch(`/api/schedule?date=${dateStr}&_t=${Date.now()}`, { signal })
+   396→      if (res.ok) {
+   397→        const data = await res.json()
+   398→        setSchedule(data)
+   399→        const times: Record<string, string> = {}
+   400→        for (const slot of data.slots) {
+   401→          times[slot.key] = slot.time
+   402→        }
+   403→        setEditTimes(times)
+   404→      }
+   405→    } catch (err) {
+   406→      if (err instanceof DOMException && err.name === 'AbortError') return
+   407→      console.error('Failed to fetch schedule:', err)
+   408→    } finally {
+   409→      setLoading(false)
+   410→    }
+   411→  }
+   412→
+   413→  useEffect(() => {
+   414→    const controller = new AbortController()
+   415→    fetchSchedule(controller.signal)
+   416→    return () => controller.abort()
+   417→    // eslint-disable-next-line react-hooks/exhaustive-deps
+   418→  }, [selectedDayIndex])
+   419→
+   420→  const handleDayChange = (index: number) => {
+   421→    setSelectedDayIndex(index)
+   422→  }
+   423→
+   424→  const handlePrevDay = () => {
+   425→    if (selectedDayIndex > 0) setSelectedDayIndex(selectedDayIndex - 1)
+   426→  }
+   427→
+   428→  const handleNextDay = () => {
+   429→    if (selectedDayIndex < weekDays.length - 1) setSelectedDayIndex(selectedDayIndex + 1)
+   430→  }
+   431→
+   432→  const handleSave = async () => {
+   433→    setSaving(true)
+   434→    try {
+   435→      const res = await fetch('/api/schedule', {
+   436→        method: 'PUT',
+   437→        headers: { 'Content-Type': 'application/json' },
+   438→        body: JSON.stringify(editTimes),
+   439→      })
+   440→      if (res.ok) {
+   441→        toast({ title: 'Сохранено', description: 'Расписание успешно обновлено' })
+   442→        setEditDialogOpen(false)
+   443→        fetchSchedule()
+   444→      } else {
+   445→        const data = await res.json()
+   446→        toast({ title: 'Ошибка', description: data.error || 'Не удалось сохранить', variant: 'destructive' })
+   447→      }
+   448→    } catch {
+   449→      toast({ title: 'Ошибка', description: 'Не удалось сохранить расписание', variant: 'destructive' })
+   450→    } finally {
+   451→      setSaving(false)
+   452→    }
+   453→  }
+   454→
+   455→  const handleAddSlot = async () => {
+   456→    if (!newSlotTime) return
+   457→    setAddingSlot(true)
+   458→    try {
+   459→      const res = await fetch('/api/schedule', {
+   460→        method: 'POST',
+   461→        headers: { 'Content-Type': 'application/json' },
+   462→        body: JSON.stringify({ time: newSlotTime }),
+   463→      })
+   464→      if (res.ok) {
+   465→        toast({ title: 'Слот добавлен', description: `Новый слот ${newSlotTime} создан` })
+   466→        setAddDialogOpen(false)
+   467→        setNewSlotTime('')
+   468→        fetchSchedule()
+   469→      } else {
+   470→        const data = await res.json()
+   471→        toast({ title: 'Ошибка', description: data.error || 'Не удалось добавить слот', variant: 'destructive' })
+   472→      }
+   473→    } catch {
+   474→      toast({ title: 'Ошибка', description: 'Не удалось добавить слот', variant: 'destructive' })
+   475→    } finally {
+   476→      setAddingSlot(false)
+   477→    }
+   478→  }
+   479→
+   480→  const handleDeleteSlot = async () => {
+   481→    if (!deleteKey) return
+   482→    setDeletingSlot(true)
+   483→    try {
+   484→      const res = await fetch('/api/schedule', {
+   485→        method: 'DELETE',
+   486→        headers: { 'Content-Type': 'application/json' },
+   487→        body: JSON.stringify({ key: deleteKey }),
+   488→      })
+   489→      if (res.ok) {
+   490→        const data = await res.json()
+   491→        toast({
+   492→          title: 'Слот удалён',
+   493→          description: data.rescheduled > 0
+   494→            ? `${data.rescheduled} новостей перенесено на другой слот`
+   495→            : 'Слот успешно удалён',
+   496→        })
+   497→        setDeleteKey(null)
+   498→        fetchSchedule()
+   499→      } else {
+   500→        const data = await res.json()
+   501→        toast({ title: 'Ошибка', description: data.error || 'Не удалось удалить слот', variant: 'destructive' })
+   502→      }
+   503→    } catch {
+   504→      toast({ title: 'Ошибка', description: 'Не удалось удалить слот', variant: 'destructive' })
+   505→    } finally {
+   506→      setDeletingSlot(false)
+   507→    }
+   508→  }
+   509→
+   510→  const handleRemoveFromQueue = async (itemId: string) => {
+   511→    try {
+   512→      const res = await fetch(`/api/news?id=${itemId}`, { method: 'DELETE' })
+   513→      if (res.ok) {
+   514→        toast({ title: 'Удалено', description: 'Новость удалена из очереди' })
+   515→        fetchSchedule()
+   516→      } else {
+   517→        toast({ title: 'Ошибка', description: 'Не удалось удалить', variant: 'destructive' })
+   518→      }
+   519→    } catch {
+   520→      toast({ title: 'Ошибка', description: 'Не удалось удалить', variant: 'destructive' })
+   521→    }
+   522→  }
+   523→
+   524→  const openEditDialog = (item: QueueItem) => {
+   525→    setEditItem(item)
+   526→    setEditText(item.formattedPost || item.content || item.title || '')
+   527→    try { setEditImages(JSON.parse(item.images || '[]')) } catch { setEditImages([]) }
+   528→    setEditMediaOpen(false)
+   529→  }
+   530→
+   531→  const handleSaveEdit = async () => {
+   532→    if (!editItem) return
+   533→    setEditSaving(true)
+   534→    try {
+   535→      const res = await fetch('/api/publish-queue', {
+   536→        method: 'PUT',
+   537→        headers: { 'Content-Type': 'application/json' },
+   538→        body: JSON.stringify({ news_id: editItem.id, formatted_post: editText, images: editImages }),
+   539→      })
+   540→      if (res.ok) {
+   541→        toast({ title: 'Сохранено', description: 'Новость обновлена' })
+   542→        setEditItem(null)
+   543→        fetchSchedule()
+   544→      } else {
+   545→        const data = await res.json()
+   546→        toast({ title: 'Ошибка', description: data.error || 'Не удалось сохранить', variant: 'destructive' })
+   547→      }
+   548→    } catch {
+   549→      toast({ title: 'Ошибка', description: 'Не удалось сохранить', variant: 'destructive' })
+   550→    } finally {
+   551→      setEditSaving(false)
+   552→    }
+   553→  }
+   554→
+   555→  const getStatusBadge = (status: string, count: number) => {
+   556→    switch (status) {
+   557→      case 'waiting':
+   558→        return (
+   559→          <Badge className="gap-1.5 bg-amber-500/10 text-amber-400 border-amber-500/25 hover:bg-amber-500/15 px-2.5 py-0.5 font-medium">
+   560→            <span className="relative flex h-2 w-2">
+   561→              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+   562→              <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-400" />
+   563→            </span>
+   564→            Ожидание ({count})
+   565→          </Badge>
+   566→        )
+   567→      case 'published':
+   568→        return (
+   569→          <Badge className="gap-1.5 bg-emerald-500/10 text-emerald-400 border-emerald-500/25 hover:bg-emerald-500/15 px-2.5 py-0.5 font-medium">
+   570→            <CheckCircle2 className="w-3.5 h-3.5" />
+   571→            Опубликовано
+   572→          </Badge>
+   573→        )
+   574→      case 'empty':
+   575→        return (
+   576→          <Badge className="gap-1.5 bg-[#58a6ff]/8 text-[#79c0ff] border-[#58a6ff]/20 hover:bg-[#58a6ff]/12 px-2.5 py-0.5 font-medium">
+   577→            <span className="inline-flex rounded-full h-2 w-2 bg-[#58a6ff]/60" />
+   578→            Пусто
+   579→          </Badge>
+   580→        )
+   581→      case 'skipped':
+   582→        return (
+   583→          <Badge className="gap-1.5 bg-violet-500/10 text-violet-400 border-violet-500/25 hover:bg-violet-500/15 px-2.5 py-0.5 font-medium">
+   584→            <SkipForward className="w-3.5 h-3.5" />
+   585→            Без публикаций
+   586→          </Badge>
+   587→        )
+   588→      default:
+   589→        return null
+   590→    }
+   591→  }
+   592→
+   593→  const getSlotColor = (index: number) => SLOT_COLORS[index % SLOT_COLORS.length]
+   594→
+   595→  const getSlotBg = (index: number) => {
+   596→    const hex = SLOT_COLORS[index % SLOT_COLORS.length]
+   597→    const r = parseInt(hex.slice(1, 3), 16)
+   598→    const g = parseInt(hex.slice(3, 5), 16)
+   599→    const b = parseInt(hex.slice(5, 7), 16)
+   600→    return `rgba(${r}, ${g}, ${b}, 0.08)`
+   601→  }
+   602→
+   603→  const currentDay = weekDays[selectedDayIndex]
+   604→
+   605→  return (
+   606→    <div className="space-y-6">
+   607→      {/* Header */}
+   608→      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+   609→        <div className="space-y-1">
+   610→          <div className="flex items-center gap-3">
+   611→            <div
+   612→              className="w-10 h-10 rounded-xl flex items-center justify-center"
+   613→              style={{ background: `linear-gradient(135deg, ${ACCENT}20, ${ACCENT}05)` }}
+   614→            >
+   615→              <CalendarClock className="w-5 h-5" style={{ color: ACCENT }} />
+   616→            </div>
+   617→            <div>
+   618→              <h1 className="text-2xl font-bold text-foreground tracking-tight">Расписание публикаций</h1>
+   619→              <p className="text-muted-foreground text-sm">Управление слотами автопубликации по дням</p>
+   620→            </div>
+   621→          </div>
+   622→        </div>
+   623→        <div className="flex items-center gap-2">
+   624→          <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
+   625→            <DialogTrigger asChild>
+   626→              <Button variant="outline" className="gap-2 border-[#2d3a54] text-[#8899aa] hover:text-foreground hover:border-[#58a6ff]/40">
+   627→                <Plus className="w-4 h-4" />
+   628→                Добавить слот
+   629→              </Button>
+   630→            </DialogTrigger>
+   631→            <DialogContent className="bg-card border-border">
+   632→              <DialogHeader>
+   633→                <DialogTitle className="text-foreground">Новый слот</DialogTitle>
+   634→                <DialogDescription className="text-muted-foreground">
+   635→                  Укажите время для нового слота публикации
+   636→                </DialogDescription>
+   637→              </DialogHeader>
+   638→              <div className="py-4">
+   639→                <Label className="text-foreground mb-2 block">Время</Label>
+   640→                <Input
+   641→                  type="time"
+   642→                  value={newSlotTime}
+   643→                  onChange={(e) => setNewSlotTime(e.target.value)}
+   644→                  className="bg-secondary border-border text-foreground w-40"
+   645→                />
+   646→              </div>
+   647→              <DialogFooter>
+   648→                <Button variant="outline" onClick={() => { setAddDialogOpen(false); setNewSlotTime('') }} className="border-border text-muted-foreground hover:text-foreground">
+   649→                  Отмена
+   650→                </Button>
+   651→                <Button
+   652→                  className="gap-2 text-primary-foreground font-medium"
+   653→                  style={{ background: `linear-gradient(135deg, ${ACCENT}, ${ACCENT_DARK})` }}
+   654→                  onClick={handleAddSlot}
+   655→                  disabled={addingSlot || !newSlotTime}
+   656→                >
+   657→                  {addingSlot ? <><Loader2 className="w-4 h-4 animate-spin" /> Добавление...</> : <><Plus className="w-4 h-4" /> Добавить</>}
+   658→                </Button>
+   659→              </DialogFooter>
+   660→            </DialogContent>
+   661→          </Dialog>
+   662→
+   663→          <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
+   664→            <DialogTrigger asChild>
+   665→              <Button
+   666→                className="gap-2 text-primary-foreground font-medium shadow-lg shadow-[#58a6ff]/20 hover:shadow-[#58a6ff]/30 transition-all duration-200"
+   667→                style={{ background: `linear-gradient(135deg, ${ACCENT}, ${ACCENT_DARK})` }}
+   668→              >
+   669→                <Clock className="w-4 h-4" />
+   670→                Изменить расписание
+   671→              </Button>
+   672→            </DialogTrigger>
+   673→            <DialogContent className="bg-card border-border max-h-[80vh] overflow-y-auto">
+   674→              <DialogHeader>
+   675→                <DialogTitle className="text-foreground">Настройка слотов</DialogTitle>
+   676→                <DialogDescription className="text-muted-foreground">
+   677→                  Укажите время публикаций. Формат: ЧЧ:ММ
+   678→                </DialogDescription>
+   679→              </DialogHeader>
+   680→              <div className="space-y-4 py-4">
+   681→                {schedule?.slots.map((slot) => (
+   682→                  <div key={slot.key} className="flex items-center gap-4">
+   683→                    <Label className="text-foreground min-w-[80px]">Слот {slot.slot}</Label>
+   684→                    <Input
+   685→                      type="time"
+   686→                      value={editTimes[slot.key] || slot.time}
+   687→                      onChange={(e) => setEditTimes((prev) => ({ ...prev, [slot.key]: e.target.value }))}
+   688→                      className="bg-secondary border-border text-foreground w-32"
+   689→                    />
+   690→                  </div>
+   691→                ))}
+   692→              </div>
+   693→              <DialogFooter>
+   694→                <Button variant="outline" onClick={() => setEditDialogOpen(false)} className="border-border text-muted-foreground hover:text-foreground">
+   695→                  Отмена
+   696→                </Button>
+   697→                <Button
+   698→                  className="gap-2 text-primary-foreground font-medium"
+   699→                  style={{ background: `linear-gradient(135deg, ${ACCENT}, ${ACCENT_DARK})` }}
+   700→                  onClick={handleSave}
+   701→                  disabled={saving}
+   702→                >
+   703→                  {saving ? <><Loader2 className="w-4 h-4 animate-spin" /> Сохранение...</> : <><Save className="w-4 h-4" /> Сохранить</>}
+   704→                </Button>
+   705→              </DialogFooter>
+   706→            </DialogContent>
+   707→          </Dialog>
+   708→        </div>
+   709→      </div>
+   710→
+   711→      {/* Week day selector */}
+   712→      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none" style={{maxWidth:'100%', WebkitOverflowScrolling:'touch'}}>
+   713→        <Button
+   714→          variant="ghost"
+   715→          size="icon"
+   716→          className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
+   717→          onClick={handlePrevDay}
+   718→          disabled={selectedDayIndex === 0}
+   719→        >
+   720→          <ChevronLeft className="w-4 h-4" />
+   721→        </Button>
+   722→
+   723→        <div className="flex gap-1 flex-1 justify-center" style={{minWidth:0}}>
+   724→          {weekDays.map((day, index) => (
+   725→            <button
+   726→              key={day.date}
+   727→              onClick={() => handleDayChange(index)}
+   728→              className={`
+   729→                flex flex-col items-center px-2 py-1.5 rounded-lg text-xs font-medium transition-all shrink-0 min-w-[42px]
+   730→                ${selectedDayIndex === index
+   731→                  ? 'bg-[#58a6ff]/15 text-[#58a6ff] border border-[#58a6ff]/30 shadow-sm shadow-[#58a6ff]/10'
+   732→                  : 'text-muted-foreground hover:text-foreground hover:bg-secondary/50 border border-transparent'
+   733→                }
+   734→              `}
+   735→            >
+   736→              <span className={`text-[10px] uppercase tracking-wider ${selectedDayIndex === index ? 'text-[#58a6ff]/70' : ''}`}>
+   737→                {day.shortLabel}
+   738→              </span>
+   739→              <span className={`text-sm font-semibold mt-0.5 ${selectedDayIndex === index ? 'text-[#58a6ff]' : ''}`}>
+   740→                {new Date(day.date + 'T12:00:00').getDate()}
+   741→              </span>
+   742→              {selectedDayIndex === index && (
+   743→                <span className="w-1 h-1 rounded-full bg-[#58a6ff] mt-1" />
+   744→              )}
+   745→            </button>
+   746→          ))}
+   747→        </div>
+   748→
+   749→        <Button
+   750→          variant="ghost"
+   751→          size="icon"
+   752→          className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
+   753→          onClick={handleNextDay}
+   754→          disabled={selectedDayIndex === weekDays.length - 1}
+   755→        >
+   756→          <ChevronRight className="w-4 h-4" />
+   757→        </Button>
+   758→      </div>
+   759→
+   760→      {/* Day header info */}
+   761→      <div className="flex items-center justify-between">
+   762→        <div className="flex items-center gap-3">
+   763→          <h2 className="text-lg font-semibold text-foreground">{currentDay.label}</h2>
+   764→          <span className="text-xs text-muted-foreground">
+   765→            {new Date(currentDay.date + 'T12:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })}
+   766→          </span>
+   767→        </div>
+   768→        {!loading && schedule && (
+   769→          <div className="flex items-center gap-3">
+   770→            {schedule.totalItems > 0 && (
+   771→              <Badge className="gap-1.5 bg-[#58a6ff]/10 text-[#58a6ff] border-[#58a6ff]/25 px-2.5 py-0.5 font-medium">
+   772→                <Zap className="w-3 h-3" />
+   773→                {schedule.totalItems} {schedule.totalItems === 1 ? 'новость' : schedule.totalItems < 5 ? 'новости' : 'новостей'}
+   774→              </Badge>
+   775→            )}
+   776→            {schedule.isToday && (
+   777→              <Badge className="gap-1.5 bg-emerald-500/10 text-emerald-400 border-emerald-500/25 px-2.5 py-0.5 font-medium">
+   778→                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+   779→                Сегодня
+   780→              </Badge>
+   781→            )}
+   782→          </div>
+   783→        )}
+   784→      </div>
+   785→
+   786→      {/* Slot cards */}
+   787→      {loading ? (
+   788→        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+   789→          {Array.from({ length: 4 }).map((_, i) => (
+   790→            <Card key={i} className="bg-card border-border overflow-hidden">
+   791→              <div className="h-1 bg-secondary" />
+   792→              <CardHeader className="pb-3">
+   793→                <div className="flex items-center gap-3">
+   794→                  <Skeleton className="w-12 h-12 rounded-xl bg-secondary" />
+   795→                  <div className="flex-1 space-y-2">
+   796→                    <Skeleton className="h-4 w-40 bg-secondary" />
+   797→                    <Skeleton className="h-3 w-24 bg-secondary" />
+   798→                  </div>
+   799→                </div>
+   800→              </CardHeader>
+   801→              <CardContent>
+   802→                <Skeleton className="h-32 bg-secondary rounded-xl" />
+   803→              </CardContent>
+   804→            </Card>
+   805→          ))}
+   806→        </div>
+   807→      ) : (
+   808→        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5" style={{minWidth:0}}>
+   809→          {schedule?.slots.map((slot, index) => {
+   810→            const isDashed = slot.status === 'empty' || slot.status === 'skipped'
+   811→            const cardClass = 'bg-card border-border overflow-hidden transition-all duration-300 hover:shadow-xl hover:-translate-y-0.5' + (isDashed ? ' border-dashed' : '')
+   812→            const barStyle = isDashed
+   813→              ? { background: 'repeating-linear-gradient(90deg, transparent, transparent 4px, rgba(113,113,122,0.3) 4px, rgba(113,113,122,0.3) 8px)' }
+   814→              : { background: `linear-gradient(90deg, ${getSlotColor(index)}, ${getSlotColor(index)}66, transparent)` }
+   815→
+   816→            return (
+   817→              <Card key={slot.key} className={cardClass} style={{minWidth:0,overflow:'hidden'}}>
+   818→                <div className="h-1" style={barStyle} />
+   819→
+   820→                <CardHeader className="pb-3">
+   821→                  <div className="flex items-start justify-between gap-2">
+   822→                    <div className="flex items-center gap-3 min-w-0">
+   823→                      <div
+   824→                        className="relative w-14 h-14 rounded-2xl flex flex-col items-center justify-center shrink-0"
+   825→                        style={{
+   826→                          background: `linear-gradient(135deg, ${getSlotColor(index)}18, ${getSlotColor(index)}08)`,
+   827→                          border: `1px solid ${getSlotColor(index)}25`,
+   828→                        }}
+   829→                      >
+   830→                        <Clock
+   831→                          className="w-3.5 h-3.5 mb-0.5 opacity-50"
+   832→                          style={{ color: getSlotColor(index) }}
+   833→                        />
+   834→                        <span
+   835→                          className="text-[13px] font-bold tabular-nums leading-none"
+   836→                          style={{ color: getSlotColor(index) }}
+   837→                        >
+   838→                          {slot.time}
+   839→                        </span>
+   840→                      </div>
+   841→
+   842→                      <div className="space-y-1">
+   843→                        <CardTitle className="text-foreground text-sm font-semibold">
+   844→                          Слот {slot.slot}
+   845→                        </CardTitle>
+   846→                        <CardDescription className="text-xs">
+   847→                          {slot.queueCount} в очереди
+   848→                        </CardDescription>
+   849→                      </div>
+   850→                    </div>
+   851→
+   852→                    <div className="flex items-center gap-1.5 shrink-0">
+   853→                      {getStatusBadge(slot.status, slot.queueCount)}
+   854→                      {(schedule?.slots.length || 0) > 1 && (
+   855→                        <Button
+   856→                          variant="ghost"
+   857→                          size="icon"
+   858→                          className="h-7 w-7 text-muted-foreground/40 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+   859→                          onClick={() => setDeleteKey(slot.key)}
+   860→                          title="Удалить слот"
+   861→                        >
+   862→                          <Trash2 className="w-3.5 h-3.5" />
+   863→                        </Button>
+   864→                      )}
+   865→                    </div>
+   866→                  </div>
+   867→                </CardHeader>
+   868→
+   869→                <CardContent>
+   870→                  {slot.queue.length === 0 ? (
+   871→                    <div
+   872→                      className="border-2 border-dashed border-border/50 rounded-xl flex flex-col items-center justify-center py-6"
+   873→                      style={{ background: `${getSlotColor(index)}04` }}
+   874→                    >
+   875→                      <div
+   876→                        className="w-10 h-10 rounded-xl flex items-center justify-center mb-2"
+   877→                        style={{ background: `${getSlotColor(index)}08` }}
+   878→                      >
+   879→                        <Inbox
+   880→                          className="w-5 h-5"
+   881→                          style={{ color: getSlotColor(index), opacity: 0.3 }}
+   882→                        />
+   883→                      </div>
+   884→                      <p className="text-xs text-muted-foreground/50 font-medium">
+   885→                        Нет запланированных новостей
+   886→                      </p>
+   887→                    </div>
+   888→                  ) : (
+   889→                    <div className="space-y-4">
+   890→                      {slot.queue.map((item, itemIndex) => (
+   891→                        <div key={item.id} className="space-y-2">
+   892→                          <div className="flex items-center gap-2 px-1">
+   893→                            <PriorityDot priority={item.priority} />
+   894→                            <span className="text-border">·</span>
+   895→                            <NewsTypeLabel type={item.newsType} />
+   896→                            {item.serverName && (
+   897→                              <>
+   898→                                <span className="text-border">·</span>
+   899→                                <span className="text-[11px] text-[#58a6ff] font-medium">{item.serverName}</span>
+   900→                              </>
+   901→                            )}
+   902→                            <div className="flex-1" />
+   903→                            <Badge
+   904→                              variant="outline"
+   905→                              className="border-amber-500/30 text-amber-400 text-[10px] shrink-0 font-medium"
+   906→                            >
+   907→                              <Zap className="w-2.5 h-2.5 mr-1" />
+   908→                              В очереди
+   909→                            </Badge>
+   910→                            <Button
+   911→                              variant="ghost"
+   912→                              size="icon"
+   913→                              className="h-6 w-6 text-muted-foreground/50 hover:text-[#58a6ff] hover:bg-[#58a6ff]/10 transition-colors"
+   914→                              onClick={() => openEditDialog(item)}
+   915→                              title="Редактировать"
+   916→                            >
+   917→                              <Pencil className="w-3 h-3" />
+   918→                            </Button>
+   919→                            <Button
+   920→                              variant="ghost"
+   921→                              size="icon"
+   922→                              className="h-6 w-6 text-muted-foreground/50 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+   923→                              onClick={() => handleRemoveFromQueue(item.id)}
+   924→                              title="Удалить из очереди"
+   925→                            >
+   926→                              <XCircle className="w-3 h-3" />
+   927→                            </Button>
+   928→                          </div>
+   929→                          <MiniTelegramPreview item={item} />
+   930→                          {itemIndex < slot.queue.length - 1 && (
+   931→                            <div className="border-t border-border/30" />
+   932→                          )}
+   933→                        </div>
+   934→                      ))}
+   935→                    </div>
+   936→                  )}
+   937→                </CardContent>
+   938→              </Card>
+   939→            )
+   940→          })}
+   941→        </div>
+   942→      )}
+   943→
+   944→      {/* Edit dialog for scheduled items */}
+   945→      <Dialog open={!!editItem} onOpenChange={(open) => { if (!open) setEditItem(null) }}>
+   946→        <DialogContent className="bg-card border-border max-w-2xl max-h-[85vh] overflow-y-auto">
+   947→          <DialogHeader>
+   948→            <DialogTitle className="text-foreground">Редактирование новости</DialogTitle>
+   949→          </DialogHeader>
+   950→          <div className="space-y-4">
+   951→            <div>
+   952→              <p className="text-[11px] text-[#58a6ff] font-medium mb-1.5 flex items-center gap-1">
+   953→                <Pencil className="w-3 h-3" />
+   954→                Текст поста
+   955→              </p>
+   956→              <Textarea
+   957→                value={editText}
+   958→                onChange={(e) => setEditText(e.target.value)}
+   959→                className="bg-secondary border-border text-foreground min-h-[160px] resize-y text-sm leading-relaxed"
+   960→                placeholder="Текст поста (поддерживается Telegram HTML)"
+   961→              />
+   962→            </div>
+   963→            <div>
+   964→              <button
+   965→                onClick={() => setEditMediaOpen(!editMediaOpen)}
+   966→                className="text-[11px] text-[#58a6ff] font-medium flex items-center gap-1"
+   967→              >
+   968→                <ImageIcon className="w-3 h-3" />
+   969→                Медиа ({editImages.length})
+   970→                {editMediaOpen ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+   971→              </button>
+   972→              {editMediaOpen && (
+   973→                <div className="mt-2">
+   974→                  <MediaGallery
+   975→                    images={editImages}
+   976→                    onRemove={(url) => setEditImages(prev => prev.filter(u => u !== url))}
+   977→                    onAdd={(url) => setEditImages(prev => [...prev, url])}
+   978→                    editable={true}
+   979→                  />
+   980→                </div>
+   981→              )}
+   982→            </div>
+   983→          </div>
+   984→          <DialogFooter>
+   985→            <Button variant="outline" onClick={() => setEditItem(null)} className="border-border text-muted-foreground hover:text-foreground">
+   986→              Отмена
+   987→            </Button>
+   988→            <Button
+   989→              className="bg-[#58a6ff] hover:bg-[#4a96ef] text-primary-foreground"
+   990→              onClick={handleSaveEdit}
+   991→              disabled={editSaving}
+   992→            >
+   993→              {editSaving ? <><Loader2 className="w-4 h-4 animate-spin mr-1" /> Сохранение...</> : <><CheckCircle className="w-4 h-4 mr-1" /> Сохранить</>}
+   994→            </Button>
+   995→          </DialogFooter>
+   996→        </DialogContent>
+   997→      </Dialog>
+   998→
+   999→      {/* Delete confirmation dialog */}
+  1000→      <AlertDialog open={!!deleteKey} onOpenChange={() => setDeleteKey(null)}>
+  1001→        <AlertDialogContent className="bg-card border-border">
+  1002→          <AlertDialogHeader>
+  1003→            <AlertDialogTitle className="text-foreground">Удалить слот?</AlertDialogTitle>
+  1004→            <AlertDialogDescription className="text-muted-foreground">
+  1005→              Слот будет удалён из расписания. Новости в очереди этого слота будут автоматически перенесены на ближайший следующий слот.
+  1006→            </AlertDialogDescription>
+  1007→          </AlertDialogHeader>
+  1008→          <AlertDialogFooter>
+  1009→            <AlertDialogCancel className="border-border text-muted-foreground hover:text-foreground">
+  1010→              Отмена
+  1011→            </AlertDialogCancel>
+  1012→            <AlertDialogAction
+  1013→              onClick={handleDeleteSlot}
+  1014→              disabled={deletingSlot}
+  1015→              className="bg-red-500/15 text-red-400 hover:bg-red-500/25 border-0"
+  1016→            >
+  1017→              {deletingSlot ? (
+  1018→                <><Loader2 className="w-4 h-4 animate-spin mr-1" /> Удаление...</>
+  1019→              ) : (
+  1020→                <><Trash2 className="w-4 h-4 mr-1" /> Удалить</>
+  1021→              )}
+  1022→            </AlertDialogAction>
+  1023→          </AlertDialogFooter>
+  1024→        </AlertDialogContent>
+  1025→      </AlertDialog>
+  1026→    </div>
+  1027→  )
+  1028→}
+  1029→
