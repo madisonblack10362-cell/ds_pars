@@ -510,13 +510,13 @@ def _fetch_channel_best_short_sync(
 
     # Строим URL канала
     if "youtube.com" in channel_id:
-        url = channel_id if "/videos" in channel_id else channel_id.rstrip("/") + "/videos"
+        url = channel_id if "/shorts" in channel_id else channel_id.rstrip("/") + "/shorts"
     elif channel_id.startswith("@"):
-        url = f"https://www.youtube.com/{channel_id}/videos"
+        url = f"https://www.youtube.com/{channel_id}/shorts"
     elif channel_id.startswith("UC"):
-        url = f"https://www.youtube.com/channel/{channel_id}/videos"
+        url = f"https://www.youtube.com/channel/{channel_id}/shorts"
     else:
-        url = f"https://www.youtube.com/{channel_id}/videos"
+        url = f"https://www.youtube.com/{channel_id}/shorts"
 
     ytdlp_cmd = shutil.which("yt-dlp")
     base_cmd = [ytdlp_cmd] if ytdlp_cmd else [sys.executable, "-m", "yt_dlp"]
