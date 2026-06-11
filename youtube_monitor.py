@@ -436,43 +436,59 @@ def _enrich_video_metadata_sync(video: dict) -> dict:
 
     ytdlp_cmd = shutil.which("yt-dlp")
     base = [ytdlp_cmd] if ytdlp_cmd else [sys.executable, "-m", "yt_dlp"]
-    cmd = base + [
-        "--no-config", "--dump-json", "--no-download", "--quiet", "--no-warnings",
-        "--extractor-args", "youtube:player_client=ios",
-        "--format", "best", url,
-    ]
-    if os.path.isfile(cookies_path):
-        cmd.insert(-1, "--cookies")
-        cmd.insert(-1, cookies_path)
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        if result.returncode != 0 or not result.stdout.strip():
-            stderr_snippet = (result.stderr or "")[:300].replace("\n", " | ")
-            logger.warning("YouTube: yt-dlp не смог получить метаданные %s (rc=%d, stderr: %s)",
-                           video_id[:12], result.returncode, stderr_snippet)
-            return video
 
-        info = json.loads(result.stdout)
-        video["description"] = (info.get("description") or "")[:2000]
-        video["views"] = info.get("view_count") or video.get("views", 0) or 0
-        video["likes"] = info.get("like_count") or video.get("likes", 0) or 0
-        video["duration"] = int(info.get("duration") or video.get("duration", 0) or 0)
-        thumb = info.get("thumbnail") or ""
-        if thumb:
-            video["thumbnail"] = thumb
-        logger.info(
-            "YouTube: метаданные %s — %s views, %s likes, %s",
-            video_id[:12],
-            _format_views(video["views"]), _format_views(video["likes"]),
-            _format_duration(video["duration"]),
-        )
-    except subprocess.TimeoutExpired:
-        logger.warning("YouTube: таймаут метаданных %s", video_id[:12])
-    except json.JSONDecodeError:
-        logger.warning("YouTube: не удалось распарсить JSON метаданных %s", video_id[:12])
-    except Exception as e:
-        import traceback
-        logger.warning("YouTube: ошибка метаданных %s: %s\n%s", video_id[:12], e, traceback.format_exc())
+    # Пробуем несколько вариантов — YouTube часто блокирует или даёт ограниченные форматы
+    attempts = []
+
+    # 1) iOS клиент (обходит бот-детект, но может не иметь всех форматов)
+    attempts.append(base + [
+        "--no-config", "--dump-json", "--no-download", "--quiet", "--no-warnings",
+        "--extractor-args", "youtube:player_client=ios", url,
+    ])
+
+    # 2) Web клиент
+    attempts.append(base + [
+        "--no-config", "--dump-json", "--no-download", "--quiet", "--no-warnings",
+        "--extractor-args", "youtube:player_client=web", url,
+    ])
+
+    # 3) С cookies если есть
+    if os.path.isfile(cookies_path):
+        attempts.append(base + [
+            "--no-config", "--dump-json", "--no-download", "--quiet", "--no-warnings",
+            "--cookies", cookies_path, url,
+        ])
+
+    for i, cmd in enumerate(attempts):
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode == 0 and result.stdout.strip():
+                info = json.loads(result.stdout)
+                video["description"] = (info.get("description") or "")[:2000]
+                video["views"] = info.get("view_count") or video.get("views", 0) or 0
+                video["likes"] = info.get("like_count") or video.get("likes", 0) or 0
+                video["duration"] = int(info.get("duration") or video.get("duration", 0) or 0)
+                thumb = info.get("thumbnail") or ""
+                if thumb:
+                    video["thumbnail"] = thumb
+                logger.info(
+                    "YouTube: метаданные %s — %s views, %s likes, %s (попытка %d)",
+                    video_id[:12],
+                    _format_views(video["views"]), _format_views(video["likes"]),
+                    _format_duration(video["duration"]), i + 1,
+                )
+                return video
+        except subprocess.TimeoutExpired:
+            continue
+        except json.JSONDecodeError:
+            continue
+        except Exception:
+            continue
+
+    # Все попытки провалились — логируем последнюю ошибку
+    stderr_snippet = (result.stderr or "")[:300].replace("\n", " | ") if 'result' in dir() else ""
+    logger.warning("YouTube: yt-dlp не смог получить метаданные %s (все попытки, stderr: %s)",
+                   video_id[:12], stderr_snippet)
 
     return video
 
