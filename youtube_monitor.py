@@ -434,11 +434,11 @@ def _enrich_video_metadata_sync(video: dict) -> dict:
     ytdlp_cmd = shutil.which("yt-dlp")
     if ytdlp_cmd:
         cmd = [ytdlp_cmd, "--no-config", "--dump-json", "--no-download", "--quiet", "--no-warnings",
-               "--extractor-args", "youtube:player_client=ios,web", url]
+               "--format", "best", url]
     else:
         cmd = [sys.executable, "-m", "yt_dlp",
                "--no-config", "--dump-json", "--no-download", "--quiet", "--no-warnings",
-               "--extractor-args", "youtube:player_client=ios,web", url]
+               "--format", "best", url]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode != 0 or not result.stdout.strip():
