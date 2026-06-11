@@ -639,10 +639,6 @@ class AIAnalyzer:
                         logger.warning("Не удалось распарсить JSON от LLM (YouTube): %s", content[:300])
                         return None
 
-                    # Добавляем URL видео в formatted_post
-                    post = parsed.get("formatted_post", "")
-                    if url and post:
-                        parsed["formatted_post"] = f"{post}\n\n{url}"
                     return parsed
 
         except Exception as exc:
