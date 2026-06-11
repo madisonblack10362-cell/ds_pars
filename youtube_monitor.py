@@ -462,6 +462,8 @@ async def _enrich_video_metadata(video: dict) -> dict:
         ydl_opts = {
             "quiet": True,
             "no_warnings": True,
+            "skip_download": True,
+            "format": "best",
             "extractor_args": {"youtube": {"player_client": ["ios", "web"]}},
         }
         try:
