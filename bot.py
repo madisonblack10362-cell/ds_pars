@@ -668,12 +668,41 @@ class DayZNewsMonitor:
 
                 valid_images = [img for img in images if isinstance(img, str) and (img.startswith('http') or img.startswith('data:'))]
 
+                # ── YouTube: ищем скачанный видео-файл вместо thumbnail ──
+                video_paths = None
+                source_type = item.get('sourceType', '') or item.get('source_type', '')
+                external_id = item.get('externalId', '') or item.get('external_id', '')
+
+                if source_type == 'youtube' and external_id and external_id.startswith('yt_'):
+                    yt_video_id = external_id[3:]  # убираем "yt_" префикс
+                    video_file = self._find_youtube_downloaded_file(yt_video_id)
+                    if video_file:
+                        video_paths = [video_file]
+                        valid_images = []  # видео replaces thumbnail
+                        logger.info('YouTube публикация: видео-файл найден %s -> %s', yt_video_id, video_file)
+                    else:
+                        # Файл не найден — пробуем скачать прямо сейчас
+                        logger.info('YouTube публикация: файл не найден, скачиваю %s...', yt_video_id)
+                        try:
+                            from youtube_monitor import download_short_by_id
+                            dl_path = await download_short_by_id(yt_video_id)
+                            if dl_path:
+                                video_paths = [dl_path]
+                                valid_images = []
+                                logger.info('YouTube публикация: скачан %s -> %s', yt_video_id, dl_path)
+                            else:
+                                logger.warning('YouTube публикация: не удалось скачать %s, отправляю thumbnail', yt_video_id)
+                        except Exception as dl_err:
+                            logger.error('YouTube публикация: ошибка скачивания %s: %s', yt_video_id, dl_err)
+
                 if text:
-                    logger.info('Публикация с панели: id=%s, images=%d, text_len=%d',
-                                news_id, len(valid_images), len(text))
+                    logger.info('Публикация с панели: id=%s, video=%s, images=%d, text_len=%d',
+                                news_id, 'YES' if video_paths else 'no',
+                                len(valid_images), len(text))
                     tg_msg_id = await self.publisher.publish_message(
                         text=text,
                         image_urls=valid_images if valid_images else None,
+                        video_paths=video_paths,
                     )
                     if tg_msg_id:
                         await mark_published_on_panel(
@@ -688,6 +717,41 @@ class DayZNewsMonitor:
                     logger.warning('Пропуск публикации: id=%s — пустой текст', news_id)
         except Exception as exc:
             logger.error('Ошибка публикации из очереди панели: %s', exc)
+
+    @staticmethod
+    def _find_youtube_downloaded_file(video_id: str) -> str | None:
+        """
+        Ищет скачанный видео-файл для YouTube видео по video_id.
+        Сначала проверяет youtube_moderation.json (там сохраняется downloaded_file),
+        потом ищет файл напрямую в downloads/.
+        """
+        import os
+
+        # 1) Проверяем локальную очередь модерации
+        try:
+            mod_file = 'youtube_moderation.json'
+            if os.path.exists(mod_file):
+                with open(mod_file, 'r', encoding='utf-8') as f:
+                    queue = json.load(f)
+                for entry in queue:
+                    if entry.get('video_id') == video_id:
+                        dl = entry.get('downloaded_file', '')
+                        if dl and os.path.isfile(dl):
+                            return dl
+                        break
+        except Exception:
+            pass
+
+        # 2) Ищем файл напрямую в downloads/
+        for downloads_dir in ['downloads', 'downloads/youtube']:
+            if not os.path.isdir(downloads_dir):
+                continue
+            for ext in ('mp4', 'webm', 'mkv', '3gp'):
+                candidate = os.path.join(downloads_dir, f'{video_id}.{ext}')
+                if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
+                    return candidate
+
+        return None
 
     async def _task_daily_summary(self) -> None:
         """Публикует ежедневную сводку."""

@@ -922,10 +922,11 @@ async def check_for_popular_shorts(
     Для каждого канала:
       1. Получает видео через yt-dlp (extract_flat)
       2. Обогащает метаданными (views, likes, description)
-      3. Фильтрует шортсы (<=90с)
+      3. Фильтрует шортсы (<=180с)
       4. Берёт самый популярный, которого ещё не было
-      5. Отправляет в AI для генерации поста
-      6. Отправляет на веб-панель для модерации
+      5. СКАЧИВАЕТ ВИДЕО СРАЗУ (до AI и модерации)
+      6. Отправляет в AI для генерации поста
+      7. Отправляет на веб-панель для модерации (sourceType=youtube, downloaded_file в локальной очереди)
 
     Returns: список найденных новых видео.
     """
@@ -1017,6 +1018,7 @@ async def check_for_popular_shorts(
 
                     success = await send_to_web_panel(
                         news_data={
+                            "sourceId": "youtube",
                             "externalId": f"yt_{video_id}",
                             "serverName": ch_name,
                             "channelName": f"YouTube: {ch_name}",

@@ -62,3 +62,30 @@ Stage Summary:
 - Root cause: yt-dlp 2025+ requires deno JS runtime for YouTube, and errors were logged at debug level (invisible)
 - Fixed: auto-install deno, proper error logging, multiple fallbacks, early error detection
 - The flow order (download → moderation → panel → bot) was already correct from previous session
+---
+Task ID: 1
+Agent: main
+Task: Fix YouTube video download flow — video published as photo instead of video when approved from web panel
+
+Work Log:
+- Read full youtube_monitor.py (1275 lines) — discovered download ALREADY happens before panel send (line 997-998)
+- Read bot.py _task_publish_from_panel() — found the REAL bug: this function only uses image_urls (thumbnails), never checks for downloaded video files
+- Read web_app_integration.py — understood the full bot↔panel communication flow
+- Read web panel publish-queue API (dayz-monitor-web/src/app/api/publish-queue/route.ts) — found it was NOT returning sourceType and externalId fields
+- Read web panel news POST API — found it uses sourceId (not sourceType) to determine source type, but bot was only sending sourceType
+
+Root cause: THREE interconnected issues:
+  1. bot.py _task_publish_from_panel() never looked for downloaded video files for YouTube items — only sent thumbnail as image
+  2. Web panel publish-queue API did not return sourceType/externalId — bot could not detect YouTube items
+  3. Bot sent sourceType="youtube" but web panel API reads sourceId — so source was created as "unknown"
+
+Fixes applied:
+  1. bot.py: Rewrote _task_publish_from_panel() to detect YouTube items via sourceType+externalId, look up downloaded file from youtube_moderation.json or downloads/ dir, pass video_paths to publish_message(). Falls back to downloading if file missing.
+  2. bot.py: Added _find_youtube_downloaded_file() static method — checks youtube_moderation.json then downloads/ dir
+  3. dayz-monitor-web publish-queue route: Added sourceType and externalId to API response, added sourceType to Prisma include
+  4. youtube_monitor.py: Added sourceId: "youtube" to web panel payload (web panel API needs this, not just sourceType)
+
+Stage Summary:
+- Full flow now: find short → enrich metadata → download video → AI post → save to local moderation (with file path) → send to web panel (with sourceId=youtube, externalId=yt_xxx) → user approves in panel → scheduled → bot picks up from publish queue → detects YouTube item → finds local video file → publishes as VIDEO in Telegram
+- Three files modified: bot.py, youtube_monitor.py, dayz-monitor-web/src/app/api/publish-queue/route.ts
+
