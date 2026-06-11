@@ -778,7 +778,7 @@ async def check_for_popular_shorts(
     moderation_ids = {item.get("video_id") for item in moderation_queue if item.get("video_id")}
     known_ids = set(posted_ids.keys()) | moderation_ids
 
-    max_candidates = config.get("youtube_max_candidates", 1)
+    max_candidates = config.get("youtube_max_per_check", 1)
 
     new_videos = []
     start = time.time()
