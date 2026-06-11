@@ -687,8 +687,42 @@ async def check_for_popular_shorts(
                 ai_post = format_video_message(best, category)
                 ai_summary = best.get("title", "")
 
-            # Добавляем в модерацию
+            # Добавляем в локальную очередь модерации (fallback)
             _add_to_moderation(best, ai_post, ai_summary, category, priority)
+
+            # Отправляем на веб-панель для модерации
+            web_panel_url = config.get("web_panel_url", "")
+            web_panel_api_key = config.get("web_panel_api_key", "")
+            if web_panel_url:
+                try:
+                    from web_app_integration import send_to_web_panel
+
+                    thumbnail = best.get("thumbnail", "")
+                    images = [thumbnail] if thumbnail else []
+
+                    success = await send_to_web_panel(
+                        news_data={
+                            "externalId": f"yt_{video_id}",
+                            "serverName": ch_name,
+                            "channelName": f"YouTube: {ch_name}",
+                            "content": best.get("title", ""),
+                            "summary": ai_summary,
+                            "formattedPost": ai_post,
+                            "newsType": category,
+                            "priority": priority,
+                            "images": images,
+                            "links": [best.get("url", "")] if best.get("url") else [],
+                            "sourceType": "youtube",
+                        },
+                        web_app_url=web_panel_url,
+                        bot_api_key=web_panel_api_key or None,
+                    )
+                    if success:
+                        logger.info("YouTube: видео %s отправлено на веб-панель", video_id[:12])
+                    else:
+                        logger.warning("YouTube: не удалось отправить %s на веб-панель", video_id[:12])
+                except Exception as web_err:
+                    logger.error("YouTube: ошибка отправки на веб-панель: %s", web_err)
 
             # Отмечаем чтобы не повторять
             known_ids.add(video_id)
