@@ -320,16 +320,8 @@ async def _fetch_channel_videos(
     max_videos: int = 30,
 ) -> tuple[list[dict], str, str]:
     """
-    Получает видео канала через yt-dlp (extract_flat — быстрый список).
-
-    Args:
-        channel_input: @handle, UC... ID, или URL
-        max_videos: макс. видео для обработки
-
-    Returns:
-        (videos, channel_id, channel_name)
+    Получает видео канала через yt-dlp CLI (flat playlist — быстрый список).
     """
-    # Строим URL канала
     if "youtube.com" in channel_input:
         url = channel_input if "/videos" in channel_input else channel_input.rstrip("/") + "/videos"
     elif channel_input.startswith("@"):
@@ -342,68 +334,53 @@ async def _fetch_channel_videos(
     loop = asyncio.get_running_loop()
 
     def _fetch_sync():
-        import logging as _sl
-        _sl.getLogger("yt-dlp").setLevel(_sl.CRITICAL)
-        _sl.getLogger("yt_dlp").setLevel(_sl.CRITICAL)
+        import subprocess
+        import shutil
+
+        ytdlp_cmd = shutil.which("yt-dlp")
+        if ytdlp_cmd:
+            cmd = [ytdlp_cmd, "--flat-playlist", "--dump-json", "--quiet", "--no-warnings",
+                   "--extractor-args", "youtube:player_client=ios,web", url]
+        else:
+            cmd = [sys.executable, "-m", "yt_dlp", "--flat-playlist", "--dump-json",
+                   "--quiet", "--no-warnings",
+                   "--extractor-args", "youtube:player_client=ios,web", url]
 
         try:
-            import yt_dlp
-        except ImportError:
-            logger.error("YouTube: yt-dlp не установлен")
-            return [], "", ""
-
-        ydl_opts = {
-            "extract_flat": True,
-            "quiet": True,
-            "no_warnings": True,
-            "extractor_args": {"youtube": {"player_client": ["ios", "web"]}},
-        }
-
-        videos = []
-        channel_id = ""
-        channel_name = ""
-
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-            if not info:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            if result.returncode != 0 or not result.stdout.strip():
+                logger.warning("YouTube/ytdlp: %s — видео не получены", channel_input)
                 return [], "", ""
 
-            channel_id = info.get("channel_id", "") or ""
-            channel_name = (info.get("uploader") or info.get("channel", "")).strip()
+            videos = []
+            channel_id = ""
+            channel_name = ""
 
-            entries = info.get("entries", []) or []
-            for entry in entries[:max_videos]:
-                if not isinstance(entry, dict):
+            for line in result.stdout.strip().split("\n")[:max_videos]:
+                if not line.strip():
                     continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                if not channel_id:
+                    channel_id = entry.get("channel_id", "") or ""
+                if not channel_name:
+                    channel_name = (entry.get("uploader") or entry.get("channel", "")).strip()
+
                 vid = entry.get("id", "")
                 if not vid:
                     continue
-
-                dur = entry.get("duration") or 0
-                if isinstance(dur, str):
-                    try:
-                        dur = int(dur)
-                    except (ValueError, TypeError):
-                        dur = 0
-
-                views = entry.get("view_count") or 0
-                if isinstance(views, str):
-                    try:
-                        views = int(views.replace(",", ""))
-                    except (ValueError, TypeError):
-                        views = 0
-
-                likes = entry.get("like_count") or 0
 
                 videos.append({
                     "video_id": vid,
                     "title": (entry.get("title") or "").strip(),
                     "channel_title": channel_name,
                     "channel_id": channel_id,
-                    "duration": int(dur),
-                    "views": int(views),
-                    "likes": int(likes),
+                    "duration": 0,
+                    "views": 0,
+                    "likes": 0,
                     "published": entry.get("timestamp", 0) or 0,
                     "description": "",
                     "thumbnail": entry.get("thumbnail", ""),
@@ -411,10 +388,15 @@ async def _fetch_channel_videos(
                     "is_live": entry.get("live_status") == "is_live",
                     "source": "ytdlp",
                 })
-        except Exception as e:
-            logger.error("YouTube/ytdlp: %s -> %s", url, e)
 
-        return videos, channel_id, channel_name
+            return videos, channel_id, channel_name
+
+        except subprocess.TimeoutExpired:
+            logger.warning("YouTube/ytdlp: таймаут списка видео для %s", channel_input)
+            return [], "", ""
+        except Exception as e:
+            logger.error("YouTube/ytdlp: %s -> %s", channel_input, e)
+            return [], "", ""
 
     videos, channel_id, channel_name = await loop.run_in_executor(_thread_pool, _fetch_sync)
 
@@ -453,15 +435,17 @@ async def _enrich_video_metadata(video: dict) -> dict:
 
     def _fetch_one():
         import subprocess
-        cmd = [
-            sys.executable, "-m", "yt_dlp",
-            "--dump-json",
-            "--no-download",
-            "--quiet",
-            "--no-warnings",
-            "--extractor-args", "youtube:player_client=ios,web",
-            url,
-        ]
+        import shutil
+
+        # Ищем yt-dlp: сначала как exe, потом через python -m
+        ytdlp_cmd = shutil.which("yt-dlp")
+        if ytdlp_cmd:
+            cmd = [ytdlp_cmd, "--dump-json", "--no-download", "--quiet", "--no-warnings",
+                   "--extractor-args", "youtube:player_client=ios,web", url]
+        else:
+            cmd = [sys.executable, "-m", "yt_dlp",
+                   "--dump-json", "--no-download", "--quiet", "--no-warnings",
+                   "--extractor-args", "youtube:player_client=ios,web", url]
         try:
             result = subprocess.run(
                 cmd,
@@ -571,16 +555,8 @@ def _download_ytdlp_sync(
     max_filesize: int = 50 * 1024 * 1024,
     _retry_with_fallback: bool = False,
 ) -> str | None:
-    """Скачивает видео через yt-dlp."""
-    import logging as _stdlib_logging
-    _stdlib_logging.getLogger("yt-dlp").setLevel(_stdlib_logging.CRITICAL)
-    _stdlib_logging.getLogger("yt_dlp").setLevel(_stdlib_logging.CRITICAL)
-
-    try:
-        import yt_dlp
-    except ImportError:
-        logger.error("YouTube/download: yt-dlp не установлен")
-        return None
+    """Скачивает видео через yt-dlp subprocess."""
+    import subprocess
 
     if _retry_with_fallback:
         format_str = "best"
@@ -592,64 +568,65 @@ def _download_ytdlp_sync(
             "/best"
         )
 
-    ydl_opts = {
-        "format": format_str,
-        "outtmpl": output_template,
-        "max_filesize": max_filesize,
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "nocheckcertificate": True,
-        "merge_output_format": "mp4",
-        "extractor_args": {"youtube": {"player_client": ["ios", "web"]}},
-        "http_headers": {
-            "User-Agent": (
-                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
-                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
-                "Mobile/15E148 Safari/604.1"
-            ),
-        },
-    }
-
+    cmd = [sys.executable, "-m", "yt_dlp"]
+    cmd += [
+        "-f", format_str,
+        "-o", output_template,
+        "--max-filesize", str(max_filesize),
+        "--quiet", "--no-warnings",
+        "--no-playlist",
+        "--no-check-certificates",
+        "--merge-output-format", "mp4",
+        "--extractor-args", "youtube:player_client=ios,web",
+        "--user-agent",
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
+        "Mobile/15E148 Safari/604.1",
+    ]
     if cookies_file and os.path.isfile(cookies_file):
-        ydl_opts["cookiefile"] = cookies_file
+        cmd += ["--cookies", cookies_file]
+    cmd.append(url)
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if result.returncode != 0:
+            err = result.stderr[:200] if result.stderr else "неизвестная ошибка"
+            if "Sign in" in err or "bot" in err.lower():
+                logger.warning("YouTube/download: требует cookies для '%s'", url)
+            elif "ffmpeg" in err.lower():
+                logger.warning("YouTube/download: ffmpeg ошибка, пробую лучший формат")
+                if not _retry_with_fallback:
+                    return _download_ytdlp_sync(
+                        url, output_template, cookies_file, max_filesize,
+                        _retry_with_fallback=True,
+                    )
+            else:
+                logger.debug("YouTube/download: ошибка: %s", err)
+            return None
 
-        if info:
-            filepath = info.get("requested_downloads", [{}])
-            if filepath:
-                result_path = filepath[0].get("filepath") or None
-                if result_path and os.path.isfile(result_path):
-                    if os.path.getsize(result_path) > 0:
-                        return result_path
-                    else:
-                        try:
-                            os.remove(result_path)
-                        except OSError:
-                            pass
-                        return None
-            video_id = info.get("id", "unknown")
-            result_path = output_template.replace("%(id)s", video_id)
-            if result_path and os.path.isfile(result_path) and os.path.getsize(result_path) > 0:
-                return result_path
+        # Ищем скачанный файл
+        video_id = url.split("v=")[-1].split("&")[0]
+        result_path = output_template.replace("%(id)s", video_id)
+        # Попробуем разные расширения
+        for ext in ["mp4", "webm", "mkv", "3gp"]:
+            test_path = output_template.replace("%(ext)s", ext).replace("%(id)s", video_id)
+            if os.path.isfile(test_path) and os.path.getsize(test_path) > 0:
+                return test_path
+        # Общий поиск по шаблону
+        import glob
+        pattern = output_template.replace("%(id)s", video_id).replace("%(ext)s", "*")
+        matches = glob.glob(pattern)
+        for m in matches:
+            if os.path.isfile(m) and os.path.getsize(m) > 0:
+                return m
+
+        return None
+    except subprocess.TimeoutExpired:
+        logger.warning("YouTube/download: таймаут скачивания '%s'", url)
+        return None
     except Exception as e:
-        err_str = str(e)
-        if "Sign in to confirm" in err_str or "bot" in err_str.lower():
-            logger.warning("YouTube/download: YouTube требует cookies для '%s'", url)
-        elif "ffmpeg" in err_str.lower() or "exited with code" in err_str.lower():
-            logger.warning("YouTube/download: ffmpeg ошибка (%s), пробую простой формат", err_str[:120])
-            if not _retry_with_fallback:
-                return _download_ytdlp_sync(
-                    url, output_template, cookies_file, max_filesize,
-                    _retry_with_fallback=True,
-                )
-        else:
-            logger.debug("YouTube/download: yt-dlp ошибка: %s", e)
-
-    return None
+        logger.debug("YouTube/download: ошибка: %s", e)
+        return None
 
 
 async def download_short(
