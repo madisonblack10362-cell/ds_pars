@@ -431,14 +431,19 @@ def _enrich_video_metadata_sync(video: dict) -> dict:
     import subprocess
     import shutil
 
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    cookies_path = os.path.join(script_dir, "cookies.txt")
+
     ytdlp_cmd = shutil.which("yt-dlp")
-    if ytdlp_cmd:
-        cmd = [ytdlp_cmd, "--no-config", "--dump-json", "--no-download", "--quiet", "--no-warnings",
-               "--format", "best", url]
-    else:
-        cmd = [sys.executable, "-m", "yt_dlp",
-               "--no-config", "--dump-json", "--no-download", "--quiet", "--no-warnings",
-               "--format", "best", url]
+    base = [ytdlp_cmd] if ytdlp_cmd else [sys.executable, "-m", "yt_dlp"]
+    cmd = base + [
+        "--no-config", "--dump-json", "--no-download", "--quiet", "--no-warnings",
+        "--extractor-args", "youtube:player_client=ios",
+        "--format", "best", url,
+    ]
+    if os.path.isfile(cookies_path):
+        cmd.insert(-1, "--cookies")
+        cmd.insert(-1, cookies_path)
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode != 0 or not result.stdout.strip():
