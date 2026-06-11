@@ -5,10 +5,17 @@
 Архитектура:
   1. Каналы загружаются из config.json (youtube_channels) — ТОЛЬКО вручную добавленные
   2. Для каждого канала через yt-dlp (extract_flat) берутся видео
-  3. Фильтруются шортсы (<=90с), сортируются по просмотрам
-  4. Самый популярный шортс отправляется в AI для генерации Telegram-поста
-  5. Пост уходит в очередь модерации (youtube_moderation.json)
-  6. При одобрении: скачивание видео + публикация в Telegram
+  3. Фильтруются шортсы (<=180с), сортируются по просмотрам
+  4. Самый популярный шортс скачивается СРАЗУ
+  5. Отправляется в AI для генерации Telegram-поста
+  6. Пост с видео уходит в очередь модерации (youtube_moderation.json)
+  7. Уведомление в Telegram с видео прикреплённым
+  8. При одобрении: публикация в Telegram (видео уже скачано)
+
+Зависимости для скачивания:
+  - yt-dlp (pip install yt-dlp)
+  - deno (автоустанавливается, нужен для YouTube JS challenges)
+  - ffmpeg (для мержа видео+аудио)
 """
 
 import asyncio
@@ -346,8 +353,10 @@ async def _fetch_channel_videos(
             cmd = [sys.executable, "-m", "yt_dlp", "-4", "--no-config", "--flat-playlist", "--dump-json",
                    "--quiet", "--no-warnings", url]
 
+        env = _build_subprocess_env()
+
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=env)
             if result.returncode != 0 or not result.stdout.strip():
                 logger.warning("YouTube/ytdlp: %s — видео не получены", channel_input)
                 return [], "", ""
@@ -437,32 +446,42 @@ def _enrich_video_metadata_sync(video: dict) -> dict:
     ytdlp_cmd = shutil.which("yt-dlp")
     base = [ytdlp_cmd] if ytdlp_cmd else [sys.executable, "-m", "yt_dlp"]
 
+    env = _build_subprocess_env()
+
     # android_vr — не нужен PO token, cookies, логин. Самый надёжный.
     # -4 — IPv4 (YouTube агрессивнее блокирует IPv6)
     attempts = []
 
     # 1) android_vr (лучший для без-cookie)
-    attempts.append(base + [
+    attempts.append((base + [
         "-4", "--no-config", "--dump-json", "--no-download", "--quiet", "--no-warnings",
-        "--extractor-args", "youtube:player_client=android_vr", url,
-    ])
+        "--extractor-args", "youtube:player_client=android_vr",
+        "--remote-components", "ejs:github",
+        url,
+    ], "android_vr"))
 
     # 2) ios (без PO token, но иногда format issues)
-    attempts.append(base + [
+    attempts.append((base + [
         "-4", "--no-config", "--dump-json", "--no-download", "--quiet", "--no-warnings",
-        "--extractor-args", "youtube:player_client=ios", url,
-    ])
+        "--extractor-args", "youtube:player_client=ios",
+        "--remote-components", "ejs:github",
+        url,
+    ], "ios"))
 
     # 3) С cookies если есть
     if os.path.isfile(cookies_path):
-        attempts.append(base + [
+        attempts.append((base + [
             "-4", "--no-config", "--dump-json", "--no-download", "--quiet", "--no-warnings",
-            "--cookies", cookies_path, url,
-        ])
+            "--cookies", cookies_path,
+            "--remote-components", "ejs:github",
+            url,
+        ], "cookies"))
 
-    for i, cmd in enumerate(attempts):
+    last_result = None
+    for cmd, label in attempts:
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
+            last_result = result
             if result.returncode == 0 and result.stdout.strip():
                 info = json.loads(result.stdout)
                 video["description"] = (info.get("description") or "")[:2000]
@@ -473,10 +492,10 @@ def _enrich_video_metadata_sync(video: dict) -> dict:
                 if thumb:
                     video["thumbnail"] = thumb
                 logger.info(
-                    "YouTube: метаданные %s — %s views, %s likes, %s (попытка %d)",
+                    "YouTube: метаданные %s — %s views, %s likes, %s (попытка: %s)",
                     video_id[:12],
                     _format_views(video["views"]), _format_views(video["likes"]),
-                    _format_duration(video["duration"]), i + 1,
+                    _format_duration(video["duration"]), label,
                 )
                 return video
         except subprocess.TimeoutExpired:
@@ -487,8 +506,10 @@ def _enrich_video_metadata_sync(video: dict) -> dict:
             continue
 
     # Все попытки провалились — логируем последнюю ошибку
-    stderr_snippet = (result.stderr or "")[:300].replace("\n", " | ") if 'result' in dir() else ""
-    logger.warning("YouTube: yt-dlp не смог получить метаданные %s (все попытки, stderr: %s)",
+    stderr_snippet = ""
+    if last_result and last_result.stderr:
+        stderr_snippet = last_result.stderr[:300].replace("\n", " | ")
+    logger.warning("YouTube: yt-dlp не смог получить метаданные %s (stderr: %s)",
                    video_id[:12], stderr_snippet)
 
     return video
@@ -524,12 +545,14 @@ def _fetch_channel_best_short_sync(
     ytdlp_cmd = shutil.which("yt-dlp")
     base_cmd = [ytdlp_cmd] if ytdlp_cmd else [sys.executable, "-m", "yt_dlp"]
 
+    env = _build_subprocess_env()
+
     # Шаг 1: flat-playlist — быстрый список
     cmd = base_cmd + [
         "-4", "--no-config", "--flat-playlist", "--dump-json", "--quiet", "--no-warnings", url
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=env)
     except subprocess.TimeoutExpired:
         logger.warning("YouTube/ytdlp: таймаут списка видео для %s", channel_id)
         return None
@@ -621,82 +644,212 @@ async def _fetch_channel_best_short(
 #  Скачивание видео
 # ═════════════════════════════════════════════════════════════════════════════
 
+# Кеш: deno найден / установлен
+_deno_path: str | None = None
+_deno_checked = False
+
+
+def _ensure_deno() -> str | None:
+    """
+    Проверяет/устанавливает deno (нужен yt-dlp для YouTube с 2025+).
+    Возвращает путь к deno или None.
+    """
+    global _deno_path, _deno_checked
+    if _deno_checked:
+        return _deno_path
+    _deno_checked = True
+
+    import shutil
+
+    # 1) Ищем в PATH
+    deno = shutil.which("deno")
+    if deno:
+        _deno_path = deno
+        logger.info("YouTube/download: deno найден -> %s", deno)
+        return deno
+
+    # 2) Стандартные пути
+    for candidate in [
+        os.path.expanduser("~/.deno/bin/deno"),
+        "/usr/local/bin/deno",
+        "/home/linuxbrew/.linuxbrew/bin/deno",
+    ]:
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            _deno_path = candidate
+            logger.info("YouTube/download: deno найден -> %s", candidate)
+            return candidate
+
+    # 3) Автоустановка
+    logger.info("YouTube/download: deno не найден, устанавливаю...")
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["sh", "-c", "curl -fsSL https://deno.land/install.sh | sh"],
+            capture_output=True, text=True, timeout=120,
+        )
+        installed = os.path.expanduser("~/.deno/bin/deno")
+        if os.path.isfile(installed):
+            _deno_path = installed
+            logger.info("YouTube/download: deno установлен -> %s", installed)
+            return installed
+        else:
+            logger.warning("YouTube/download: не удалось установить deno")
+    except Exception as e:
+        logger.warning("YouTube/download: ошибка установки deno: %s", e)
+
+    return None
+
+
+def _build_subprocess_env() -> dict:
+    """Строит env для subprocess с deno в PATH."""
+    import shutil
+    env = os.environ.copy()
+
+    deno = _ensure_deno()
+    if deno:
+        deno_dir = os.path.dirname(deno)
+        if deno_dir not in env.get("PATH", ""):
+            env["PATH"] = f"{deno_dir}:{env.get('PATH', '')}"
+
+    # Убеждаемся что bun/node тоже доступны (альтернативные JS runtime для yt-dlp)
+    return env
+
+
+def _build_ytdlp_base_cmd() -> list[str]:
+    """Возвращает базовую команду: yt-dlp бинарник если есть, иначе python -m yt_dlp."""
+    import shutil
+    ytdlp_cmd = shutil.which("yt-dlp")
+    if ytdlp_cmd:
+        return [ytdlp_cmd]
+    return [sys.executable, "-m", "yt_dlp"]
+
+
 def _download_ytdlp_sync(
     url: str,
     output_template: str,
     cookies_file: str = "",
     max_filesize: int = 50 * 1024 * 1024,
-    _retry_with_fallback: bool = False,
 ) -> str | None:
-    """Скачивает видео через yt-dlp subprocess."""
+    """
+    Скачивает видео через yt-dlp.
+    - Автоматически обеспечивает deno в PATH (нужен для YouTube)
+    - Пробует несколько player_client по очереди
+    - Использует --print после --merge-output-format для точного пути
+    """
     import subprocess
+    import shutil
+    import glob as glob_mod
 
-    if _retry_with_fallback:
-        format_str = "best"
-    else:
-        format_str = (
-            "best[height<=720][ext=mp4]"
-            "/best[ext=mp4]"
-            "/best[height<=720]"
-            "/best"
-        )
+    base = _build_ytdlp_base_cmd()
+    video_id = url.split("v=")[-1].split("&")[0]
+    env = _build_subprocess_env()
 
-    cmd = [sys.executable, "-m", "yt_dlp"]
-    cmd += [
+    # Общие флаги для ВСЕХ попыток
+    common_flags = [
         "-4", "--no-config",
-        "-f", format_str,
-        "-o", output_template,
-        "--max-filesize", str(max_filesize),
-        "--quiet", "--no-warnings",
         "--no-playlist",
-        "--no-check-certificates",
-        "--merge-output-format", "mp4",
-        "--extractor-args", "youtube:player_client=android_vr",
+        "--max-filesize", str(max_filesize),
+        "--remote-components", "ejs:github",
     ]
+
+    # Форматы: сначала mp4 720p, потом любой mp4, потом лучший
+    format_variants = [
+        "best[height<=720][ext=mp4]/best[ext=mp4]/best[height<=720]/best",
+        "bestvideo[height<=720]+bestaudio/best[ext=mp4]/best",
+        "best",
+    ]
+
+    # Player client варианты
+    player_clients = ["android_vr", "ios", "mediaconnect"]
     if cookies_file and os.path.isfile(cookies_file):
-        cmd += ["--cookies", cookies_file]
-    cmd.append(url)
+        player_clients.append("_with_cookies")
 
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        if result.returncode != 0:
-            err = result.stderr[:200] if result.stderr else "неизвестная ошибка"
-            if "Sign in" in err or "bot" in err.lower():
-                logger.warning("YouTube/download: требует cookies для '%s'", url)
-            elif "ffmpeg" in err.lower():
-                logger.warning("YouTube/download: ffmpeg ошибка, пробую лучший формат")
-                if not _retry_with_fallback:
-                    return _download_ytdlp_sync(
-                        url, output_template, cookies_file, max_filesize,
-                        _retry_with_fallback=True,
-                    )
+    last_stderr = ""
+    total_tried = 0
+
+    for client in player_clients:
+        for fmt in format_variants:
+            total_tried += 1
+            cmd = base + common_flags + [
+                "-f", fmt,
+                "-o", output_template,
+                "--merge-output-format", "mp4",
+                "--no-warnings",
+            ]
+
+            if client == "_with_cookies":
+                cmd += ["--cookies", cookies_file]
             else:
-                logger.debug("YouTube/download: ошибка: %s", err)
-            return None
+                cmd += ["--extractor-args", f"youtube:player_client={client}"]
 
-        # Ищем скачанный файл
-        video_id = url.split("v=")[-1].split("&")[0]
-        result_path = output_template.replace("%(id)s", video_id)
-        # Попробуем разные расширения
-        for ext in ["mp4", "webm", "mkv", "3gp"]:
-            test_path = output_template.replace("%(ext)s", ext).replace("%(id)s", video_id)
-            if os.path.isfile(test_path) and os.path.getsize(test_path) > 0:
-                return test_path
-        # Общий поиск по шаблону
-        import glob
-        pattern = output_template.replace("%(id)s", video_id).replace("%(ext)s", "*")
-        matches = glob.glob(pattern)
-        for m in matches:
-            if os.path.isfile(m) and os.path.getsize(m) > 0:
-                return m
+            cmd.append(url)
 
-        return None
-    except subprocess.TimeoutExpired:
-        logger.warning("YouTube/download: таймаут скачивания '%s'", url)
-        return None
-    except Exception as e:
-        logger.debug("YouTube/download: ошибка: %s", e)
-        return None
+            try:
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=180, env=env,
+                )
+                last_stderr = (result.stderr or "")[:500]
+
+                if result.returncode != 0:
+                    stderr_full = last_stderr
+                    stderr_line = stderr_full.strip().split("\n")[-1][:200]
+                    logger.warning(
+                        "YouTube/download: [%s + %s] rc=%d: %s",
+                        client, fmt.split("/")[0], result.returncode, stderr_line,
+                    )
+                    # Ранний выход: видео недоступно
+                    if "Video unavailable" in stderr_full or "video is unavailable" in stderr_full.lower():
+                        logger.error("YouTube/download: видео %s НЕДОСТУПНО (удалено/приватное)", video_id)
+                        return None
+                    # Ранний выход: бот-детект (cookies не помогут, IP заблокирован)
+                    if "Sign in to confirm" in stderr_full or "not a bot" in stderr_full.lower():
+                        logger.error("YouTube/download: бот-детект для %s, нужны cookies", video_id)
+                        # Но если есть cookies — не выходим, дойдём до _with_cookies попытки
+                        if not (cookies_file and os.path.isfile(cookies_file)):
+                            return None
+                    # Файл слишком большой
+                    if "File is larger than" in stderr_full or "max-filesize" in stderr_full:
+                        logger.warning("YouTube/download: файл превышает %d MB, пропуск", max_filesize // (1024 * 1024))
+                        return None
+                    continue
+
+                # Ищем скачанный файл
+                # Сначала пробуем точное имя (mp4)
+                for ext in ["mp4", "webm", "mkv", "3gp"]:
+                    test_path = output_template.replace("%(ext)s", ext).replace("%(id)s", video_id)
+                    if os.path.isfile(test_path) and os.path.getsize(test_path) > 0:
+                        size_mb = os.path.getsize(test_path) / (1024 * 1024)
+                        logger.info(
+                            "YouTube/download: скачано [%s] -> %s (%.1f MB)",
+                            client, os.path.basename(test_path), size_mb,
+                        )
+                        return test_path
+
+                # Glob поиск
+                pattern = output_template.replace("%(id)s", video_id).replace("%(ext)s", "*")
+                for m in sorted(glob_mod.glob(pattern), key=os.path.getsize, reverse=True):
+                    if os.path.isfile(m) and os.path.getsize(m) > 0:
+                        size_mb = os.path.getsize(m) / (1024 * 1024)
+                        logger.info(
+                            "YouTube/download: скачано [%s, glob] -> %s (%.1f MB)",
+                            client, os.path.basename(m), size_mb,
+                        )
+                        return m
+
+            except subprocess.TimeoutExpired:
+                logger.warning("YouTube/download: [%s] таймаут 180с", client)
+                continue
+            except Exception as e:
+                logger.warning("YouTube/download: [%s] исключение: %s", client, e)
+                continue
+
+    # Все попытки провалились
+    logger.error(
+        "YouTube/download: НЕ СКАЧАЛ %s (пробовано %d комбинаций). Последняя ошибка: %s",
+        video_id, total_tried,
+        last_stderr.replace("\n", " | ")[:300] if last_stderr else "нет stderr",
+    )
+    return None
 
 
 async def download_short(
@@ -721,13 +874,7 @@ async def download_short(
         _thread_pool, _download_ytdlp_sync,
         url, output_template, cookies_path, max_filesize,
     )
-    if result:
-        logger.info("YouTube/download: скачано -> %s", result)
-        return result
-
-    logger.warning("YouTube/download: не удалось скачать '%s'%s", url,
-                   ". Нужен cookies.txt" if not os.path.isfile(cookies_path) else "")
-    return None
+    return result
 
 
 async def download_short_by_id(
@@ -742,6 +889,23 @@ async def download_short_by_id(
         downloads_dir=downloads_dir,
         max_filesize_mb=max_filesize_mb,
     )
+
+
+def download_short_sync(
+    video_id: str,
+    downloads_dir: str = "downloads",
+    max_filesize_mb: int = 50,
+) -> str | None:
+    """Синхронная версия скачивания (для вызова из sync-кода)."""
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    if not url:
+        return None
+    os.makedirs(downloads_dir, exist_ok=True)
+    output_template = os.path.join(downloads_dir, "%(id)s.%(ext)s")
+    max_filesize = max_filesize_mb * 1024 * 1024
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    cookies_path = os.path.join(script_dir, "cookies.txt")
+    return _download_ytdlp_sync(url, output_template, cookies_path, max_filesize)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
