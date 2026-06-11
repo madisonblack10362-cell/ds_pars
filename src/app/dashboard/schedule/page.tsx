@@ -3,6 +3,7 @@
 import { sanitizeTelegramHtml } from '@/lib/sanitize'
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { SourceTypeBadge } from '@/components/source-type-badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -22,7 +23,10 @@ interface QueueItem {
   formattedPost: string
   content: string
   images: string
+  links: string
   serverName: string
+  sourceType: string
+  sourceName: string
   scheduledAt?: string
 }
 
@@ -342,7 +346,37 @@ export default function SchedulePage() {
   const [editSaving, setEditSaving] = useState(false)
   const { toast } = useToast()
 
-  const weekDays = useMemo(() => getWeekDays(), [])
+  // Live clock — updates every 30s so midnight crossover works
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30_000)
+    return () => clearInterval(id)
+  }, [])
+
+  const todayStr = useMemo(() => {
+    const n = new Date()
+    return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`
+  }, [now])
+
+  const weekDays = useMemo(() => {
+    const days = getWeekDays()
+    const todayIdx = days.findIndex(d => d.date === todayStr)
+    if (todayIdx >= 0) {
+      const dayNames = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб']
+      const monthNames = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']
+      for (let i = 0; i < days.length; i++) {
+        if (i === todayIdx) {
+          days[i] = { ...days[i], label: 'Сегодня', shortLabel: 'Сегодня', isToday: true }
+        } else if (i === todayIdx + 1) {
+          days[i] = { ...days[i], label: 'Завтра', shortLabel: 'Завтра', isToday: false }
+        } else {
+          const d = new Date(days[i].date + 'T12:00:00')
+          days[i] = { ...days[i], isToday: false, label: `${dayNames[d.getDay()]}, ${d.getDate()} ${monthNames[d.getMonth()]}`, shortLabel: dayNames[d.getDay()] }
+        }
+      }
+    }
+    return days
+  }, [todayStr, now])
 
   const fetchSchedule = async (signal?: AbortSignal) => {
     setLoading(true)
@@ -366,12 +400,13 @@ export default function SchedulePage() {
     }
   }
 
+  // Refetch schedule when day changes or periodically (for midnight crossover)
   useEffect(() => {
     const controller = new AbortController()
     fetchSchedule(controller.signal)
     return () => controller.abort()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDayIndex])
+  }, [selectedDayIndex, now])
 
   const handleDayChange = (index: number) => {
     setSelectedDayIndex(index)
@@ -832,6 +867,7 @@ export default function SchedulePage() {
                       {slot.queue.map((item, itemIndex) => (
                         <div key={item.id} className="space-y-2">
                           <div className="flex items-center gap-2 px-1">
+                            <SourceTypeBadge type={item.sourceType} />
                             <PriorityDot priority={item.priority} />
                             <span className="text-border">·</span>
                             <NewsTypeLabel type={item.newsType} />

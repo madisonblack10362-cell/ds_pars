@@ -4,6 +4,7 @@ import { sanitizeTelegramHtml } from '@/lib/sanitize'
 import { useState, useEffect, useCallback } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { SourceTypeBadge, SOURCE_TYPES } from '@/components/source-type-badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -149,17 +150,6 @@ function NewsTypeBadge({ type }: { type: string }) {
     event: { label: 'Событие', className: 'bg-green-500/15 text-green-400 border-green-500/30' },
     maintenance: { label: 'Обслуживание', className: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30' },
     other: { label: 'Другое', className: 'bg-orange-500/15 text-orange-400 border-orange-500/30' },
-  }
-  const c = config[type] || { label: type, className: 'bg-secondary text-muted-foreground border-border' }
-  return <Badge variant="outline" className={c.className}>{c.label}</Badge>
-}
-
-function SourceTypeBadge({ type }: { type: string }) {
-  const config: Record<string, { label: string; className: string }> = {
-    discord: { label: 'Discord', className: 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30' },
-    telegram: { label: 'Telegram', className: 'bg-sky-500/15 text-sky-400 border-sky-500/30' },
-    vk: { label: 'VK', className: 'bg-blue-500/15 text-blue-400 border-blue-500/30' },
-    website: { label: 'Сайт', className: 'bg-teal-500/15 text-teal-400 border-teal-500/30' },
   }
   const c = config[type] || { label: type, className: 'bg-secondary text-muted-foreground border-border' }
   return <Badge variant="outline" className={c.className}>{c.label}</Badge>

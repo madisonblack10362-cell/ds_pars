@@ -8,6 +8,7 @@ import {
   slotKeyToNumber,
   isValidTime,
 } from '@/lib/schedule-utils'
+import { resolveSourceType } from '@/lib/source-utils'
 
 export async function GET(request: NextRequest) {
   try {
@@ -63,6 +64,7 @@ export async function GET(request: NextRequest) {
       db.newsItem.findMany({
         where: { status: 'scheduled' },
         orderBy: { scheduledAt: 'asc' },
+        include: { source: { select: { sourceType: true, channelName: true, serverName: true } } },
       })
     )
 
@@ -121,17 +123,24 @@ export async function GET(request: NextRequest) {
         utcTime: `${String(hours - 3 >= 0 ? hours - 3 : hours + 21).padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`,
         queueCount: queue.length,
         status,
-        queue: queue.map((item) => ({
-          id: item.id,
-          title: item.title,
-          priority: item.priority,
-          newsType: item.newsType,
-          formattedPost: item.formattedPost || '',
-          content: item.content || '',
-          images: item.images || '[]',
-          serverName: item.serverName || '',
-          scheduledAt: item.scheduledAt?.toISOString(),
-        })),
+        queue: queue.map((item) => {
+          const rawLinks: string[] = []
+          try { rawLinks.push(...JSON.parse(item.links || '[]')) } catch { /* ignore */ }
+          return {
+            id: item.id,
+            title: item.title,
+            priority: item.priority,
+            newsType: item.newsType,
+            formattedPost: item.formattedPost || '',
+            content: item.content || '',
+            images: item.images || '[]',
+            links: item.links || '[]',
+            serverName: item.serverName || '',
+            sourceType: resolveSourceType(item.source?.sourceType || '', rawLinks, item.content || ''),
+            sourceName: item.source?.channelName || item.serverName || '',
+            scheduledAt: item.scheduledAt?.toISOString(),
+          }
+        }),
       })
     }
 

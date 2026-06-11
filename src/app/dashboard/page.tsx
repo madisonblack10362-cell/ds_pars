@@ -3,6 +3,7 @@
 import { sanitizeTelegramHtml } from '@/lib/sanitize'
 import { useState, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { SourceTypeBadge } from '@/components/source-type-badge'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
@@ -477,6 +478,7 @@ export default function DashboardPage() {
                     {/* Top bar: source info + badges */}
                     <div className="flex items-center justify-between">
                       <div className="flex flex-wrap items-center gap-2">
+                        <SourceTypeBadge type={item.source_type} />
                         <span className="text-xs text-[#8899aa] font-medium">{item.source_name}</span>
                         <span className="text-[11px] text-[#6c7b8f] flex items-center gap-1">
                           <Clock className="w-3 h-3" />

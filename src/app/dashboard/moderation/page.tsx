@@ -3,6 +3,7 @@
 import { sanitizeTelegramHtml } from '@/lib/sanitize'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
+import { SourceTypeBadge } from '@/components/source-type-badge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -439,6 +440,7 @@ function NewsCard({
           <div className="flex-1 min-w-0">
             {/* Top bar */}
             <div className="flex flex-wrap items-center gap-2 mb-1">
+              <SourceTypeBadge type={item.source_type} />
               <span className="text-xs text-[#8899aa] font-medium">{item.source_name}</span>
               <span className="text-[11px] text-[#6c7b8f]">
                 {new Date(item.created_at).toLocaleString('ru-RU', {

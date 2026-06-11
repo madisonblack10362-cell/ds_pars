@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { SourceTypeBadge } from '@/components/source-type-badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -67,17 +68,6 @@ function SourceTypeIcon({ type }: { type: string }) {
     case 'website': return <Globe className="w-4 h-4 text-teal-400" />
     default: return <Globe className="w-4 h-4 text-muted-foreground" />
   }
-}
-
-function SourceTypeBadge({ type }: { type: string }) {
-  const config: Record<string, { label: string; className: string }> = {
-    discord: { label: 'Discord', className: 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30' },
-    telegram: { label: 'Telegram', className: 'bg-sky-500/15 text-sky-400 border-sky-500/30' },
-    vk: { label: 'VK', className: 'bg-blue-500/15 text-blue-400 border-blue-500/30' },
-    website: { label: 'Сайт', className: 'bg-teal-500/15 text-teal-400 border-teal-500/30' },
-  }
-  const c = config[type] || { label: type, className: 'bg-secondary text-muted-foreground border-border' }
-  return <Badge variant="outline" className={c.className}>{c.label}</Badge>
 }
 
 const sourceTypeFields: Record<string, { key: string; label: string; placeholder: string }[]> = {

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { db, withDbRetry } from '@/lib/db'
 import { processImageUrls } from '@/lib/image-storage'
+import { resolveSourceType } from '@/lib/source-utils'
 
 export async function GET(request: Request) {
   try {
@@ -62,22 +63,26 @@ export async function GET(request: Request) {
 
     const totalPages = Math.ceil(total / limit)
 
-    const formattedNews = news.map((item) => ({
-      id: item.id,
-      source_name: item.source?.serverName || item.serverName || 'Неизвестно',
-      source_type: item.source?.sourceType || '',
-      news_type: item.newsType || 'other',
-      priority: item.priority || 'low',
-      status: item.status || 'pending',
-      original_text: item.content || '',
-      title: item.title || '',
-      ai_summary: item.summary || '',
-      formatted_post: item.formattedPost || '',
-      created_at: item.createdAt.toISOString(),
-      published_at: item.publishedAt?.toISOString() || null,
-      images: item.images || '[]',
-      links: item.links || '[]',
-    }))
+    const formattedNews = news.map((item) => {
+      const rawLinks: string[] = []
+      try { rawLinks.push(...JSON.parse(item.links || '[]')) } catch { /* ignore */ }
+      return {
+        id: item.id,
+        source_name: item.source?.serverName || item.serverName || 'Неизвестно',
+        source_type: resolveSourceType(item.source?.sourceType || '', rawLinks, item.content || ''),
+        news_type: item.newsType || 'other',
+        priority: item.priority || 'low',
+        status: item.status || 'pending',
+        original_text: item.content || '',
+        title: item.title || '',
+        ai_summary: item.summary || '',
+        formatted_post: item.formattedPost || '',
+        created_at: item.createdAt.toISOString(),
+        published_at: item.publishedAt?.toISOString() || null,
+        images: item.images || '[]',
+        links: item.links || '[]',
+      }
+    })
 
     return NextResponse.json({
       news: formattedNews,

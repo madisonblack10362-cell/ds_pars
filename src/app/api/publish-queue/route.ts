@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getScheduleSlots, mskTimeToNextSlot } from '@/lib/schedule-utils'
+import { resolveSourceType } from '@/lib/source-utils'
 
 async function findNextFreeSlot(): Promise<Date> {
   const slots = await getScheduleSlots()
@@ -53,25 +54,30 @@ export async function GET() {
     const items = await db.newsItem.findMany({
       where: { status: 'scheduled' },
       orderBy: { scheduledAt: 'asc' },
-      include: { source: { select: { serverName: true, channelName: true } } },
+      include: { source: { select: { sourceType: true, serverName: true, channelName: true } } },
     })
 
     return NextResponse.json({
-      items: items.map((item) => ({
-        id: item.id,
-        title: item.title,
-        summary: item.summary,
-        content: item.content,
-        formattedPost: item.formattedPost,
-        images: item.images,
-        links: item.links,
-        newsType: item.newsType,
-        priority: item.priority,
-        serverName: item.source?.serverName || item.serverName,
-        channelName: item.source?.channelName || item.channelName,
-        scheduledAt: item.scheduledAt,
-        createdAt: item.createdAt,
-      })),
+      items: items.map((item) => {
+        const rawLinks: string[] = []
+        try { rawLinks.push(...JSON.parse(item.links || '[]')) } catch { /* ignore */ }
+        return {
+          id: item.id,
+          title: item.title,
+          summary: item.summary,
+          content: item.content,
+          formattedPost: item.formattedPost,
+          images: item.images,
+          links: item.links,
+          newsType: item.newsType,
+          priority: item.priority,
+          sourceType: resolveSourceType(item.source?.sourceType || '', rawLinks, item.content || ''),
+          serverName: item.source?.serverName || item.serverName,
+          channelName: item.source?.channelName || item.channelName,
+          scheduledAt: item.scheduledAt,
+          createdAt: item.createdAt,
+        }
+      }),
     })
   } catch (error) {
     console.error('Fetch publish queue error:', error)
