@@ -705,7 +705,7 @@ async def check_for_popular_shorts(
                             "externalId": f"yt_{video_id}",
                             "serverName": ch_name,
                             "channelName": f"YouTube: {ch_name}",
-                            "content": best.get("title", ""),
+                            "content": f"{best.get('title', '')}\n\nКанал: {ch_name}\nДлительность: {_format_duration(dur)}\nПросмотры: {_format_views(views)}\nЛайки: {_format_views(likes)}",
                             "summary": ai_summary,
                             "formattedPost": ai_post,
                             "newsType": category,
@@ -723,6 +723,41 @@ async def check_for_popular_shorts(
                         logger.warning("YouTube: не удалось отправить %s на веб-панель", video_id[:12])
                 except Exception as web_err:
                     logger.error("YouTube: ошибка отправки на веб-панель: %s", web_err)
+
+            # Уведомление в Telegram о новом видео на модерации
+            try:
+                notify_chat_id = config.get("telegram_notify_chat_id", "")
+                bot_token = config.get("telegram_bot_token", "")
+                if notify_chat_id and bot_token:
+                    import httpx
+                    type_icons = {
+                        "update": "🎮", "wipe": "🔄", "patch": "🔧", "event": "📅",
+                        "guide": "📖", "pvp": "⚔️", "weapons": "🔫", "memes": "😂",
+                        "other": "📰",
+                    }
+                    icon = type_icons.get(category, "📰")
+                    prio_labels = {"high": "🔴", "medium": "🟡", "low": "🟢"}
+                    prio_icon = prio_labels.get(priority, "")
+                    text = (
+                        f"{icon} {prio_icon} <b>YouTube модерация</b>\n"
+                        f"{'━' * 20}\n"
+                        f"<b>{_escape_html(best.get('title', '')[:80])}</b>\n"
+                        f"📺 {_escape_html(ch_name)}\n"
+                        f"⏱ {_format_duration(dur)}  👁 {_format_views(views)}\n\n"
+                        f"🔗 <a href=\"{best.get('url', '')}\">Открыть видео</a>"
+                    )
+                    async with httpx.AsyncClient(timeout=10) as client:
+                        await client.post(
+                            f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                            json={
+                                "chat_id": int(notify_chat_id),
+                                "text": text,
+                                "parse_mode": "HTML",
+                                "disable_web_page_preview": True,
+                            },
+                        )
+            except Exception as notify_err:
+                logger.debug("YouTube: не удалось отправить уведомление: %s", notify_err)
 
             # Отмечаем чтобы не повторять
             known_ids.add(video_id)
