@@ -421,67 +421,57 @@ async def _fetch_channel_videos(
     return videos, channel_id, channel_name
 
 
-async def _enrich_video_metadata(video: dict) -> dict:
-    """
-    Получает полные метаданные для одного видео через yt-dlp CLI --dump-json.
-    subprocess автоматически изолирует stderr.
-    """
+def _enrich_video_metadata_sync(video: dict) -> dict:
+    """Синхронная версия — вызывается из executor."""
     url = video.get("url", "")
     video_id = video.get("video_id", "")
     if not url:
         return video
 
+    import subprocess
+    import shutil
+
+    ytdlp_cmd = shutil.which("yt-dlp")
+    if ytdlp_cmd:
+        cmd = [ytdlp_cmd, "--dump-json", "--no-download", "--quiet", "--no-warnings",
+               "--extractor-args", "youtube:player_client=ios,web", url]
+    else:
+        cmd = [sys.executable, "-m", "yt_dlp",
+               "--dump-json", "--no-download", "--quiet", "--no-warnings",
+               "--extractor-args", "youtube:player_client=ios,web", url]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0 or not result.stdout.strip():
+            logger.warning("YouTube: yt-dlp не смог получить метаданные %s", video_id[:12])
+            return video
+
+        info = json.loads(result.stdout)
+        video["description"] = (info.get("description") or "")[:2000]
+        video["views"] = info.get("view_count") or video.get("views", 0) or 0
+        video["likes"] = info.get("like_count") or video.get("likes", 0) or 0
+        video["duration"] = int(info.get("duration") or video.get("duration", 0) or 0)
+        thumb = info.get("thumbnail") or ""
+        if thumb:
+            video["thumbnail"] = thumb
+        logger.info(
+            "YouTube: метаданные %s — %s views, %s likes, %s",
+            video_id[:12],
+            _format_views(video["views"]), _format_views(video["likes"]),
+            _format_duration(video["duration"]),
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("YouTube: таймаут метаданных %s", video_id[:12])
+    except json.JSONDecodeError:
+        logger.warning("YouTube: не удалось распарсить JSON метаданных %s", video_id[:12])
+    except Exception as e:
+        logger.warning("YouTube: ошибка метаданных %s: %s", video_id[:12], e)
+
+    return video
+
+
+async def _enrich_video_metadata(video: dict) -> dict:
     loop = asyncio.get_running_loop()
-
-    def _fetch_one():
-        import subprocess
-        import shutil
-
-        # Ищем yt-dlp: сначала как exe, потом через python -m
-        ytdlp_cmd = shutil.which("yt-dlp")
-        if ytdlp_cmd:
-            cmd = [ytdlp_cmd, "--dump-json", "--no-download", "--quiet", "--no-warnings",
-                   "--extractor-args", "youtube:player_client=ios,web", url]
-        else:
-            cmd = [sys.executable, "-m", "yt_dlp",
-                   "--dump-json", "--no-download", "--quiet", "--no-warnings",
-                   "--extractor-args", "youtube:player_client=ios,web", url]
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            if result.returncode != 0 or not result.stdout.strip():
-                logger.warning("YouTube: yt-dlp не смог получить метаданные %s", video_id[:12])
-                return video
-
-            info = json.loads(result.stdout)
-            video["description"] = (info.get("description") or "")[:2000]
-            video["views"] = info.get("view_count") or video.get("views", 0) or 0
-            video["likes"] = info.get("like_count") or video.get("likes", 0) or 0
-            dur = info.get("duration") or video.get("duration", 0) or 0
-            video["duration"] = int(dur)
-            thumb = info.get("thumbnail") or ""
-            if thumb:
-                video["thumbnail"] = thumb
-            logger.info(
-                "YouTube: метаданные %s — %s views, %s likes, %s",
-                video_id[:12],
-                _format_views(video["views"]), _format_views(video["likes"]),
-                _format_duration(video["duration"]),
-            )
-        except subprocess.TimeoutExpired:
-            logger.warning("YouTube: таймаут метаданных %s", video_id[:12])
-        except json.JSONDecodeError:
-            logger.warning("YouTube: не удалось распарсить JSON метаданных %s", video_id[:12])
-        except Exception as e:
-            logger.warning("YouTube: ошибка метаданных %s: %s", video_id[:12], e)
-
-        return video
-
-    return await loop.run_in_executor(_thread_pool, _fetch_one)
+    return await loop.run_in_executor(_thread_pool, _enrich_video_metadata_sync, video)
 
 
 async def _fetch_channel_best_short(
