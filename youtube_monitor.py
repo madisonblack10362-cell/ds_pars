@@ -442,7 +442,9 @@ def _enrich_video_metadata_sync(video: dict) -> dict:
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode != 0 or not result.stdout.strip():
-            logger.warning("YouTube: yt-dlp не смог получить метаданные %s", video_id[:12])
+            stderr_snippet = (result.stderr or "")[:300].replace("\n", " | ")
+            logger.warning("YouTube: yt-dlp не смог получить метаданные %s (rc=%d, stderr: %s)",
+                           video_id[:12], result.returncode, stderr_snippet)
             return video
 
         info = json.loads(result.stdout)
