@@ -15,6 +15,7 @@ import asyncio
 import json
 import os
 import re
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -311,6 +312,21 @@ def _add_to_moderation(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+#  yt-dlp: подавление stderr
+# ═════════════════════════════════════════════════════════════════════════════
+
+class _SuppressYtdlpStderr:
+    """Контекст-менеджер: подавляет stderr на время вызова yt-dlp."""
+    def __enter__(self):
+        self._old = sys.stderr
+        sys.stderr = open(os.devnull, 'w')
+        return self
+    def __exit__(self, *args):
+        sys.stderr.close()
+        sys.stderr = self._old
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 #  Получение видео через yt-dlp (напрямую, без Invidious)
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -319,7 +335,7 @@ async def _fetch_channel_videos(
     max_videos: int = 30,
 ) -> tuple[list[dict], str, str]:
     """
-    Получает видео канала через yt-dlp напрямую (без Invidious).
+    Получает видео канала через yt-dlp (extract_flat — быстрый список).
 
     Args:
         channel_input: @handle, UC... ID, или URL
@@ -363,53 +379,54 @@ async def _fetch_channel_videos(
         channel_name = ""
 
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                if not info:
-                    return [], "", ""
+            with _SuppressYtdlpStderr():
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+            if not info:
+                return [], "", ""
 
-                channel_id = info.get("channel_id", "") or ""
-                channel_name = (info.get("uploader") or info.get("channel", "")).strip()
+            channel_id = info.get("channel_id", "") or ""
+            channel_name = (info.get("uploader") or info.get("channel", "")).strip()
 
-                entries = info.get("entries", []) or []
-                for entry in entries[:max_videos]:
-                    if not isinstance(entry, dict):
-                        continue
-                    vid = entry.get("id", "")
-                    if not vid:
-                        continue
+            entries = info.get("entries", []) or []
+            for entry in entries[:max_videos]:
+                if not isinstance(entry, dict):
+                    continue
+                vid = entry.get("id", "")
+                if not vid:
+                    continue
 
-                    dur = entry.get("duration") or 0
-                    if isinstance(dur, str):
-                        try:
-                            dur = int(dur)
-                        except (ValueError, TypeError):
-                            dur = 0
+                dur = entry.get("duration") or 0
+                if isinstance(dur, str):
+                    try:
+                        dur = int(dur)
+                    except (ValueError, TypeError):
+                        dur = 0
 
-                    views = entry.get("view_count") or 0
-                    if isinstance(views, str):
-                        try:
-                            views = int(views.replace(",", ""))
-                        except (ValueError, TypeError):
-                            views = 0
+                views = entry.get("view_count") or 0
+                if isinstance(views, str):
+                    try:
+                        views = int(views.replace(",", ""))
+                    except (ValueError, TypeError):
+                        views = 0
 
-                    likes = entry.get("like_count") or 0
+                likes = entry.get("like_count") or 0
 
-                    videos.append({
-                        "video_id": vid,
-                        "title": (entry.get("title") or "").strip(),
-                        "channel_title": channel_name,
-                        "channel_id": channel_id,
-                        "duration": int(dur),
-                        "views": int(views),
-                        "likes": int(likes),
-                        "published": entry.get("timestamp", 0) or 0,
-                        "description": "",
-                        "thumbnail": entry.get("thumbnail", ""),
-                        "url": f"https://www.youtube.com/watch?v={vid}",
-                        "is_live": entry.get("live_status") == "is_live",
-                        "source": "ytdlp",
-                    })
+                videos.append({
+                    "video_id": vid,
+                    "title": (entry.get("title") or "").strip(),
+                    "channel_title": channel_name,
+                    "channel_id": channel_id,
+                    "duration": int(dur),
+                    "views": int(views),
+                    "likes": int(likes),
+                    "published": entry.get("timestamp", 0) or 0,
+                    "description": "",
+                    "thumbnail": entry.get("thumbnail", ""),
+                    "url": f"https://www.youtube.com/watch?v={vid}",
+                    "is_live": entry.get("live_status") == "is_live",
+                    "source": "ytdlp",
+                })
         except Exception as e:
             logger.error("YouTube/ytdlp: %s -> %s", url, e)
 
@@ -467,24 +484,25 @@ async def _enrich_video_metadata(video: dict) -> dict:
             "extractor_args": {"youtube": {"player_client": ["ios", "web"]}},
         }
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                if not info:
-                    return video
-                video["description"] = (info.get("description") or "")[:2000]
-                video["views"] = info.get("view_count") or video.get("views", 0) or 0
-                video["likes"] = info.get("like_count") or video.get("likes", 0) or 0
-                dur = info.get("duration") or video.get("duration", 0) or 0
-                video["duration"] = int(dur)
-                thumb = info.get("thumbnail") or ""
-                if thumb:
-                    video["thumbnail"] = thumb
-                logger.info(
-                    "YouTube: метаданные %s — %s views, %s likes, %s",
-                    video.get("video_id", "?")[:12],
-                    _format_views(video["views"]), _format_views(video["likes"]),
-                    _format_duration(video["duration"]),
-                )
+            with _SuppressYtdlpStderr():
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+            if not info:
+                return video
+            video["description"] = (info.get("description") or "")[:2000]
+            video["views"] = info.get("view_count") or video.get("views", 0) or 0
+            video["likes"] = info.get("like_count") or video.get("likes", 0) or 0
+            dur = info.get("duration") or video.get("duration", 0) or 0
+            video["duration"] = int(dur)
+            thumb = info.get("thumbnail") or ""
+            if thumb:
+                video["thumbnail"] = thumb
+            logger.info(
+                "YouTube: метаданные %s — %s views, %s likes, %s",
+                video.get("video_id", "?")[:12],
+                _format_views(video["views"]), _format_views(video["likes"]),
+                _format_duration(video["duration"]),
+            )
         except Exception as e:
             logger.warning("YouTube: не удалось получить метаданные для %s: %s", url, e)
 
@@ -608,8 +626,9 @@ def _download_ytdlp_sync(
         ydl_opts["cookiefile"] = cookies_file
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
+        with _SuppressYtdlpStderr():
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
 
         if info:
             filepath = info.get("requested_downloads", [{}])
@@ -689,10 +708,11 @@ async def check_for_popular_shorts(
 
     Для каждого канала:
       1. Получает видео через yt-dlp (extract_flat)
-      2. Фильтрует шортсы (<=90с)
-      3. Берёт самый популярный, которого ещё не было
-      4. Отправляет в AI для генерации поста
-      5. Добавляет в очередь модерации
+      2. Обогащает метаданными (views, likes, description)
+      3. Фильтрует шортсы (<=90с)
+      4. Берёт самый популярный, которого ещё не было
+      5. Отправляет в AI для генерации поста
+      6. Отправляет на веб-панель для модерации
 
     Returns: список найденных новых видео.
     """
