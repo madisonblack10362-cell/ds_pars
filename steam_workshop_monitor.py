@@ -27,14 +27,23 @@ logger = logging.getLogger("steam_workshop_monitor")
 
 # ─── Конфиг ────────────────────────────────────────────────────────────────────
 DAYZ_APPID = 221100
-STEAM_WORKSHOP_URL = (
-    "https://steamcommunity.com/workshop/browse/"
-    "?appid=221100"
-    "&browsesort=mostpopular"
-    "&browsefilter=trend"
-    "&section=readytouseitems"
-    "&p=1&numperpage=30"
-)
+
+def _make_workshop_url(sort: str = "mostpopular", filter: str = "trend", page: int = 1, numperpage: int = 30) -> str:
+    return (
+        "https://steamcommunity.com/workshop/browse/"
+        f"?appid={DAYZ_APPID}"
+        f"&browsesort={sort}"
+        f"&browsefilter={filter}"
+        "&section=readytouseitems"
+        f"&p={page}&numperpage={numperpage}"
+    )
+
+# Страницы для скрапинга — trending (популярные) + updated (недавно обновлённые)
+WORKSHOP_SCRAPE_URLS = [
+    _make_workshop_url(sort="mostpopular", filter="trend"),
+    _make_workshop_url(sort="mostrecent", filter="all"),
+    _make_workshop_url(sort="lastupdated", filter="all"),
+]
 
 STEAM_API_URL = "https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/"
 
@@ -224,8 +233,10 @@ def _parse_api_item(item: dict) -> Optional[dict]:
         return None
 
 
-async def _fetch_workshop_page_html(session: aiohttp.ClientSession) -> Optional[str]:
+async def _fetch_workshop_page_html(session: aiohttp.ClientSession, url: str | None = None) -> Optional[str]:
     """Получает HTML страницы Steam Workshop для DayZ."""
+    if url is None:
+        url = WORKSHOP_SCRAPE_URLS[0]
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
@@ -322,24 +333,28 @@ async def _fetch_via_steam_api(api_key: str, max_mods: int) -> list:
 
 async def _fetch_via_scraping(max_mods: int) -> list:
     """
-    Fallback: скрапит страницу Workshop, извлекает ID модов,
-    затем получает детали через бесплатный API.
+    Fallback: скрапит несколько страниц Workshop (trending, recent, updated),
+    извлекает ID модов, затем получает детали через бесплатный API.
     """
+    id_pattern = re.compile(r"filedetails/\?id=(\d+)")
+    all_ids = set()
+
     async with aiohttp.ClientSession() as session:
-        html = await _fetch_workshop_page_html(session)
-        if not html:
-            logger.error("Не удалось получить страницу Steam Workshop")
-            return []
+        for url in WORKSHOP_SCRAPE_URLS:
+            html = await _fetch_workshop_page_html(session, url)
+            if html:
+                found = set(id_pattern.findall(html))
+                all_ids |= found
+                logger.debug("Страница %s: %d ID модов", url.split("&")[3], len(found))
+            await asyncio.sleep(0.5)
 
-        id_pattern = re.compile(r"filedetails/\?id=(\d+)")
-        all_ids = list(set(id_pattern.findall(html)))
-        logger.info("Найдено %d ID модов на странице Workshop", len(all_ids))
+    logger.info("Найдено %d уникальных ID модов со всех страниц Workshop", len(all_ids))
 
-        if not all_ids:
-            return []
+    if not all_ids:
+        return []
 
-        mod_ids = all_ids[:max_mods]
-        mods = await _fetch_mod_details_via_web(mod_ids)
+    mod_ids = list(all_ids)[:max_mods]
+    mods = await _fetch_mod_details_via_web(mod_ids)
 
     return mods
 
@@ -368,7 +383,7 @@ async def check_for_new_mods(
     posted_ids = set(state.get("posted_ids", []))
     is_first_run = not state.get("last_check")
 
-    mods = await fetch_popular_mods(steam_api_key=steam_api_key, max_mods=50)
+    mods = await fetch_popular_mods(steam_api_key=steam_api_key, max_mods=80)
 
     now = time.time()
 
@@ -378,7 +393,6 @@ async def check_for_new_mods(
         cutoff_3d = now - (3 * 24 * 3600)
 
         fresh = []
-        old = []
         for mod in mods:
             mod_id = mod["id"]
             if mod_id not in known_ids:
@@ -386,21 +400,17 @@ async def check_for_new_mods(
             if mod_id in posted_ids:
                 continue
             if mod.get("timestamp", 0) and mod["timestamp"] < cutoff_3d:
-                old.append(mod)
-            else:
-                fresh.append(mod)
-
-        # ВСЁ старое помечаем как известные — больше никогда не покажем
-        for mod in old:
-            posted_ids.add(mod["id"])
+                # Старые моды помечаем как известные (НЕ в posted_ids!)
+                known_ids.add(mod_id)
+                continue
+            fresh.append(mod)
 
         state["known_ids"] = list(known_ids)
-        state["posted_ids"] = list(posted_ids)
         state["last_check"] = datetime.now(timezone.utc).isoformat()
         _save_state(state)
         logger.info(
             "Первый запуск: свежих модов=%d, старых пропущено=%d, берём топ-%d",
-            len(fresh), len(old), max_per_check,
+            len(fresh), len(mods) - len(fresh), max_per_check,
         )
 
         # Фильтруем по подпискам и берём топ по популярности
