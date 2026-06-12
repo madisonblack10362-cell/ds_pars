@@ -35,9 +35,9 @@ DAYZ_TWITTER_HANDLE = "DayZ"
 
 # RSS-ленты (попробуем по порядку)
 RSS_FEED_URLS = [
-    f"https://xcancel.com/{DAYZ_TWITTER_HANDLE}/rss",
     f"https://nitter.privacydev.net/{DAYZ_TWITTER_HANDLE}/rss",
     f"https://nitter.poast.org/{DAYZ_TWITTER_HANDLE}/rss",
+    f"https://xcancel.com/{DAYZ_TWITTER_HANDLE}/rss",
     f"https://nitter.net/{DAYZ_TWITTER_HANDLE}/rss",
 ]
 
@@ -95,6 +95,23 @@ async def _fetch_rss_tweets(max_tweets: int = 20) -> list[dict]:
             feed = feedparser.parse(raw)
             if not feed.entries:
                 logger.debug("RSS %s: нет записей", rss_url)
+                continue
+
+            # Проверка: не whitelisting-сообщение вместо твитов
+            first_title = feed.entries[0].get("title", "")
+            if "whitelist" in first_title.lower() or "not yet" in first_title.lower():
+                logger.warning("RSS %s: whitelisting required, пропускаем", rss_url)
+                continue
+
+            # Проверка: есть ли реальные tweet ID в записях
+            has_real_tweets = False
+            for entry in feed.entries[:max_tweets]:
+                entry_id = entry.get("id", "") or entry.get("link", "")
+                if re.search(r"/status/\d+", entry_id):
+                    has_real_tweets = True
+                    break
+            if not has_real_tweets:
+                logger.warning("RSS %s: нет реальных твитов в записях", rss_url)
                 continue
 
             tweets = []
@@ -273,20 +290,18 @@ _TWITTER_AI_PROMPT = """Ты — редактор русскоязычного T
 
 Твит:
 {text}
-
-{(Картинки: {num_images} шт.) if has_images else ""}"""
+{images_note}"""
 
 
 async def _ai_generate_russian_description(tweet: dict, ai_analyzer) -> str:
     """Генерирует описание твита на русском через AI."""
     text = tweet.get("text", "") or tweet.get("title", "")
-    has_images = bool(tweet.get("images"))
     num_images = len(tweet.get("images", []))
+    images_note = f"\n\nКартинки: {num_images} шт." if num_images else ""
 
     prompt = _TWITTER_AI_PROMPT.format(
         text=text[:500],
-        num_images=num_images,
-        has_images=has_images,
+        images_note=images_note,
     )
 
     try:
