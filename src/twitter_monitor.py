@@ -1,8 +1,8 @@
 """
 Монитор X/Twitter аккаунта @DayZ для DayZ News Monitor.
 
-Парсит твиты через RSS-ленту (Nitter/XCanceller mirror).
-Если RSS недоступен — фоллбэк на скрейпинг syndication.twitter.com.
+Использует официальный Twitter API v2 (tweepy).
+Бесплатный tier: 1500 запросов/месяц — хватит с запасом.
 
 Контент идёт через модерацию:
   1. Сохраняется в БД (source_type='twitter')
@@ -21,9 +21,6 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 
-import aiohttp
-import feedparser
-
 from logger import logger
 
 
@@ -32,20 +29,6 @@ from logger import logger
 # ═════════════════════════════════════════════════════════════════════════════
 
 DAYZ_TWITTER_HANDLE = "DayZ"
-
-# RSS-ленты (попробуем по порядку)
-RSS_FEED_URLS = [
-    f"https://nitter.privacydev.net/{DAYZ_TWITTER_HANDLE}/rss",
-    f"https://nitter.poast.org/{DAYZ_TWITTER_HANDLE}/rss",
-    f"https://twiiit.com/{DAYZ_TWITTER_HANDLE}/rss",
-    f"https://nitter.cz/{DAYZ_TWITTER_HANDLE}/rss",
-    f"https://xcancel.com/{DAYZ_TWITTER_HANDLE}/rss",
-    f"https://nitter.net/{DAYZ_TWITTER_HANDLE}/rss",
-]
-
-# Syndication fallback (embedded JSON в HTML)
-SYNDICATION_URL = f"https://syndication.twitter.com/srv/timeline-profile/screen-name/{DAYZ_TWITTER_HANDLE}"
-
 STATE_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "twitter_state.json")
 
 
@@ -60,7 +43,7 @@ def _load_state() -> dict:
                 return json.load(f)
         except (json.JSONDecodeError, IOError) as e:
             logger.warning("Не удалось загрузить twitter_state.json: %s", e)
-    return {"posted_ids": [], "last_check": None}
+    return {"posted_ids": [], "last_check": None, "user_id": None}
 
 
 def _save_state(state: dict) -> None:
@@ -72,178 +55,134 @@ def _save_state(state: dict) -> None:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  RSS-парсинг (основной метод)
+#  Twitter API v2 (tweepy)
 # ═════════════════════════════════════════════════════════════════════════════
 
-async def _fetch_rss_tweets(max_tweets: int = 20) -> list[dict]:
+def _get_client(bearer_token: str):
+    """Создаёт tweepy Client. Вынесено в функцию для удобного мока в тестах."""
+    import tweepy
+    return tweepy.Client(bearer_token=bearer_token)
+
+
+def _resolve_user_id(client, username: str, state: dict) -> Optional[str]:
+    """Получает user_id по username. Кеширует в state."""
+    cached = state.get("user_id")
+    if cached:
+        return cached
+
+    try:
+        resp = client.get_user(username=username, user_fields=["id"])
+        if resp and resp.data:
+            uid = str(resp.data.id)
+            state["user_id"] = uid
+            logger.info("Twitter API: @%s -> user_id=%s", username, uid)
+            return uid
+    except Exception as e:
+        logger.error("Twitter API: не удалось получить user_id для @%s: %s", username, e)
+    return None
+
+
+async def _fetch_api_tweets(bearer_token: str, state: dict, max_tweets: int = 20) -> list[dict]:
     """
-    Пробует RSS-ленты из RSS_FEED_URLS по порядку.
-    Возвращает список твитов: [{"id": "...", "title": "...", "text": "...",
-    "url": "...", "images": [...], "date": "..."}]
-    """
-    for rss_url in RSS_FEED_URLS:
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    rss_url,
-                    timeout=aiohttp.ClientTimeout(total=15),
-                    headers={"User-Agent": "Mozilla/5.0 (compatible; DayZMonitor/1.0)"},
-                ) as resp:
-                    if resp.status != 200:
-                        logger.debug("RSS %s вернул %d", rss_url, resp.status)
-                        continue
-                    raw = await resp.text()
+    Получает твиты через Twitter API v2.
 
-            feed = feedparser.parse(raw)
-            if not feed.entries:
-                logger.debug("RSS %s: нет записей", rss_url)
-                continue
-
-            # Проверка: не whitelisting-сообщение вместо твитов
-            first_title = feed.entries[0].get("title", "")
-            if "whitelist" in first_title.lower() or "not yet" in first_title.lower():
-                logger.warning("RSS %s: whitelisting required, пропускаем", rss_url)
-                continue
-
-            # Проверка: есть ли реальные tweet ID в записях
-            has_real_tweets = False
-            for entry in feed.entries[:max_tweets]:
-                entry_id = entry.get("id", "") or entry.get("link", "")
-                if re.search(r"/status/\d+", entry_id):
-                    has_real_tweets = True
-                    break
-            if not has_real_tweets:
-                logger.warning("RSS %s: нет реальных твитов в записях", rss_url)
-                continue
-
-            tweets = []
-            for entry in feed.entries[:max_tweets]:
-                tweet_id = entry.get("id", "")
-                # Извлекаем ID из ссылки или entry_id
-                # Формат: https://xcancel.com/DayZ/status/123456789
-                m = re.search(r"/status/(\d+)", tweet_id)
-                tweet_id = m.group(1) if m else tweet_id
-
-                title = entry.get("title", "").strip()
-
-                # Полный текст из summary или content
-                text = ""
-                if entry.get("summary"):
-                    text = entry["summary"]
-                elif entry.get("content"):
-                    text = entry["content"][0].get("value", "")
-
-                # Убираем HTML-теги
-                text = re.sub(r"<[^>]+>", " ", text).strip()
-                # Убираем t.co ссылки-сокращения (сохраним оригинальные если есть)
-                text = re.sub(r"https?://t\.co/\S+", "", text).strip()
-                text = re.sub(r"\s+", " ", text)
-
-                # Извлекаем картинки из enclosure или content
-                images = []
-                for enc in entry.get("enclosures", []):
-                    href = enc.get("href", "")
-                    if href and re.match(r"https?://pbs\.twimg\.com/", href):
-                        images.append(href)
-
-                # Попробуем достать картинки из HTML content
-                if not images and entry.get("summary"):
-                    imgs = re.findall(r'src="(https://pbs\.twimg\.com/[^"]+)"', entry["summary"])
-                    images.extend(imgs)
-
-                # Ссылка на твит
-                url = entry.get("link", "")
-                if not url and tweet_id.isdigit():
-                    url = f"https://x.com/{DAYZ_TWITTER_HANDLE}/status/{tweet_id}"
-
-                # Дата
-                date_str = ""
-                published = entry.get("published", "") or entry.get("updated", "")
-                if published:
-                    try:
-                        dt = datetime.strptime(published, "%a, %d %b %Y %H:%M:%S %z")
-                        date_str = dt.astimezone(timezone.utc).isoformat()
-                    except (ValueError, TypeError):
-                        date_str = published
-
-                if title or text:
-                    tweets.append({
-                        "id": str(tweet_id),
-                        "title": title or text[:100],
-                        "text": text or title,
-                        "url": url,
-                        "images": images[:4],  # Макс 4 картинки
-                        "date": date_str,
-                        "source": f"@{DAYZ_TWITTER_HANDLE}",
-                    })
-
-            if tweets:
-                logger.info("RSS: получено %d твитов из %s", len(tweets), rss_url)
-                return tweets
-
-        except Exception as e:
-            logger.debug("RSS %s ошибка: %s", rss_url, e)
-            continue
-
-    logger.warning("Все RSS-ленты недоступны")
-    return []
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  Syndication fallback (скрейпинг HTML)
-# ═════════════════════════════════════════════════════════════════════════════
-
-async def _fetch_syndication_tweets(max_tweets: int = 20) -> list[dict]:
-    """
-    Fallback: парсит syndication.twitter.com.
-    Встроенный JSON с твитами содержится в HTML-ответе.
+    Возвращает список:
+      [{"id": "...", "title": "...", "text": "...",
+        "url": "...", "images": [...], "date": "..."}]
     """
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                SYNDICATION_URL,
-                timeout=aiohttp.ClientTimeout(total=15),
-                headers={"User-Agent": "Mozilla/5.0 (compatible; DayZMonitor/1.0)"},
-            ) as resp:
-                if resp.status != 200:
-                    return []
-                raw = await resp.text()
+        import tweepy
+    except ImportError:
+        logger.error("tweepy не установлен. Установи: pip install tweepy")
+        return []
 
-        # Ищем встроенный JSON в HTML
+    loop = asyncio.get_running_loop()
+
+    try:
+        client = _get_client(bearer_token)
+
+        # Определяем user_id (с кешированием)
+        user_id = await loop.run_in_executor(None, _resolve_user_id, client, DAYZ_TWITTER_HANDLE, state)
+        if not user_id:
+            logger.error("Twitter API: не удалось получить user_id для @%s", DAYZ_TWITTER_HANDLE)
+            return []
+
+        # Запрашиваем твиты
+        def _get_tweets():
+            return client.get_users_tweets(
+                id=user_id,
+                max_results=min(max_tweets, 100),
+                tweet_fields=["created_at", "text", "attachments"],
+                media_fields=["url", "type", "preview_image_url"],
+                expansions=["attachments.media_keys"],
+                exclude=["replies"],
+            )
+
+        resp = await loop.run_in_executor(None, _get_tweets)
+
+        if not resp or not resp.data:
+            logger.info("Twitter API: у @%s нет новых твитов или пустой ответ", DAYZ_TWITTER_HANDLE)
+            return []
+
+        # Строим lookup-таблицу media_key -> media
+        media_lookup = {}
+        if resp.includes and "media" in resp.includes:
+            for media in resp.includes["media"]:
+                media_lookup[media.media_key] = {
+                    "url": media.url or "",
+                    "type": media.type or "photo",
+                    "preview": getattr(media, "preview_image_url", "") or "",
+                }
+
         tweets = []
-        # Список всех match-групп tweet ID
-        tweet_ids = re.findall(r'data-tweet-id="(\d+)"', raw)
-        # Tweet text
-        tweet_texts = re.findall(r'data-tweet-text="([^"]*)"', raw)
-        # Ссылки на изображения
-        all_images = re.findall(r'(https://pbs\.twimg\.com/media/[^\s"\'<>]+)', raw)
+        for tweet in resp.data:
+            tid = str(tweet.id)
+            text = tweet.text or ""
 
-        for i, tid in enumerate(tweet_ids[:max_tweets]):
-            text = tweet_texts[i] if i < len(tweet_texts) else ""
-            # Unescape HTML entities
-            text = text.replace("&lt;", "<").replace("&gt;", ">")
-            text = text.replace("&amp;", "&").replace("&quot;", '"')
+            # Извлекаем картинки из attachments
+            images = []
+            if hasattr(tweet, "attachments") and tweet.attachments:
+                for mkey in tweet.attachments.get("media_keys", []):
+                    m = media_lookup.get(mkey)
+                    if m:
+                        img_url = m["url"]
+                        if not img_url and m["type"] == "video":
+                            img_url = m["preview"]  # превью для видео
+                        if img_url:
+                            images.append(img_url)
 
-            if not text:
-                continue
+            # Дата
+            date_str = ""
+            if tweet.created_at:
+                if hasattr(tweet.created_at, "isoformat"):
+                    date_str = tweet.created_at.astimezone(timezone.utc).isoformat()
+                else:
+                    date_str = str(tweet.created_at)
 
             tweets.append({
                 "id": tid,
                 "title": text[:100],
                 "text": text,
                 "url": f"https://x.com/{DAYZ_TWITTER_HANDLE}/status/{tid}",
-                "images": [],
-                "date": "",
+                "images": images[:4],
+                "date": date_str,
                 "source": f"@{DAYZ_TWITTER_HANDLE}",
             })
 
-        if tweets:
-            logger.info("Syndication: получено %d твитов", len(tweets))
-
+        logger.info("Twitter API: получено %d твитов", len(tweets))
         return tweets
 
+    except tweepy.TooManyRequests:
+        logger.warning("Twitter API: exceeded rate limit — ждём до следующего интервала")
+        return []
+    except tweepy.Unauthorized:
+        logger.error("Twitter API: неверный Bearer Token — проверь twitter_bearer_token в config.json")
+        return []
+    except tweepy.Forbidden as e:
+        logger.error("Twitter API: доступ запрещён (Free tier может не поддерживать чтение): %s", e)
+        return []
     except Exception as e:
-        logger.warning("Syndication fallback ошибка: %s", e)
+        logger.error("Twitter API: ошибка получения твитов: %s", e)
         return []
 
 
@@ -251,21 +190,16 @@ async def _fetch_syndication_tweets(max_tweets: int = 20) -> list[dict]:
 #  Фильтрация
 # ═════════════════════════════════════════════════════════════════════════════
 
-# Пропускаем твиты с этими словами (реплаи, ретвиты без контента)
-_SKIP_PATTERNS = re.compile(
-    r"^(@\w+\s+){2,}",  # Начинается с 2+ упоминаний (реплай-цепочка)
-)
+_SKIP_PATTERNS = re.compile(r"^(@\w+\s+){2,}")
 
 
 def _is_relevant(tweet: dict) -> bool:
     """Фильтруем: только оригинальные твиты с контентом."""
     text = tweet.get("title", "") or tweet.get("text", "")
 
-    # Пропускаем реплай-цепочки
     if _SKIP_PATTERNS.match(text):
         return False
 
-    # Пропускаем слишком короткие (меньше 10 символов полезного текста)
     clean = re.sub(r"https?://\S+", "", text).strip()
     if len(clean) < 10 and not tweet.get("images"):
         return False
@@ -331,15 +265,12 @@ def format_tweet_message(tweet: dict, ai_description: str = "") -> dict:
     """Форматирует твит для Telegram-поста."""
     parts = []
 
-    # AI-описание на русском
     if ai_description:
         parts.append(ai_description)
     else:
-        # Без AI — просто текст твита (эскейпим)
         text = tweet.get("text", "") or tweet.get("title", "")
         parts.append(_escape_html(text[:500]))
 
-    # Ссылка на оригинал
     url = tweet.get("url", "")
     if url:
         parts.append("")
@@ -366,18 +297,25 @@ async def run_twitter_monitor(
     ai_analyze: bool = True,
     notify_chat_ids: list | None = None,
     telegram_bot_token: str = "",
+    bearer_token: str = "",
 ):
     """Основной цикл монитора @DayZ в X/Twitter.
 
+    Использует официальный Twitter API v2 (tweepy).
     Контент идёт через модерацию:
       1. Сохраняется в БД (source_type='twitter')
       2. Отправляется на веб-панель для модерации
       3. Публикуется в Telegram ТОЛЬКО после одобрения на панели
     """
-    logger.info("Twitter Monitor запущен (интервал: %d сек)", check_interval)
+    if not bearer_token:
+        logger.error("Twitter Monitor: не указан twitter_bearer_token в config.json — монитор отключён")
+        return
+
+    logger.info("Twitter Monitor запущен через Twitter API v2 (интервал: %d сек)", check_interval)
+
+    state = _load_state()
 
     # При старте — проверяем last_check
-    state = _load_state()
     last_check = state.get("last_check")
     if last_check:
         try:
@@ -395,24 +333,20 @@ async def run_twitter_monitor(
 
     while True:
         try:
-            logger.info("Проверяем @DayZ в X/Twitter...")
+            logger.info("Проверяем @DayZ через Twitter API v2...")
 
-            # Основной метод: RSS
-            tweets = await _fetch_rss_tweets(max_tweets=20)
+            tweets = await _fetch_api_tweets(
+                bearer_token=bearer_token,
+                state=state,
+                max_tweets=20,
+            )
 
-            # Fallback: syndication
-            if not tweets:
-                logger.info("RSS недоступен, пробуем syndication fallback...")
-                tweets = await _fetch_syndication_tweets(max_tweets=20)
-
-            # Обновляем posted_ids из состояния
             posted_ids = set(state.get("posted_ids", []))
             new_count = 0
 
             if not tweets:
-                logger.info("Twitter: не удалось получить твиты из любого источника")
+                logger.info("Twitter: нет новых твитов")
             else:
-                # Фильтруем
                 tweets = [t for t in tweets if _is_relevant(t)]
                 logger.info("Twitter: получено %d твитов (после фильтрации)", len(tweets))
 
@@ -511,18 +445,14 @@ async def run_twitter_monitor(
                             except Exception as e:
                                 logger.error("Ошибка отправки твита #%s на панель: %s", tweet["id"], e)
 
-                        # Fallback: если нет БД и панели — не публикуем автоматически
                         if not saved_to_db and not web_panel_url:
                             logger.warning(
                                 "Твит #%s пропущен: нет БД и веб-панели для модерации",
                                 tweet["id"],
                             )
 
-                        # Обновляем состояние
                         posted_ids.add(tweet["id"])
                         new_count += 1
-
-                        # Пауза между обработкой твитов
                         await asyncio.sleep(2)
 
                     except Exception as e:
@@ -531,7 +461,7 @@ async def run_twitter_monitor(
                 if new_count:
                     logger.info("Twitter: обработано %d новых твитов", new_count)
 
-            # Обновляем last_check
+            # Сохраняем состояние (включая кешированный user_id)
             state["last_check"] = datetime.now(timezone.utc).isoformat()
             state["posted_ids"] = list(posted_ids)
             _save_state(state)
@@ -547,9 +477,8 @@ async def run_twitter_monitor(
 #  Экспорт для ручного запуска / тестов
 # ═════════════════════════════════════════════════════════════════════════════
 
-async def fetch_twitter_tweets(max_tweets: int = 5) -> list[dict]:
+async def fetch_twitter_tweets(max_tweets: int = 5, bearer_token: str = "") -> list[dict]:
     """Публичная функция для получения твитов (без побочных эффектов)."""
-    tweets = await _fetch_rss_tweets(max_tweets=max_tweets)
-    if not tweets:
-        tweets = await _fetch_syndication_tweets(max_tweets=max_tweets)
+    state = {"user_id": None}
+    tweets = await _fetch_api_tweets(bearer_token=bearer_token, state=state, max_tweets=max_tweets)
     return [t for t in tweets if _is_relevant(t)]

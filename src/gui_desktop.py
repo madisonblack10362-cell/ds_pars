@@ -360,6 +360,7 @@ class DesktopGUI:
                 ("patchnotes_interval_minutes", "Интервал проверки (мин)", "720"),
             ]),
             ("Twitter/X", [
+                ("twitter_bearer_token", "Twitter Bearer Token", "YOUR_TWITTER_BEARER_TOKEN_HERE"),
                 ("twitter_interval_hours", "Интервал проверки (часы)", "1"),
             ]),
             ("YouTube", [
@@ -945,7 +946,7 @@ class DesktopGUI:
             "web_panel_url", "web_panel_api_key",
             "workshop_interval_hours", "workshop_min_subscriptions", "steam_api_key",
             "patchnotes_interval_minutes",
-            "twitter_interval_hours",
+            "twitter_bearer_token", "twitter_interval_hours",
             "youtube_interval_hours", "youtube_min_views", "youtube_min_likes", "youtube_max_per_check",
         ]
         for key in simple_keys:

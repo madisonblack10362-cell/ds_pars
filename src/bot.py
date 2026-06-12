@@ -280,31 +280,36 @@ class DayZNewsMonitor:
         # -----------------------------------------------------------------
         if cfg.get("twitter_enabled", False):
             twitter_interval = cfg.get("twitter_interval_hours", 1) * 3600
+            twitter_bearer = cfg.get("twitter_bearer_token", "")
 
-            _tw_notify_ids = None
-            if self.moderation_notifications and self.notify_chat_id:
-                try:
-                    _tw_notify_ids = [int(self.notify_chat_id)]
-                except (ValueError, TypeError):
-                    pass
-            _tw_bot_token = cfg.get("telegram_bot_token", "")
+            if not twitter_bearer or twitter_bearer == "YOUR_TWITTER_BEARER_TOKEN_HERE":
+                logger.warning("Twitter/X монитор: не указан twitter_bearer_token в config.json — отключён")
+            else:
+                _tw_notify_ids = None
+                if self.moderation_notifications and self.notify_chat_id:
+                    try:
+                        _tw_notify_ids = [int(self.notify_chat_id)]
+                    except (ValueError, TypeError):
+                        pass
+                _tw_bot_token = cfg.get("telegram_bot_token", "")
 
-            async def _delayed_twitter():
-                await asyncio.sleep(90)
-                await run_twitter_monitor(
-                    telegram_bot=self.publisher,
-                    db=self.db,
-                    ai_analyzer=self.ai_analyzer,
-                    web_panel_url=self.web_panel_url,
-                    web_panel_api_key=self.web_panel_api_key,
-                    check_interval=twitter_interval,
-                    ai_analyze=bool(self.ai_analyzer),
-                    notify_chat_ids=_tw_notify_ids,
-                    telegram_bot_token=_tw_bot_token,
-                )
+                async def _delayed_twitter():
+                    await asyncio.sleep(90)
+                    await run_twitter_monitor(
+                        telegram_bot=self.publisher,
+                        db=self.db,
+                        ai_analyzer=self.ai_analyzer,
+                        web_panel_url=self.web_panel_url,
+                        web_panel_api_key=self.web_panel_api_key,
+                        check_interval=twitter_interval,
+                        ai_analyze=bool(self.ai_analyzer),
+                        notify_chat_ids=_tw_notify_ids,
+                        telegram_bot_token=_tw_bot_token,
+                        bearer_token=twitter_bearer,
+                    )
 
-            self._twitter_task = asyncio.create_task(_delayed_twitter())
-            logger.info("Twitter/X монитор запущен (задержка 90 сек, интервал: %d ч)", cfg.get("twitter_interval_hours", 1))
+                self._twitter_task = asyncio.create_task(_delayed_twitter())
+                logger.info("Twitter/X монитор запущен (API v2, задержка 90 сек, интервал: %d ч)", cfg.get("twitter_interval_hours", 1))
         else:
             logger.info("Twitter/X монитор отключён")
 
