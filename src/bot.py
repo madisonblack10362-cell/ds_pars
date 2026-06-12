@@ -799,7 +799,7 @@ class DayZNewsMonitor:
 
         # 1) Проверяем локальную очередь модерации
         try:
-            mod_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config', 'youtube_moderation.json')
+            mod_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config', 'youtube_moderation.json')
             if os.path.exists(mod_file):
                 with open(mod_file, 'r', encoding='utf-8') as f:
                     queue = json.load(f)
@@ -1135,7 +1135,7 @@ async def _periodic_gui_update(monitor, gui, interval=30):
                 parts.append("YouTube: остановлен")
 
             # Cookies статус для YouTube
-            cookies_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "cookies.txt")
+            cookies_path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "cookies.txt")
             if _os.path.isfile(cookies_path):
                 parts.append("YouTube cookies: загружены")
             else:

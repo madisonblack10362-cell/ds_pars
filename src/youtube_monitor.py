@@ -37,7 +37,7 @@ from logger import logger
 _SHORTS_MAX_DURATION = 180  # Порог для шортсов (секунды, YouTube допускает до 3 мин)
 
 # Путь к файлу состояния (уже опубликованные / в модерации)
-_CONFIG_DIR = os.path.join(os.path.dirname(__file__), "config")
+_CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config")
 _STATE_FILE = os.path.join(_CONFIG_DIR, "youtube_state.json")
 
 # Путь к файлу очереди модерации
@@ -436,8 +436,8 @@ def _enrich_video_metadata_sync(video: dict) -> dict:
     import subprocess
     import shutil
 
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    cookies_path = os.path.join(script_dir, "cookies.txt")
+    project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cookies_path = os.path.join(project_dir, "cookies.txt")
 
     ytdlp_cmd = shutil.which("yt-dlp")
     base = [ytdlp_cmd] if ytdlp_cmd else [sys.executable, "-m", "yt_dlp"]
@@ -842,8 +842,8 @@ async def download_short(
     output_template = os.path.join(downloads_dir, "%(id)s.%(ext)s")
     max_filesize = max_filesize_mb * 1024 * 1024
 
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    cookies_path = os.path.join(script_dir, "cookies.txt")
+    project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cookies_path = os.path.join(project_dir, "cookies.txt")
 
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(
@@ -879,8 +879,8 @@ def download_short_sync(
     os.makedirs(downloads_dir, exist_ok=True)
     output_template = os.path.join(downloads_dir, "%(id)s.%(ext)s")
     max_filesize = max_filesize_mb * 1024 * 1024
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    cookies_path = os.path.join(script_dir, "cookies.txt")
+    project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cookies_path = os.path.join(project_dir, "cookies.txt")
     return _download_ytdlp_sync(url, output_template, cookies_path, max_filesize)
 
 

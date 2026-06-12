@@ -67,7 +67,7 @@ echo  [2/3] Сборка .exe через PyInstaller...
 echo  Это может занять 2-5 минут...
 echo.
 
-python build.py
+python src\build.py
 
 if errorlevel 1 (
     echo.

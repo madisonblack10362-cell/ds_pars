@@ -44,7 +44,7 @@ STRONG_PATCH_KEYWORDS = [
 
 # ─── State persistence ────────────────────────────────────────────────────────
 
-STATE_FILE = os.path.join(os.path.dirname(__file__), "config", "patchnotes_state.json")
+STATE_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "patchnotes_state.json")
 
 
 def _load_state() -> dict:

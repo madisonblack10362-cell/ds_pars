@@ -26,7 +26,7 @@ echo [*] Starting bot...
 echo [*] Press Ctrl+C to stop
 echo.
 
-python bot.py
+python src\bot.py
 
 echo.
 echo ============================================

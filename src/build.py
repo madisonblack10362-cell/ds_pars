@@ -38,8 +38,8 @@ block_cipher = None
 PROJECT_DIR = Path(SPECPATH)
 
 a = Analysis(
-    ['bot.py'],
-    pathex=[str(PROJECT_DIR)],
+    ['src/bot.py'],
+    pathex=[str(PROJECT_DIR / 'src')],
     binaries=[],
     datas=[
 {datas_lines}
@@ -100,7 +100,7 @@ def run(cmd, **kw):
 
 
 def main():
-    os.chdir(Path(__file__).parent)
+    os.chdir(Path(__file__).parent.parent)
 
     # 1) Установка зависимостей (build.bat уже установил, но проверим)
     print("=" * 60)
