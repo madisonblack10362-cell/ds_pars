@@ -641,6 +641,52 @@ def _build_ytdlp_base_cmd() -> list[str]:
     return [sys.executable, "-m", "yt_dlp"]
 
 
+def _validate_mp4(filepath: str, min_size_kb: int = 100) -> bool:
+    """
+    Проверяет целостность mp4-файла.
+    Минимальная проверка: размер + наличие ftyp/moov атомов.
+    Возвращает True если файл выглядит валидным.
+    """
+    try:
+        fsize = os.path.getsize(filepath)
+        if fsize < min_size_kb * 1024:
+            logger.warning("mp4 validate: %s слишком маленький (%d байт)", filepath, fsize)
+            return False
+
+        with open(filepath, "rb") as f:
+            # Читаем первые 12 байт — заголовок mp4
+            header = f.read(12)
+            if len(header) < 8:
+                logger.warning("mp4 validate: %s — заголовок меньше 8 байт", filepath)
+                return False
+
+            # Проверяем ftyp атом (первый атом в валидном mp4)
+            # Формат: [4 байта размер][4 байта 'ftyp'][данные]
+            if header[4:8] == b'ftyp':
+                logger.debug("mp4 validate: %s — ftyp OK (%.1f MB)", filepath, fsize / 1024 / 1024)
+                return True
+
+            # Некоторые файлы начинают с moov (редко, но бывает)
+            if header[4:8] == b'moov' or header[4:8] == b'skip':
+                logger.debug("mp4 validate: %s — атом %s OK (%.1f MB)",
+                             filepath, header[4:8].decode(), fsize / 1024 / 1024)
+                return True
+
+            # Проверяем наличие moov где-то в первых 1MB (для файлов где ftyp не первый)
+            f.seek(0)
+            chunk = f.read(1024 * 1024)  # 1 MB
+            if b'moov' in chunk:
+                logger.debug("mp4 validate: %s — moov найден (%.1f MB)", filepath, fsize / 1024 / 1024)
+                return True
+
+            logger.warning("mp4 validate: %s — нет ftyp/moov атомов, файл повреждён", filepath)
+            return False
+
+    except Exception as e:
+        logger.error("mp4 validate: ошибка при проверке %s: %s", filepath, e)
+        return False
+
+
 def _download_ytdlp_sync(
     url: str,
     output_template: str,
@@ -731,6 +777,14 @@ def _download_ytdlp_sync(
                 for ext in ["mp4", "webm", "mkv", "3gp"]:
                     test_path = output_template.replace("%(ext)s", ext).replace("%(id)s", video_id)
                     if os.path.isfile(test_path) and os.path.getsize(test_path) > 0:
+                        # Валидация mp4 — проверяем что файл не повреждён
+                        if ext == "mp4" and not _validate_mp4(test_path):
+                            logger.warning("YouTube/download: %s повреждён, удаляю и пробую дальше", test_path)
+                            try:
+                                os.remove(test_path)
+                            except OSError:
+                                pass
+                            continue
                         size_mb = os.path.getsize(test_path) / (1024 * 1024)
                         logger.info(
                             "YouTube/download: скачано [%s] -> %s (%.1f MB)",
@@ -742,6 +796,14 @@ def _download_ytdlp_sync(
                 pattern = output_template.replace("%(id)s", video_id).replace("%(ext)s", "*")
                 for m in sorted(glob_mod.glob(pattern), key=os.path.getsize, reverse=True):
                     if os.path.isfile(m) and os.path.getsize(m) > 0:
+                        # Валидация mp4
+                        if m.endswith(".mp4") and not _validate_mp4(m):
+                            logger.warning("YouTube/download: %s повреждён (glob), удаляю", m)
+                            try:
+                                os.remove(m)
+                            except OSError:
+                                pass
+                            continue
                         size_mb = os.path.getsize(m) / (1024 * 1024)
                         logger.info(
                             "YouTube/download: скачано [%s, glob] -> %s (%.1f MB)",
@@ -1074,9 +1136,21 @@ async def _process_approved_videos(config: dict, publisher=None) -> None:
         # Проверяем — видео уже скачано?
         dl = item.get("downloaded_file", "")
         if dl and os.path.isfile(dl):
-            filepath = dl
-            logger.info("YouTube: использую уже скачанный файл %s: %s", video_id, filepath)
+            # Проверяем целостность файла
+            if dl.endswith(".mp4") and not _validate_mp4(dl):
+                logger.warning("YouTube: файл %s повреждён, перекачиваю %s...", dl, video_id)
+                try:
+                    os.remove(dl)
+                except OSError:
+                    pass
+                filepath = None
+            else:
+                filepath = dl
+                logger.info("YouTube: использую уже скачанный файл %s: %s", video_id, filepath)
         else:
+            filepath = None
+
+        if not filepath:
             if dl:
                 logger.warning("YouTube: файл %s не найден (был при модерации), перекачиваю %s...", dl, video_id)
             else:
