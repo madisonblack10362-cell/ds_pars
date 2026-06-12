@@ -347,7 +347,7 @@ async def _fetch_via_scraping(max_mods: int) -> list:
 async def check_for_new_mods(
     steam_api_key: Optional[str] = None,
     min_subscriptions: int = 100,
-    days_old: int = 20,
+    days_old: int = 30,
     max_per_check: int = 3,
 ) -> list:
     """
@@ -360,7 +360,7 @@ async def check_for_new_mods(
     При обычных проверках:
       - Возвращает до max_per_check новых модов за последние days_old дней
       - Сортировка по подписчикам (больше = лучше)
-      - days_old=20 чтобы моды, набравшие популярность через неделю-две,
+      - days_old=30 чтобы моды, набравшие популярность через несколько недель,
         тоже попадали в выборку
     """
     state = _load_state()
@@ -675,7 +675,7 @@ async def run_workshop_monitor(
             new_mods = await check_for_new_mods(
                 steam_api_key=steam_api_key,
                 min_subscriptions=min_subscriptions,
-                days_old=20,
+                days_old=30,
             )
 
             # Резолвим имена авторов (бесплатно, через scraping)
