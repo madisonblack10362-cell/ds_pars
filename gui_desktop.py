@@ -70,6 +70,7 @@ class DesktopGUI:
         "youtube":   "\u25B6",
         "workshop":  "\U0001F527",
         "patchnotes":"\U0001F4DD",
+        "twitter":  "\U0001F426",
     }
 
     def __init__(self, config_path="config.json", log_capture=None, bot_instance=None):
@@ -239,6 +240,7 @@ class DesktopGUI:
             ("youtube", "YouTube"),
             ("workshop", "Workshop"),
             ("patchnotes", "Патчноуты"),
+            ("twitter", "Twitter/X"),
         ]
 
         for idx, (key, label) in enumerate(_cards):
@@ -357,6 +359,9 @@ class DesktopGUI:
             ("Патчноуты", [
                 ("patchnotes_interval_minutes", "Интервал проверки (мин)", "720"),
             ]),
+            ("Twitter/X", [
+                ("twitter_interval_hours", "Интервал проверки (часы)", "1"),
+            ]),
             ("YouTube", [
                 ("youtube_interval_hours", "Интервал проверки (часы)", "2"),
                 ("youtube_min_views", "Мин. просмотров", "0"),
@@ -410,6 +415,8 @@ class DesktopGUI:
             self._add_toggle(frame, "workshop_enabled", "Включить монитор Steam Workshop")
         elif title == "Патчноуты":
             self._add_toggle(frame, "patchnotes_enabled", "Включить монитор патчноутов")
+        elif title == "Twitter/X":
+            self._add_toggle(frame, "twitter_enabled", "Включить монитор Twitter/X")
         elif title == "YouTube":
             self._add_toggle(frame, "youtube_enabled", "Включить YouTube монитор")
             self._add_toggle(frame, "youtube_download_shorts", "Скачивать шортсы")
@@ -902,7 +909,7 @@ class DesktopGUI:
                     entry.insert(0, str(discord.get(cfg_key, "")))
 
             for key, var in self._toggles.items():
-                if key in ("workshop_enabled", "patchnotes_enabled", "moderation_notifications",
+                if key in ("workshop_enabled", "patchnotes_enabled", "twitter_enabled", "moderation_notifications",
                             "youtube_enabled", "youtube_download_shorts",
                             "youtube_russian_only", "youtube_shorts_only"):
                     default = True
@@ -938,6 +945,7 @@ class DesktopGUI:
             "web_panel_url", "web_panel_api_key",
             "workshop_interval_hours", "workshop_min_subscriptions", "steam_api_key",
             "patchnotes_interval_minutes",
+            "twitter_interval_hours",
             "youtube_interval_hours", "youtube_min_views", "youtube_min_likes", "youtube_max_per_check",
         ]
         for key in simple_keys:
@@ -948,6 +956,7 @@ class DesktopGUI:
                             "min_message_length", "max_retries", "retry_delay_seconds",
                             "request_timeout_seconds", "max_images_per_post",
                             "workshop_interval_hours", "workshop_min_subscriptions", "patchnotes_interval_minutes",
+                            "twitter_interval_hours",
                             "youtube_interval_hours", "youtube_min_views", "youtube_min_likes", "youtube_max_per_check"):
                     try:
                         val = int(val)

@@ -49,5 +49,9 @@
   "youtube_min_likes": 0,
   "youtube_max_per_check": 5,
   "youtube_lookback_days": 90,
-  "youtube_channels": []
+  "youtube_channels": [],
+
+  "_comment_twitter": "Twitter/X монитор @DayZ: скрины, арты, тизеры через RSS",
+  "twitter_enabled": false,
+  "twitter_interval_hours": 1
 }
