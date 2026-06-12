@@ -14,6 +14,8 @@ import threading
 from pathlib import Path
 from typing import Optional
 
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 from logger import logger, add_web_panel_handler
 from database import Database
 from aiogram import Router, F
@@ -113,7 +115,7 @@ class DayZNewsMonitor:
         # -----------------------------------------------------------------
         # База данных
         # -----------------------------------------------------------------
-        db_path = cfg.get("database_path", "database/dayz_news.db")
+        db_path = cfg.get("database_path", os.path.join(PROJECT_ROOT, "database", "dayz_news.db"))
         self.db = Database(db_path)
         await self.db.connect()
         await self.db.init_tables()
@@ -1255,7 +1257,7 @@ def main():
     """
     GUI в главном потоке, бот в фоновом.
     """
-    config_path = os.environ.get("DAYZ_CONFIG", "config.json")
+    config_path = os.environ.get("DAYZ_CONFIG", os.path.join(PROJECT_ROOT, "config.json"))
 
     monitor = DayZNewsMonitor(config_path=config_path)
     monitor.load_config()
