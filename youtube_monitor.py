@@ -1145,6 +1145,8 @@ async def run_youtube_monitor(
         check_interval_hours,
     )
 
+    approval_check_seconds = 30
+
     # При старте проверяем — не слишком ли рано парсить?
     # Если с последней проверки прошло меньше интервала — ждём остаток
     state = _load_state()
@@ -1172,8 +1174,6 @@ async def run_youtube_monitor(
                         await _process_approved_videos(config or {}, publisher)
                     except Exception:
                         pass
-
-    approval_check_seconds = 30
 
     while True:
         if shutdown_event and shutdown_event.is_set():
