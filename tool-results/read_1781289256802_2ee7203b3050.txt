@@ -1,0 +1,810 @@
+     1→"""
+     2→Модуль публикации новостей в Telegram-канал проекта DayZ News Monitor.
+     3→Форматирует новости согласно приоритету и отправляет через aiogram 3.x.
+     4→"""
+     5→
+     6→import json
+     7→import os
+     8→import re
+     9→from datetime import datetime
+    10→from typing import Optional
+    11→
+    12→import asyncio
+    13→
+    14→from aiogram import Bot, types
+    15→from aiogram.client.default import DefaultBotProperties
+    16→from aiogram.enums import ParseMode
+    17→from aiogram.types import InputMediaPhoto, InputMediaVideo, FSInputFile
+    18→
+    19→from logger import logger
+    20→
+    21→
+    22→def strip_html_tags(text: str) -> str:
+    23→    """
+    24→    Удаляет ВСЕ HTML-теги из текста.
+    25→    Нужно для очистки summary от LLM перед вставкой в Telegram-формат.
+    26→    Telegram поддерживает ограниченный набор тегов (b, i, a, code, pre, blockquote, s, u, spoiler).
+    27→    Любые другие теги или невалидный HTML ломают парсер.
+    28→    """
+    29→    import re
+    30→    # Убираем все HTML-теги
+    31→    cleaned = re.sub(r'<[^>]+>', '', text)
+    32→    # Декодируем частые HTML-entities
+    33→    cleaned = cleaned.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
+    34→    cleaned = cleaned.replace('&quot;', '"').replace('&#39;', "'").replace('&#x27;', "'")
+    35→    # Убираем лишние пробелы/пустые строки
+    36→    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+    37→    return cleaned.strip()
+    38→
+    39→
+    40→def _linkify_urls(text: str) -> str:
+    41→    """
+    42→    Находит голые URL в тексте, которые НЕ обёрнуты в <a> тег,
+    43→    и превращает их в кликабельные <a href="URL">домен</a>.
+    44→    Telegram ParseMode.HTML не делает авто-линковку plain URLs.
+    45→    """
+    46→    import re
+    47→    # Сначала находим все <a>...</a> блоки и заменяем их плейсхолдерами,
+    48→    # чтобы не обёрнуть уже существующие ссылки дважды
+    49→    placeholders = []
+    50→    def _save_link(m):
+    51→        placeholders.append(m.group(0))
+    52→        return f'__A_LINK_{len(placeholders) - 1}__'
+    53→    text_protected = re.sub(r'<a\s[^>]*>.*?</a>', _save_link, text, flags=re.DOTALL)
+    54→
+    55→    # Теперь ищем голые URL и оборачиваем в <a>
+    56→    from urllib.parse import urlparse
+    57→    url_re = re.compile(r'(https?://[\w\-._~:/?#\[\]@!$&\'()*+,;=%]+)', re.IGNORECASE)
+    58→    def _wrap_url(m):
+    59→        url = m.group(1)
+    60→        # Убираем trailing пунктуацию (точки, запятые, скобки в конце)
+    61→        cleaned = url.rstrip('.,;:!?()\\]')
+    62→        trail = url[len(cleaned):]
+    63→        try:
+    64→            domain = urlparse(cleaned).netloc
+    65→            display = domain if domain else cleaned
+    66→            # Сокращаем длинные пути для display
+    67→            if len(cleaned) > 50:
+    68→                path = urlparse(cleaned).path
+    69→                if path and path != '/':
+    70→                    display = domain + '...' if len(domain) > 30 else domain + path[:30] + '...'
+    71→        except Exception:
+    72→            display = cleaned
+    73→        return f'<a href="{cleaned}">{display}</a>{trail}'
+    74→    text_protected = url_re.sub(_wrap_url, text_protected)
+    75→
+    76→    # Возвращаем <a> блоки обратно
+    77→    for i, original in enumerate(placeholders):
+    78→        text_protected = text_protected.replace(f'__A_LINK_{i}__', original)
+    79→
+    80→    return text_protected
+    81→
+    82→
+    83→def sanitize_html_for_telegram(text: str) -> str:
+    84→    """
+    85→    Очищает HTML-текст для безопасной отправки в Telegram.
+    86→    Удаляет теги, которые Telegram не поддерживает.
+    87→    Сохраняет только разрешённые теги: b, i, u, s, a, code, pre, blockquote, spoiler.
+    88→    """
+    89→    import re
+    90→    allowed_tags = {'b', 'i', 'u', 's', 'a', 'code', 'pre', 'blockquote', 'spoiler', 'strong', 'em'}
+    91→    # Удаляем все теги, кроме разрешённых
+    92→    result = re.sub(r'<(/?)(\w+)([^>]*)>', lambda m: f'<{m.group(1)}{m.group(2)}>' if m.group(2).lower() in allowed_tags else '', text)
+    93→    # Убираем оставшиеся невалидные конструкции
+    94→    result = re.sub(r'<[^>]*>', '', result)
+    95→    # Декодируем entities
+    96→    result = result.replace('&lt;', '<').replace('&gt;', '>')
+    97→    result = result.replace('&amp;', '&').replace('&#39;', "'")
+    98→    return result
+    99→
+   100→
+   101→# Соответствие типов новостей и иконок
+   102→NEWS_TYPE_ICONS = {
+   103→    "wipe": "\u26a0\ufe0f ВАЙП",
+   104→    "update": "\U0001f525 ОБНОВЛЕНИЕ",
+   105→    "server_open": "\U0001f7e2 ОТКРЫТИЕ СЕРВЕРА",
+   106→    "new_season": "\U0001f31f НОВЫЙ СЕЗОН",
+   107→    "event": "\U0001f3af ИВЕНТ",
+   108→    "maintenance": "\U0001f527 ТЕХРАБОТЫ",
+   109→    "balance_change": "\u2696\ufe0f БАЛАНС",
+   110→    "economy_change": "\U0001f4b0 ЭКОНОМИКА",
+   111→    "content_add": "\u2728 НОВЫЙ КОНТЕНТ",
+   112→    "bugfix": "\U0001f527 ИСПРАВЛЕНИЯ",
+   113→    "map_change": "\U0001f5fa\ufe0f КАРТА",
+   114→    "transport_change": "\U0001f697 ТРАНСПОРТ",
+   115→    "loot_change": "\U0001f4e6 ЛУТ",
+   116→    "mod_update": "\U0001f504 МОДЫ",
+   117→    "server_merge": "\U0001f500 СЛИЯНИЕ",
+   118→    "char_transfer": "\U0001f680 ПЕРЕНОС",
+   119→    "important_announcement": "\U0001f4e2 АНОНС",
+   120→    "recruitment": "\U0001f4bc НАБОР",
+   121→    "other": "\U0001f4cb НОВОСТЬ",
+   122→}
+   123→
+   124→PRIORITY_ICONS = {
+   125→    "high": "\U0001f534",
+   126→    "medium": "\U0001f7e1",
+   127→    "low": "\u26aa",
+   128→}
+   129→
+   130→# Хештеги для типов новостей
+   131→NEWS_TYPE_HASHTAGS = {
+   132→    "wipe": "#вайп",
+   133→    "update": "#обновление",
+   134→    "server_open": "#открытие",
+   135→    "new_season": "#сезон",
+   136→    "event": "#ивент",
+   137→    "maintenance": "#техработы",
+   138→    "balance_change": "#баланс",
+   139→    "economy_change": "#экономика",
+   140→    "content_add": "#контент",
+   141→    "bugfix": "#исправления",
+   142→    "map_change": "#карта",
+   143→    "transport_change": "#транспорт",
+   144→    "loot_change": "#лут",
+   145→    "mod_update": "#моды",
+   146→    "server_merge": "#слияние",
+   147→    "char_transfer": "#перенос",
+   148→    "important_announcement": "#анонс",
+   149→}
+   150→
+   151→
+   152→class Publisher:
+   153→    """Публикует проанализированные новости в Telegram-канал."""
+   154→
+   155→    def __init__(
+   156→        self,
+   157→        bot_token: str,
+   158→        channel_id: str,
+   159→        news_channel_id: str = "",
+   160→        images_dir: str = "images",
+   161→        max_images_per_post: int = 10,
+   162→    ):
+   163→        self.channel_id = channel_id
+   164→        # Отдельный канал для новостей (если указан)
+   165→        self.news_channel_id = news_channel_id or channel_id
+   166→        self.images_dir = images_dir
+   167→        self.max_images_per_post = max_images_per_post
+   168→
+   169→        os.makedirs(images_dir, exist_ok=True)
+   170→
+   171→        self.bot = Bot(
+   172→            token=bot_token,
+   173→            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+   174→        )
+   175→        logger.info("Publisher инициализирован. Сводки: %s, Новости: %s",
+   176→                     channel_id, self.news_channel_id)
+   177→
+   178→    async def close(self) -> None:
+   179→        """Закрывает сессию бота."""
+   180→        await self.bot.session.close()
+   181→        logger.info("Publisher: сессия бота закрыта")
+   182→
+   183→    def format_post(
+   184→        self,
+   185→        server_name: str,
+   186→        news_type: str,
+   187→        priority: str,
+   188→        summary: str,
+   189→        original_text: str = "",
+   190→        published_at: str | None = None,
+   191→        author: str = "",
+   192→        links: list[str] | None = None,
+   193→    ) -> str:
+   194→        """
+   195→        Форматирует текст поста для Telegram согласно шаблону.
+   196→
+   197→        Args:
+   198→            server_name: Название сервера/проекта.
+   199→            news_type: Тип новости.
+   200→            priority: Приоритет (high/medium/low).
+   201→            summary: Краткое резюме от LLM.
+   202→            original_text: Оригинальный текст новости.
+   203→            published_at: Дата публикации в источнике.
+   204→            author: Автор новости.
+   205→            links: Ссылки, связанные с новостью.
+   206→
+   207→        Returns:
+   208→            Отформатированный текст для отправки в Telegram.
+   209→        """
+   210→        # Заголовок с иконкой типа новости
+   211→        type_label = NEWS_TYPE_ICONS.get(news_type, "\U0001f4cb НОВОСТЬ")
+   212→        priority_icon = PRIORITY_ICONS.get(priority, "")
+   213→
+   214→        # Формируем дату
+   215→        date_str = ""
+   216→        if published_at:
+   217→            try:
+   218→                dt = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+   219→                date_str = dt.strftime("%d %B %Y").lower()
+   220→            except (ValueError, AttributeError):
+   221→                date_str = published_at[:10] if published_at else ""
+   222→
+   223→        lines = []
+   224→        lines.append(f"{priority_icon} <b>{type_label}</b>")
+   225→        lines.append("")
+   226→
+   227→        # Вводное предложение
+   228→        intro_parts = []
+   229→        intro_parts.append(f"Сервер <b>{server_name}</b>")
+   230→        if date_str:
+   231→            intro_parts.append(f"от {date_str}")
+   232→        if author:
+   233→            intro_parts.append(f"автор: <i>{author}</i>")
+   234→        lines.append(", ".join(intro_parts) + ".")
+   235→
+   236→        # Блок с деталями через blockquote
+   237→        bq_lines = []
+   238→        if summary:
+   239→            # Очищаем summary от HTML-тегов, которые генерирует LLM,
+   240→            # чтобы не сломать Telegram-парсер
+   241→            clean_summary = strip_html_tags(summary)
+   242→            bq_lines.append(clean_summary)
+   243→        if original_text and len(original_text) > len(summary or ""):
+   244→            trimmed = original_text[:1000]
+   245→            paragraphs = [p.strip() for p in trimmed.split("\n") if p.strip()]
+   246→            for para in paragraphs[:8]:
+   247→                para_escaped = para.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+   248→                bq_lines.append(f"\u2022 {para_escaped}")
+   249→
+   250→        if bq_lines:
+   251→            lines.append("")
+   252→            lines.append("<blockquote>" + "\n".join(bq_lines) + "</blockquote>")
+   253→
+   254→        # Ссылки — кликабельные
+   255→        if links:
+   256→            lines.append("")
+   257→            for link in links[:3]:
+   258→                from urllib.parse import urlparse
+   259→                try:
+   260→                    domain = urlparse(link).netloc
+   261→                    display = domain if domain else link
+   262→                except Exception:
+   263→                    display = link
+   264→                lines.append(f"\U0001f517 <a href=\"{link}\">{display}</a>")
+   265→
+   266→        # Хештеги
+   267→        hashtags = ["#dayz", "#новости"]
+   268→        type_tag = NEWS_TYPE_HASHTAGS.get(news_type)
+   269→        if type_tag:
+   270→            hashtags.append(type_tag)
+   271→        lines.append("")
+   272→        lines.append(" ".join(hashtags))
+   273→
+   274→        return "\n".join(lines)
+   275→
+   276→    def format_daily_summary(
+   277→        self,
+   278→        high_count: int,
+   279→        medium_count: int,
+   280→        events: list[dict],
+   281→    ) -> str:
+   282→        """
+   283→        Форматирует ежедневную сводку новостей.
+   284→
+   285→        Args:
+   286→            high_count: Количество новостей высокого приоритета.
+   287→            medium_count: Количество новостей среднего приоритета.
+   288→            events: Список событий для сводки.
+   289→
+   290→        Returns:
+   291→            Отформатированный текст сводки.
+   292→        """
+   293→        lines = []
+   294→        lines.append("\U0001f4ca <b>СВОДКА DAYZ</b>")
+   295→        lines.append("")
+   296→        lines.append("За последние сутки:")
+   297→        lines.append("")
+   298→        lines.append(f"\U0001f534 Важных новостей: <b>{high_count}</b>")
+   299→        lines.append(f"\U0001f7e1 Средних новостей: <b>{medium_count}</b>")
+   300→        lines.append("")
+   301→
+   302→        if events:
+   303→            lines.append("<b>Главные события:</b>")
+   304→            lines.append("")
+   305→            for event in events[:10]:
+   306→                server = event.get("server_name", "Неизвестно")
+   307→                news_type = event.get("news_type", "other")
+   308→                summary = event.get("summary", "")
+   309→                type_label = NEWS_TYPE_ICONS.get(news_type, "\U0001f4cb")
+   310→
+   311→                line = f"\u2022 {type_label} <b>{server}</b>"
+   312→                if summary:
+   313→                    line += f" — {summary}"
+   314→                lines.append(line)
+   315→        else:
+   316→            lines.append("За сутки значимых событий не обнаружено.")
+   317→
+   318→        lines.append("")
+   319→        lines.append("#dayz #новости #сводка")
+   320→        return "\n".join(lines)
+   321→
+   322→    async def publish_message(
+   323→        self,
+   324→        text: str,
+   325→        chat_id: str | None = None,
+   326→        image_paths: list[str] | None = None,
+   327→        image_urls: list[str] | None = None,
+   328→        video_paths: list[str] | None = None,
+   329→        video_urls: list[str] | None = None,
+   330→    ) -> Optional[int]:
+   331→        """
+   332→        Публикует сообщение в Telegram-канал.
+   333→
+   334→        Args:
+   335→            text: Текст сообщения.
+   336→            chat_id: ID чата (по умолчанию — news_channel_id).
+   337→            image_paths: Локальные пути к изображениям.
+   338→            image_urls: URL-адреса изображений для скачивания (поддерживает data: URIs).
+   339→            video_paths: Локальные пути к видео.
+   340→            video_urls: URL-адреса видео для скачивания (поддерживает data: URIs).
+   341→
+   342→        Returns:
+   343→            ID отправленного сообщения в Telegram или None при ошибке.
+   344→        """
+   345→        # Автоматически превращаем голые URL в кликабельные <a> ссылки
+   346→        # Telegram ParseMode.HTML НЕ делает авто-линковку plain URLs
+   347→        text = _linkify_urls(text)
+   348→
+   349→        # Целевой чат: по умолчанию — канал новостей
+   350→        target_chat = chat_id or self.news_channel_id
+   351→
+   352→        # Безопасная обработка текста перед отправкой в Telegram
+   353→        # Telegram поддерживает только ограниченный набор HTML-тегов.
+   354→        # LLM может сгенерировать теги которые TG не парсит.
+   355→        import re as _re
+   356→        # Убираем все HTML-теги кроме разрешённых Telegram
+   357→        _allowed = re.compile(r'<(/?)(b|i|u|s|a|code|pre|blockquote|spoiler|strong|em)(\b[^>]*)>', re.IGNORECASE)
+   358→        # Сначала заменяем разрешённые теги на плейсхолдеры
+   359→        placeholders = []
+   360→        def _save_tag(m):
+   361→            placeholders.append(m.group(0))
+   362→            return f'__TAG_{len(placeholders) - 1}__'
+   363→        text = _allowed.sub(_save_tag, text)
+   364→        # Убираем все оставшиеся теги
+   365→        text = re.sub(r'<[^>]+>', '', text)
+   366→        # Возвращаем разрешённые теги обратно
+   367→        for i, tag in enumerate(placeholders):
+   368→            text = text.replace(f'__TAG_{i}__', tag)
+   369→        # Проверяем баланс blockquote — если не сбалансированы, автозакрываем
+   370→        bq_open = len(re.findall(r'<blockquote>', text, re.IGNORECASE))
+   371→        bq_close = len(re.findall(r'</blockquote>', text, re.IGNORECASE))
+   372→        if bq_open != bq_close:
+   373→            diff = bq_open - bq_close
+   374→            if diff > 0:
+   375→                # Не хватает закрывающих — добавляем в конец
+   376→                text = text.rstrip() + ('</blockquote>' * diff)
+   377→                logger.info('Автозакрыто %d незакрытых blockquote-тегов', diff)
+   378→            else:
+   379→                # Лишние закрывающие — убираем
+   380→                for _ in range(-diff):
+   381→                    text = re.sub(r'</blockquote>\s*', '', text, count=1, flags=re.IGNORECASE)
+   382→                logger.info('Убрано %d лишних закрывающих blockquote-тегов', -diff)
+   383→
+   384→        # Собираем изображения для отправки
+   385→        local_images: list[str] = list(image_paths or [])
+   386→
+   387→        # Скачиваем/декодируем изображения
+   388→        if image_urls:
+   389→            for url in image_urls:
+   390→                path = await self._resolve_media_url(url)
+   391→                if path:
+   392→                    local_images.append(path)
+   393→
+   394→        # Собираем видео
+   395→        local_videos: list[str] = list(video_paths or [])
+   396→        if video_urls:
+   397→            for url in video_urls:
+   398→                path = await self._resolve_media_url(url)
+   399→                if path:
+   400→                    local_videos.append(path)
+   401→
+   402→        # Ограничиваем количество
+   403→        local_images = local_images[: self.max_images_per_post]
+   404→        local_videos = local_videos[:3]
+   405→
+   406→        try:
+   407→            if local_videos and not local_images:
+   408→                # Only video(s)
+   409→                return await self._send_with_videos(text, local_videos, chat_id=target_chat)
+   410→            elif local_images and local_videos:
+   411→                # Mixed: images + video — send separately (video first, then images with text)
+   412→                return await self._send_mixed_media(text, local_images, local_videos, chat_id=target_chat)
+   413→            elif local_images:
+   414→                return await self._send_with_images(text, local_images, chat_id=target_chat)
+   415→            else:
+   416→                msg = await self.bot.send_message(
+   417→                    chat_id=target_chat, text=text
+   418→                )
+   419→                logger.info(
+   420→                    "Сообщение опубликовано (без медиа): TG msg_id=%d, канал: %s",
+   421→                    msg.message_id, self.news_channel_id,
+   422→                )
+   423→                return msg.message_id
+   424→        except Exception as exc:
+   425→            error_msg = str(exc)
+   426→            logger.error("Ошибка публикации в Telegram: %s", error_msg)
+   427→            # Если ошибка парсинга HTML — пробуем отправить без медиа и с очищенным текстом
+   428→            if "parse entities" in error_msg or "can't parse" in error_msg:
+   429→                logger.warning('HTML parse error — пробуем отправить очищенный текст без медиа')
+   430→                try:
+   431→                    # Убираем ВСЕ HTML-теги и отправляем как plain text
+   432→                    clean = re.sub(r'<[^>]+>', '', text).strip()
+   433→                    msg = await self.bot.send_message(
+   434→                        chat_id=target_chat, text=clean
+   435→                    )
+   436→                    logger.info("Опубликовано без HTML (fallback): TG msg_id=%d", msg.message_id)
+   437→                    return msg.message_id
+   438→                except Exception as fallback_exc:
+   439→                    logger.error("Fallback (plain text) также не удалась: %s", fallback_exc)
+   440→                    return None
+   441→            # Для других ошибок — пробуем без медиа
+   442→            try:
+   443→                msg = await self.bot.send_message(
+   444→                    chat_id=target_chat, text=text
+   445→                )
+   446→                logger.warning(
+   447→                    "Сообщение опубликовано без медиа (fallback): TG msg_id=%d",
+   448→                    msg.message_id,
+   449→                )
+   450→                return msg.message_id
+   451→            except Exception as fallback_exc:
+   452→                logger.error("Fallback-публикация также не удалась: %s", fallback_exc)
+   453→                return None
+   454→
+   455→    async def _send_with_images(
+   456→        self, text: str, image_paths: list[str], chat_id: str | None = None
+   457→    ) -> Optional[int]:
+   458→        """
+   459→        Отправляет сообщение с медиагруппой изображений.
+   460→        Если изображений несколько — создаёт медиагруппу (album).
+   461→        """
+   462→        import aiofiles
+   463→
+   464→        # Подготавливаем InputMedia-объекты
+   465→        from aiogram.types import InputMediaPhoto
+   466→
+   467→        if not image_paths:
+   468→            return None
+   469→
+   470→        media_group = []
+   471→        for path in image_paths:
+   472→            try:
+   473→                if os.path.exists(path) and os.path.isfile(path):
+   474→                    photo = InputMediaPhoto(media=FSInputFile(path))
+   475→                    media_group.append(photo)
+   476→            except Exception as exc:
+   477→                logger.warning("Не удалось прикрепить изображение %s: %s", path, exc)
+   478→
+   479→        if not media_group:
+   480→            # Нет валидных изображений — отправляем только текст
+   481→            msg = await self.bot.send_message(chat_id=target_chat, text=text)
+   482→            return msg.message_id
+   483→
+   484→        try:
+   485→            if len(media_group) == 1:
+   486→                # Одно изображение — отправляем с подписью
+   487→                msg = await self.bot.send_photo(
+   488→                    chat_id=chat_id or self.news_channel_id,
+   489→                    photo=media_group[0].media,
+   490→                    caption=text,
+   491→                )
+   492→                logger.info(
+   493→                    "Сообщение опубликовано (1 фото): TG msg_id=%d",
+   494→                    msg.message_id,
+   495→                )
+   496→                return msg.message_id
+   497→            else:
+   498→                # Несколько изображений — медиагруппа
+   499→                # Текст — в подписи первого фото, остальные без подписи
+   500→                media_group[0].caption = text
+   501→                media_group[0].parse_mode = ParseMode.HTML
+   502→                messages = await self.bot.send_media_group(
+   503→                    chat_id=chat_id or self.news_channel_id,
+   504→                    media=media_group,
+   505→                )
+   506→                logger.info(
+   507→                    "Сообщение опубликовано (%d фото): TG msg_id=%d",
+   508→                    len(media_group),
+   509→                    messages[0].message_id,
+   510→                )
+   511→                return messages[0].message_id
+   512→        except Exception as exc:
+   513→            logger.error("Ошибка отправки медиагруппы: %s", exc)
+   514→            # Fallback — текст без фото
+   515→            msg = await self.bot.send_message(chat_id=target_chat, text=text)
+   516→            return msg.message_id
+   517→
+   518→    async def _send_with_videos(
+   519→        self, text: str, video_paths: list[str], chat_id: str | None = None
+   520→    ) -> Optional[int]:
+   521→        """Отправляет видео с текстом."""
+   522→        if not video_paths:
+   523→            return None
+   524→
+   525→        valid_videos = []
+   526→        for path in video_paths:
+   527→            if os.path.exists(path) and os.path.isfile(path):
+   528→                valid_videos.append(path)
+   529→
+   530→        if not valid_videos:
+   531→            msg = await self.bot.send_message(chat_id=target_chat, text=text)
+   532→            return msg.message_id
+   533→
+   534→        try:
+   535→            if len(valid_videos) == 1:
+   536→                msg = await self.bot.send_video(
+   537→                    chat_id=chat_id or self.news_channel_id,
+   538→                    video=FSInputFile(valid_videos[0]),
+   539→                    caption=text,
+   540→                    supports_streaming=True,
+   541→                )
+   542→                logger.info("Видео опубликовано: TG msg_id=%d", msg.message_id)
+   543→                return msg.message_id
+   544→            else:
+   545→                # Multiple videos as media group
+   546→                media_group = []
+   547→                for path in valid_videos:
+   548→                    try:
+   549→                        media_group.append(
+   550→                            InputMediaVideo(media=FSInputFile(path))
+   551→                        )
+   552→                    except Exception as exc:
+   553→                        logger.warning("Не удалось прикрепить видео %s: %s", path, exc)
+   554→
+   555→                if not media_group:
+   556→                    msg = await self.bot.send_message(chat_id=target_chat, text=text)
+   557→                    return msg.message_id
+   558→
+   559→                media_group[0].caption = text
+   560→                media_group[0].parse_mode = ParseMode.HTML
+   561→                messages = await self.bot.send_media_group(
+   562→                    chat_id=chat_id or self.news_channel_id, media=media_group
+   563→                )
+   564→                logger.info("Видео группа опубликована (%d): TG msg_id=%d",
+   565→                            len(media_group), messages[0].message_id)
+   566→                return messages[0].message_id
+   567→        except Exception as exc:
+   568→            logger.error("Ошибка отправки видео: %s", exc)
+   569→            msg = await self.bot.send_message(chat_id=target_chat, text=text)
+   570→            return msg.message_id
+   571→
+   572→    async def _send_mixed_media(
+   573→        self, text: str, image_paths: list[str], video_paths: list[str], chat_id: str | None = None
+   574→    ) -> Optional[int]:
+   575→        """Отправляет видео + изображения как медиагруппу."""
+   576→        media_group = []
+   577→
+   578→        # Add videos first
+   579→        for path in video_paths[:3]:
+   580→            try:
+   581→                if os.path.exists(path) and os.path.isfile(path):
+   582→                    media_group.append(
+   583→                        InputMediaVideo(media=FSInputFile(path))
+   584→                    )
+   585→            except Exception as exc:
+   586→                logger.warning("Не удалось прикрепить видео %s: %s", path, exc)
+   587→
+   588→        # Add images
+   589→        for path in image_paths[:10]:
+   590→            try:
+   591→                if os.path.exists(path) and os.path.isfile(path):
+   592→                    media_group.append(
+   593→                        InputMediaPhoto(media=FSInputFile(path))
+   594→                    )
+   595→            except Exception as exc:
+   596→                logger.warning("Не удалось прикрепить изображение %s: %s", path, exc)
+   597→
+   598→        if not media_group:
+   599→            msg = await self.bot.send_message(chat_id=target_chat, text=text)
+   600→            return msg.message_id
+   601→
+   602→        try:
+   603→            media_group[0].caption = text
+   604→            media_group[0].parse_mode = ParseMode.HTML
+   605→            messages = await self.bot.send_media_group(
+   606→                chat_id=chat_id or self.news_channel_id, media=media_group
+   607→            )
+   608→            logger.info("Медиагруппа опубликована (%d файлов): TG msg_id=%d",
+   609→                        len(media_group), messages[0].message_id)
+   610→            return messages[0].message_id
+   611→        except Exception as exc:
+   612→            logger.error("Ошибка отправки медиагруппы: %s", exc)
+   613→            # Fallback: send text only
+   614→            msg = await self.bot.send_message(chat_id=target_chat, text=text)
+   615→            return msg.message_id
+   616→
+   617→    async def _resolve_media_url(self, url: str) -> Optional[str]:
+   618→        """
+   619→        Обрабатывает URL медиа: data: URI декодирует в файл, http URL скачивает.
+   620→        Возвращает локальный путь к файлу или None.
+   621→        """
+   622→        if not url:
+   623→            return None
+   624→
+   625→        # Data URI — декодируем base64 в файл
+   626→        if url.startswith("data:"):
+   627→            try:
+   628→                import base64
+   629→                # data:image/jpeg;base64,/9j/4AAQ...
+   630→                header, data = url.split(",", 1)
+   631→                mime_part = header.split(":")[1].split(";")[0]  # image/jpeg
+   632→
+   633→                ext_map = {
+   634→                    "image/jpeg": ".jpg", "image/png": ".png",
+   635→                    "image/gif": ".gif", "image/webp": ".webp",
+   636→                    "video/mp4": ".mp4", "video/webm": ".webm",
+   637→                    "video/quicktime": ".mov",
+   638→                }
+   639→                ext = ext_map.get(mime_part, ".jpg")
+   640→                filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{abs(hash(url)) % 100000}{ext}"
+   641→                filepath = os.path.join(self.images_dir, filename)
+   642→
+   643→                file_data = base64.b64decode(data)
+   644→                with open(filepath, "wb") as f:
+   645→                    f.write(file_data)
+   646→
+   647→                logger.debug("Data URI декодирован: %s (%s)", filepath, mime_part)
+   648→                return filepath
+   649→            except Exception as exc:
+   650→                logger.warning("Не удалось декодировать data URI: %s", exc)
+   651→                return None
+   652→
+   653→        # HTTP URL — скачиваем
+   654→        downloaded = await self._download_images([url])
+   655→        return downloaded[0] if downloaded else None
+   656→
+   657→    async def _download_images(self, urls: list[str]) -> list[str]:
+   658→        """
+   659→        Скачивает файлы (изображения/видео) по URL и сохраняет локально.
+   660→        Возвращает список путей к скачанным файлам.
+   661→        """
+   662→        import aiohttp
+   663→        import aiofiles
+   664→
+   665→        downloaded: list[str] = []
+   666→
+   667→        async with aiohttp.ClientSession() as session:
+   668→            for url in urls[:self.max_images_per_post]:
+   669→                try:
+   670→                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+   671→                        if resp.status != 200:
+   672→                            continue
+   673→
+   674→                        # Определяем расширение файла
+   675→                        content_type = resp.headers.get("Content-Type", "")
+   676→                        if "mp4" in content_type or "mpeg" in content_type:
+   677→                            ext = ".mp4"
+   678→                        elif "webm" in content_type:
+   679→                            ext = ".webm"
+   680→                        elif "quicktime" in content_type:
+   681→                            ext = ".mov"
+   682→                        elif "png" in content_type:
+   683→                            ext = ".png"
+   684→                        elif "gif" in content_type:
+   685→                            ext = ".gif"
+   686→                        elif "webp" in content_type:
+   687→                            ext = ".webp"
+   688→                        else:
+   689→                            # Fallback: check URL extension
+   690→                            url_lower = url.lower()
+   691→                            if url_lower.endswith(".mp4"):
+   692→                                ext = ".mp4"
+   693→                            elif url_lower.endswith(".webm"):
+   694→                                ext = ".webm"
+   695→                            elif url_lower.endswith(".mov"):
+   696→                                ext = ".mov"
+   697→                            else:
+   698→                                ext = ".jpg"
+   699→
+   700→                        # Генерируем имя файла
+   701→                        filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{abs(hash(url)) % 100000}{ext}"
+   702→                        filepath = os.path.join(self.images_dir, filename)
+   703→
+   704→                        # Сохраняем файл
+   705→                        content = await resp.read()
+   706→                        async with aiofiles.open(filepath, "wb") as f:
+   707→                            await f.write(content)
+   708→
+   709→                        downloaded.append(filepath)
+   710→                        logger.debug("Изображение скачано: %s -> %s", url, filepath)
+   711→
+   712→                except Exception as exc:
+   713→                    logger.warning("Не удалось скачать изображение %s: %s", url, exc)
+   714→
+   715→        return downloaded
+   716→
+   717→    async def broadcast_to_users(
+   718→        self,
+   719→        text: str,
+   720→        users: list[dict],
+   721→        image_paths: list[str] | None = None,
+   722→        image_urls: list[str] | None = None,
+   723→    ) -> dict:
+   724→        """
+   725→        Рассылает сообщение всем подписчикам бота в личку.
+   726→        При ошибке отправки (бот заблокирован, юзер удалён и т.д.)
+   727→        возвращает список user_id, которых нужно отметить как blocked.
+   728→
+   729→        Returns:
+   730→            {"sent": int, "blocked": list[int], "failed": int}
+   731→        """
+   732→        sent = 0
+   733→        blocked = []
+   734→        failed = 0
+   735→
+   736→        # Скачиваем изображения один раз для всех юзеров
+   737→        local_images: list[str] = list(image_paths or [])
+   738→        if image_urls:
+   739→            for url in image_urls:
+   740→                path = await self._resolve_media_url(url)
+   741→                if path:
+   742→                    local_images.append(path)
+   743→        local_images = local_images[:self.max_images_per_post]
+   744→
+   745→        for user in users:
+   746→            user_id = user["user_id"]
+   747→            try:
+   748→                if local_images:
+   749→                    # Одно фото — с подписью, несколько — медиагруппа
+   750→                    media_group = []
+   751→                    for img_path in local_images:
+   752→                        try:
+   753→                            if os.path.exists(img_path) and os.path.isfile(img_path):
+   754→                                media_group.append(InputMediaPhoto(media=FSInputFile(img_path)))
+   755→                        except Exception:
+   756→                            pass
+   757→
+   758→                    if len(media_group) == 1:
+   759→                        await self.bot.send_photo(
+   760→                            chat_id=user_id,
+   761→                            photo=media_group[0].media,
+   762→                            caption=text,
+   763→                        )
+   764→                    elif len(media_group) > 1:
+   765→                        media_group[0].caption = text
+   766→                        media_group[0].parse_mode = ParseMode.HTML
+   767→                        await self.bot.send_media_group(
+   768→                            chat_id=user_id, media=media_group
+   769→                        )
+   770→                    else:
+   771→                        await self.bot.send_message(chat_id=user_id, text=text)
+   772→                else:
+   773→                    await self.bot.send_message(chat_id=user_id, text=text)
+   774→
+   775→                sent += 1
+   776→            except Exception as exc:
+   777→                err_msg = str(exc).lower()
+   778→                if "bot was blocked" in err_msg or "blocked" in err_msg:
+   779→                    blocked.append(user_id)
+   780→                elif "user not found" in err_msg or "deleted" in err_msg:
+   781→                    blocked.append(user_id)
+   782→                else:
+   783→                    logger.warning("Рассылка: ошибка отправки юзеру %d: %s", user_id, exc)
+   784→                    failed += 1
+   785→                # Задержка между отправками чтобы не упереться в rate limit
+   786→                await asyncio.sleep(0.05)
+   787→
+   788→        logger.info("Рассылка завершена: отправлено=%d, заблокировали=%d, ошибки=%d",
+   789→                     sent, len(blocked), failed)
+   790→        return {"sent": sent, "blocked": blocked, "failed": failed}
+   791→
+   792→    async def publish_daily_summary(
+   793→        self,
+   794→        high_count: int,
+   795→        medium_count: int,
+   796→        events: list[dict],
+   797→    ) -> Optional[int]:
+   798→        """
+   799→        Публикует ежедневную сводку в Telegram-канал.
+   800→
+   801→        Returns:
+   802→            ID отправленного сообщения или None.
+   803→        """
+   804→        text = self.format_daily_summary(high_count, medium_count, events)
+   805→        # Сводка отправляется в основной канал (channel_id), а не в канал новостей
+   806→        return await self.publish_message(text, chat_id=self.channel_id)
+   807→
+   808→
+   809→
+   810→
