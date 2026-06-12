@@ -1001,7 +1001,7 @@ async def check_for_popular_shorts(
                     prio_labels = {"high": "🔴", "medium": "🟡", "low": "🟢"}
                     prio_icon = prio_labels.get(priority, "")
                     text = (
-                        f"{icon} {prio_icon} <b>YouTube модерация</b> 📺\n"
+                        f"{prio_icon} <b>YouTube модерация</b> 📺\n"
                         f"{'━' * 20}\n"
                         f"<b>{_escape_html(best.get('title', '')[:80])}</b>\n"
                         f"⏱ {_format_duration(dur)}  👁 {_format_views(views)}"
