@@ -1163,7 +1163,7 @@ def _run_bot_thread(monitor, gui=None):
                 else:
                     gui.update_status("workshop", False, "Отключён")
                 if monitor._patch_task:
-                    gui.update_status("patchnotes", True, f"каждые {monitor.config.get('patchnotes_interval_minutes', 30)} мин")
+                    gui.update_status("patchnotes", True, f"каждые {monitor.config.get('patchnotes_interval_minutes', 720)} мин")
                 else:
                     gui.update_status("patchnotes", False, "Отключён")
                 if monitor._discord_enabled:
