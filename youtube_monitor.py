@@ -147,8 +147,9 @@ def format_video_message(video: dict, category: str = "") -> str:
 
     lines = [
         f"{content_type} <b>{title}</b>",
-        f"\u00a9 <a href=\"https://t.me/dayzhub\">DayZ HUB | Новости проектов DayZ</a>",
     ]
+    if url:
+        lines.append(url)
     return "\n".join(lines)
 
 
@@ -918,6 +919,10 @@ async def check_for_popular_shorts(
             if not ai_post:
                 ai_post = format_video_message(best, category)
                 ai_summary = best.get("title", "")
+
+            # Подпись-ссылка на канал в конце поста
+            if ai_post and "t.me/dayzhub" not in ai_post:
+                ai_post += f"\n\n\u00a9 <a href=\"https://t.me/dayzhub\">DayZ HUB | Новости проектов DayZ</a>"
 
             # ═══ Скачиваем видео СРАЗУ ═══
             # Если не скачалось — НИКУДА не отправляем (ни панель, ни бот, ни модерацию)
