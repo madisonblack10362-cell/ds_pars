@@ -350,7 +350,7 @@ class DesktopGUI:
                 ("max_images_per_post", "Макс. фото в посте", "10"),
             ]),
             ("Steam Workshop", [
-                ("workshop_interval_minutes", "Интервал проверки (мин)", "60"),
+                ("workshop_interval_hours", "Интервал проверки (часы)", "1"),
                 ("workshop_min_subscriptions", "Мин. подписчиков мода", "100"),
                 ("steam_api_key", "Steam API Key", "Необязательно"),
             ]),
@@ -882,7 +882,7 @@ class DesktopGUI:
                 "max_retries", "retry_delay_seconds", "request_timeout_seconds",
                 "max_images_per_post",
                 "web_panel_url", "web_panel_api_key",
-                "workshop_interval_minutes", "workshop_min_subscriptions", "steam_api_key",
+                "workshop_interval_hours", "workshop_min_subscriptions", "steam_api_key",
                 "patchnotes_interval_minutes",
                 "youtube_interval_hours", "youtube_min_views", "youtube_min_likes", "youtube_max_per_check",
             ]
@@ -936,7 +936,7 @@ class DesktopGUI:
             "max_retries", "retry_delay_seconds", "request_timeout_seconds",
             "max_images_per_post",
             "web_panel_url", "web_panel_api_key",
-            "workshop_interval_minutes", "workshop_min_subscriptions", "steam_api_key",
+            "workshop_interval_hours", "workshop_min_subscriptions", "steam_api_key",
             "patchnotes_interval_minutes",
             "youtube_interval_hours", "youtube_min_views", "youtube_min_likes", "youtube_max_per_check",
         ]
@@ -947,7 +947,7 @@ class DesktopGUI:
                 if key in ("check_interval_minutes", "daily_summary_hour", "daily_summary_minute",
                             "min_message_length", "max_retries", "retry_delay_seconds",
                             "request_timeout_seconds", "max_images_per_post",
-                            "workshop_interval_minutes", "workshop_min_subscriptions", "patchnotes_interval_minutes",
+                            "workshop_interval_hours", "workshop_min_subscriptions", "patchnotes_interval_minutes",
                             "youtube_interval_hours", "youtube_min_views", "youtube_min_likes", "youtube_max_per_check"):
                     try:
                         val = int(val)

@@ -204,7 +204,7 @@ class DayZNewsMonitor:
         # Steam Workshop монитор
         # -----------------------------------------------------------------
         if cfg.get("workshop_enabled", False):
-            workshop_interval = cfg.get("workshop_interval_minutes", 60) * 60
+            workshop_interval = cfg.get("workshop_interval_hours", 1) * 3600
             workshop_min_subs = cfg.get("workshop_min_subscriptions", 100)
             steam_api_key = cfg.get("steam_api_key", "") or None
 
@@ -234,7 +234,7 @@ class DayZNewsMonitor:
                 )
 
             self._workshop_task = asyncio.create_task(_delayed_workshop())
-            logger.info("Steam Workshop монитор запущен (задержка 60 сек, интервал: %d мин)", cfg.get("workshop_interval_minutes", 60))
+            logger.info("Steam Workshop монитор запущен (задержка 60 сек, интервал: %d ч)", cfg.get("workshop_interval_hours", 1))
         else:
             logger.info("Steam Workshop монитор отключён")
 
@@ -1159,7 +1159,7 @@ def _run_bot_thread(monitor, gui=None):
                 else:
                     gui.update_status("youtube", False, "Отключён")
                 if monitor._workshop_task:
-                    gui.update_status("workshop", True, f"каждые {monitor.config.get('workshop_interval_minutes', 60)} мин")
+                    gui.update_status("workshop", True, f"каждые {monitor.config.get('workshop_interval_hours', 1)} ч")
                 else:
                     gui.update_status("workshop", False, "Отключён")
                 if monitor._patch_task:
