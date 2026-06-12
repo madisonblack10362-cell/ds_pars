@@ -161,7 +161,7 @@ class DayZNewsMonitor:
                 bot_token=bot_token,
                 channel_id=channel_id,
                 news_channel_id=news_channel_id,
-                images_dir=cfg.get("images_dir", "images"),
+                images_dir=cfg.get("images_dir", os.path.join(PROJECT_ROOT, "images")),
                 max_images_per_post=cfg.get("max_images_per_post", 10),
             )
             logger.info("Publisher инициализирован (сводки: %s, новости: %s)",

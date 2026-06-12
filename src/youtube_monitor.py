@@ -29,6 +29,9 @@ from datetime import datetime, timezone
 
 from logger import logger
 
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_DOWNLOADS_DIR = os.path.join(_PROJECT_ROOT, "downloads")
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  Константы
@@ -154,7 +157,7 @@ def format_video_message(video: dict, category: str = "") -> str:
     return "\n".join(lines)
 
 
-def cleanup_old_downloads(downloads_dir: str = "downloads", max_age_hours: int = 48) -> int:
+def cleanup_old_downloads(downloads_dir: str = _DOWNLOADS_DIR, max_age_hours: int = 48) -> int:
     if not os.path.isdir(downloads_dir):
         return 0
     now = time.time()
@@ -830,7 +833,7 @@ def _download_ytdlp_sync(
 
 async def download_short(
     video: dict,
-    downloads_dir: str = "downloads",
+    downloads_dir: str = _DOWNLOADS_DIR,
     max_filesize_mb: int = 50,
 ) -> str | None:
     """Скачивает шортс с YouTube."""
@@ -855,7 +858,7 @@ async def download_short(
 
 async def download_short_by_id(
     video_id: str,
-    downloads_dir: str = "downloads",
+    downloads_dir: str = _DOWNLOADS_DIR,
     max_filesize_mb: int = 50,
 ) -> str | None:
     """Скачивает шортс по video_id (для публикации из веб-панели)."""
@@ -869,7 +872,7 @@ async def download_short_by_id(
 
 def download_short_sync(
     video_id: str,
-    downloads_dir: str = "downloads",
+    downloads_dir: str = _DOWNLOADS_DIR,
     max_filesize_mb: int = 50,
 ) -> str | None:
     """Синхронная версия скачивания (для вызова из sync-кода)."""
@@ -989,7 +992,7 @@ async def check_for_popular_shorts(
 
             # ═══ Скачиваем видео СРАЗУ ═══
             # Если не скачалось — НИКУДА не отправляем (ни панель, ни бот, ни модерацию)
-            downloads_dir = "downloads"
+            downloads_dir = _DOWNLOADS_DIR
             downloaded_file = await download_short(best, downloads_dir=downloads_dir)
 
             if not downloaded_file or not os.path.isfile(downloaded_file):
@@ -1156,7 +1159,7 @@ async def _process_approved_videos(config: dict, publisher=None) -> None:
                 logger.warning("YouTube: файл %s не найден (был при модерации), перекачиваю %s...", dl, video_id)
             else:
                 logger.info("YouTube: обрабатываю одобрение для %s — скачиваю...", video_id)
-            downloads_dir = "downloads"
+            downloads_dir = _DOWNLOADS_DIR
             filepath = await download_short(video_data, downloads_dir=downloads_dir)
 
         # Проверяем что файл валидный и не превышает лимит Telegram (50 MB)

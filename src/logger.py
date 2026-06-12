@@ -13,6 +13,8 @@ import sys
 import traceback
 from datetime import datetime
 
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 # ─── ANSI цвета ──────────────────────────────────────────────────────────
 class _C:
     """ANSI escape-коды."""
@@ -226,4 +228,4 @@ def add_web_panel_handler(web_panel_url: str):
 
 
 # Глобальный экземпляр логгера
-logger = setup_logger()
+logger = setup_logger(log_dir=os.path.join(_PROJECT_ROOT, "logs"))
