@@ -147,8 +147,7 @@ def format_video_message(video: dict, category: str = "") -> str:
 
     lines = [
         f"{content_type} <b>{title}</b>",
-        f"\U0001f4e1 <a href=\"https://t.me/dayzhub\">DayZ HUB | Новости проектов DayZ</a>",
-        "Публикуем обновления, новости, гайды, события и изменения популярных серверов DayZ.",
+        f"\u00a9 <a href=\"https://t.me/dayzhub\">DayZ HUB | Новости проектов DayZ</a>",
     ]
     if url:
         lines.append(url)
