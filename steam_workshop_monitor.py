@@ -347,7 +347,7 @@ async def _fetch_via_scraping(max_mods: int) -> list:
 async def check_for_new_mods(
     steam_api_key: Optional[str] = None,
     min_subscriptions: int = 100,
-    days_old: int = 7,
+    days_old: int = 20,
     max_per_check: int = 3,
 ) -> list:
     """
@@ -355,11 +355,13 @@ async def check_for_new_mods(
 
     На первом запуске (пустой state):
       - Помечает ВСЕ старые моды как известные (не спамит)
-      - Берёт только TOP-N самых популярных за последние 3 дня
+      - Берёт только TOP-N самых популярных за последние 3 дней
 
     При обычных проверках:
       - Возвращает до max_per_check новых модов за последние days_old дней
       - Сортировка по подписчикам (больше = лучше)
+      - days_old=20 чтобы моды, набравшие популярность через неделю-две,
+        тоже попадали в выборку
     """
     state = _load_state()
     known_ids = set(state.get("known_ids", []))
@@ -421,6 +423,19 @@ async def check_for_new_mods(
         if mod.get("subscriptions", 0) < min_subscriptions:
             continue
         new_mods.append(mod)
+
+    # Очистка known_ids от старых записей (старше days_old и не отправленные)
+    # Чтобы state файл не раздувался бесконечно
+    stale_ids = [
+        mid for mid in known_ids
+        if mid not in posted_ids
+    ]
+    if len(known_ids) > 500:  # Чистим только когда накопилось много
+        # Загружаем детали чтобы проверить возраст — но это дорого,
+        # поэтому просто ограничиваем размер, оставляя последние
+        keep = set(list(known_ids)[-300:])  # Оставляем последние 300
+        known_ids = keep | posted_ids  # posted_ids всегда сохраняем
+        logger.info("Очистка known_ids: %d → %d записей", len(state.get("known_ids", [])), len(known_ids))
 
     state["known_ids"] = list(known_ids)
     state["last_check"] = datetime.now(timezone.utc).isoformat()
@@ -660,7 +675,7 @@ async def run_workshop_monitor(
             new_mods = await check_for_new_mods(
                 steam_api_key=steam_api_key,
                 min_subscriptions=min_subscriptions,
-                days_old=7,
+                days_old=20,
             )
 
             # Резолвим имена авторов (бесплатно, через scraping)
