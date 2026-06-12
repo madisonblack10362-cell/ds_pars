@@ -698,10 +698,12 @@ class DayZNewsMonitor:
 
                 # ── YouTube: ищем скачанный видео-файл вместо thumbnail ──
                 video_paths = None
+                is_youtube = False
                 source_type = item.get('sourceType', '') or item.get('source_type', '')
                 external_id = item.get('externalId', '') or item.get('external_id', '')
 
                 if source_type == 'youtube' and external_id and external_id.startswith('yt_'):
+                    is_youtube = True
                     yt_video_id = external_id[3:]  # убираем "yt_" префикс
                     video_file = self._find_youtube_downloaded_file(yt_video_id)
                     if video_file:
@@ -719,9 +721,14 @@ class DayZNewsMonitor:
                                 valid_images = []
                                 logger.info('YouTube публикация: скачан %s -> %s', yt_video_id, dl_path)
                             else:
-                                logger.warning('YouTube публикация: не удалось скачать %s, отправляю thumbnail', yt_video_id)
+                                logger.error('YouTube публикация: НЕ удалось скачать видео %s — публикация ОТМЕНЕНА', yt_video_id)
                         except Exception as dl_err:
-                            logger.error('YouTube публикация: ошибка скачивания %s: %s', yt_video_id, dl_err)
+                            logger.error('YouTube публикация: ошибка скачивания %s: %s — публикация ОТМЕНЕНА', yt_video_id, dl_err)
+
+                # ── YouTube без видео — НЕ публикуем ──
+                if is_youtube and not video_paths:
+                    logger.error('ПРОПУСК YouTube новости %s: видео не найдено и не скачалось', news_id)
+                    continue
 
                 if text:
                     logger.info('Публикация с панели: id=%s, video=%s, images=%d, text_len=%d',
