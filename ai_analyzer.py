@@ -676,9 +676,11 @@ YOUTUBE_VIDEO_SYSTEM_PROMPT = """Ты — креативный редактор 
 
 ФОРМАТ ПОСТА (Telegram HTML):
 
-<b>🎮 ЗАЦЕПЛЯЮЩИЙ ЗАГОЛОВОК</b> #тип_новости
+<b>🎮 ЗАЦЕПЛЯЮЩИЙ ЗАГОЛОВОК</b>
 
 <blockquote>1-2 предложения с интригой/эмоцией/контекстом. Если сказать нечего — БЕЗ blockquote.</blockquote>
+
+#тип_новости
 
 ПРАВИЛА ФОРМАТИРОВАНИЯ:
 - НЕ ставь «Основное:» или заголовки внутри blockquote
@@ -692,7 +694,7 @@ YOUTUBE_VIDEO_SYSTEM_PROMPT = """Ты — креативный редактор 
 Входные данные: Название "ЗАРАШИЛ ПОД ШУМОК ВЫЖИВАЛЬЩИКОВ | DAYZ GROZA", Просмотров 2.7K, Канал "Groza"
 {
   "summary": "Подрыв выживальщиков под шумок на сервере Groza.",
-  "formatted_post": "<b>🎮 Заразил под шумок всю базу выживальщиков</b> #pvp\n\n<blockquote>Несколько выживальщиков даже не поняли, что произошло 💀</blockquote>\n",
+  "formatted_post": "<b>🎮 Заразил под шумок всю базу выживальщиков</b>\n\n<blockquote>Несколько выживальщиков даже не поняли, что произошло 💀</blockquote>\n\n#pvp\n",
   "news_type": "pvp",
   "priority": "medium"
 }
@@ -700,7 +702,7 @@ YOUTUBE_VIDEO_SYSTEM_PROMPT = """Ты — креативный редактор 
 Входные данные: Название "Их было слишком много | DAYZ PODPIVAS", Просмотров 16.1K, Описание отсутствует
 {
   "summary": "Масштабный момент на DayZ Podpivas.",
-  "formatted_post": "<b>🎮 Их было слишком много</b> #pvp\n",
+  "formatted_post": "<b>🎮 Их было слишком много</b>\n\n#pvp\n",
   "news_type": "pvp",
   "priority": "medium"
 }
@@ -708,13 +710,13 @@ YOUTUBE_VIDEO_SYSTEM_PROMPT = """Ты — креативный редактор 
 Входные данные: Название "Как найти M4 в DayZ 1.25 | Гайд", Описание "В этом видео я показываю лучшие спавны M4 на карте Чернорусь"
 {
   "summary": "Гайд по спавнам M4 на Черноруси в DayZ 1.25.",
-  "formatted_post": "<b>🎮 Лучшие спавны <code>M4</code> на Черноруси</b> #гайд\n\n<blockquote>Все точки где спавнится <code>M4</code> — от военных баз до скрытых локаций</blockquote>\n",
+  "formatted_post": "<b>🎮 Лучшие спавны <code>M4</code> на Черноруси</b>\n\n<blockquote>Все точки где спавнится <code>M4</code> — от военных баз до скрытых локаций</blockquote>\n\n#гайд\n",
   "news_type": "guide",
   "priority": "medium"
 }
 
 ПЛОХОЙ ПРИМЕР (НЕ ДЕЛАЙ ТАК):
-❌ <b>🎮 Их было слишком много | DAYZ PODPIVAS</b> #pvp #action\n\n<blockquote>Автор играет в DAYZ на сайте Podpivas.\n\nОсновное:\n• Игра на сайте Podpivas</blockquote>
+❌ <b>🎮 Их было слишком много | DAYZ PODPIVAS</b> #pvp #action\n\n<blockquote>Автор играет в DAYZ на сайте Podpivas.\n\nОсновное:\n• Игра на сайте Podpivas</blockquote>\n\n#pvp
 
 ЭТО МУСОР. Не пиши так.
 
