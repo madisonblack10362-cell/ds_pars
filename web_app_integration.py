@@ -17,8 +17,8 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     WebAppInfo,
     MenuButtonWebApp,
-    ParseMode,
 )
+from aiogram.enums import ParseMode
 from logger import logger
 
 
