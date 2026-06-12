@@ -37,10 +37,11 @@ from logger import logger
 _SHORTS_MAX_DURATION = 180  # Порог для шортсов (секунды, YouTube допускает до 3 мин)
 
 # Путь к файлу состояния (уже опубликованные / в модерации)
-_STATE_FILE = "youtube_state.json"
+_CONFIG_DIR = os.path.join(os.path.dirname(__file__), "config")
+_STATE_FILE = os.path.join(_CONFIG_DIR, "youtube_state.json")
 
 # Путь к файлу очереди модерации
-_MODERATION_FILE = "youtube_moderation.json"
+_MODERATION_FILE = os.path.join(_CONFIG_DIR, "youtube_moderation.json")
 
 # Пул потоков для yt-dlp
 _thread_pool = ThreadPoolExecutor(max_workers=4)

@@ -799,7 +799,7 @@ class DayZNewsMonitor:
 
         # 1) Проверяем локальную очередь модерации
         try:
-            mod_file = 'youtube_moderation.json'
+            mod_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config', 'youtube_moderation.json')
             if os.path.exists(mod_file):
                 with open(mod_file, 'r', encoding='utf-8') as f:
                     queue = json.load(f)

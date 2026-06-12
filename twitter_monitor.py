@@ -44,7 +44,7 @@ RSS_FEED_URLS = [
 # Syndication fallback (embedded JSON в HTML)
 SYNDICATION_URL = f"https://syndication.twitter.com/srv/timeline-profile/screen-name/{DAYZ_TWITTER_HANDLE}"
 
-STATE_FILE = os.path.join(os.path.dirname(__file__), "twitter_state.json")
+STATE_FILE = os.path.join(os.path.dirname(__file__), "config", "twitter_state.json")
 
 
 # ═════════════════════════════════════════════════════════════════════════════

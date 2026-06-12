@@ -110,7 +110,7 @@ def main():
 
     # 2) Собираем datas — только те файлы которые реально существуют
     datas_lines = []
-    for fname in ("config.example.json", "icon.ico"):
+    for fname in ("icon.ico",):
         if Path(fname).exists():
             datas_lines.append(f"        ('{fname}', '.'),")
     datas_str = '\n'.join(datas_lines) if datas_lines else ''
@@ -142,7 +142,7 @@ def main():
     dist_dir = Path("dist/DayZ Monitor")
     cfg = dist_dir / "config.json"
     if not cfg.exists():
-        for src in ("config.example.json", "config.json"):
+        for src in ("config.json",):
             if Path(src).exists():
                 shutil.copy(src, cfg)
                 print(f"\n  {src} скопирован в {dist_dir}")

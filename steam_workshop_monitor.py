@@ -49,7 +49,7 @@ STEAM_API_URL = "https://api.steampowered.com/IPublishedFileService/QueryFiles/v
 
 # ─── State persistence ────────────────────────────────────────────────────────
 
-STATE_FILE = os.path.join(os.path.dirname(__file__), "workshop_state.json")
+STATE_FILE = os.path.join(os.path.dirname(__file__), "config", "workshop_state.json")
 
 
 def _load_state() -> dict:
