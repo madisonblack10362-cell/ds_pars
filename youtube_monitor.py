@@ -922,7 +922,7 @@ async def check_for_popular_shorts(
 
             # Подпись-ссылка на канал в конце поста
             if ai_post and "t.me/dayzhub" not in ai_post:
-                ai_post += f"\n\n\u00a9 <a href=\"https://t.me/dayzhub\">DayZ HUB | Новости проектов DayZ</a>"
+                ai_post += f"\n\n\u00a9 <a href=\"https://t.me/dayzhub\">DayZ HUB</a> — подписывайся, чтобы не пропустить новости, гайды и обновления по DayZ \U0001f514"
 
             # ═══ Скачиваем видео СРАЗУ ═══
             # Если не скачалось — НИКУДА не отправляем (ни панель, ни бот, ни модерацию)
