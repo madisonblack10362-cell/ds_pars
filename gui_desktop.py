@@ -355,7 +355,7 @@ class DesktopGUI:
                 ("steam_api_key", "Steam API Key", "Необязательно"),
             ]),
             ("Патчноуты", [
-                ("patchnotes_interval_minutes", "Интервал проверки (мин)", "30"),
+                ("patchnotes_interval_minutes", "Интервал проверки (мин)", "720"),
             ]),
             ("YouTube", [
                 ("youtube_interval_hours", "Интервал проверки (часы)", "2"),

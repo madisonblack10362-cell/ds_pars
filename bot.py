@@ -242,7 +242,7 @@ class DayZNewsMonitor:
         # Патчноуты монитор
         # -----------------------------------------------------------------
         if cfg.get("patchnotes_enabled", False):
-            patch_interval = cfg.get("patchnotes_interval_minutes", 30) * 60
+            patch_interval = cfg.get("patchnotes_interval_minutes", 720) * 60
 
             _pn_notify_ids = None
             if self.moderation_notifications and self.notify_chat_id:
@@ -267,7 +267,7 @@ class DayZNewsMonitor:
                 )
 
             self._patch_task = asyncio.create_task(_delayed_patch())
-            logger.info("Патчноуты монитор запущен (задержка 60 сек, интервал: %d мин)", cfg.get("patchnotes_interval_minutes", 30))
+            logger.info("Патчноуты монитор запущен (задержка 60 сек, интервал: %d мин)", cfg.get("patchnotes_interval_minutes", 720))
         else:
             logger.info("Патчноуты монитор отключён")
 

@@ -428,7 +428,7 @@ async def run_patch_monitor(
     ai_analyzer=None,
     web_panel_url: str = "",
     web_panel_api_key: str = "",
-    check_interval: int = 1800,
+    check_interval: int = 43200,
     ai_analyze: bool = True,
     notify_chat_ids: list | None = None,
     telegram_bot_token: str = "",
