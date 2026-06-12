@@ -352,10 +352,8 @@ async def _fetch_channel_videos(
             cmd = [sys.executable, "-m", "yt_dlp", "-4", "--no-config", "--flat-playlist", "--dump-json",
                    "--quiet", "--no-warnings", url]
 
-        env = _build_subprocess_env()
-
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=env)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             if result.returncode != 0 or not result.stdout.strip():
                 logger.warning("YouTube/ytdlp: %s — видео не получены", channel_input)
                 return [], "", ""
@@ -445,8 +443,6 @@ def _enrich_video_metadata_sync(video: dict) -> dict:
     ytdlp_cmd = shutil.which("yt-dlp")
     base = [ytdlp_cmd] if ytdlp_cmd else [sys.executable, "-m", "yt_dlp"]
 
-    env = _build_subprocess_env()
-
     # android_vr — не нужен PO token, cookies, логин. Самый надёжный.
     # -4 — IPv4 (YouTube агрессивнее блокирует IPv6)
     attempts = []
@@ -455,7 +451,6 @@ def _enrich_video_metadata_sync(video: dict) -> dict:
     attempts.append((base + [
         "-4", "--no-config", "--dump-json", "--no-download", "--quiet", "--no-warnings",
         "--extractor-args", "youtube:player_client=android_vr",
-        "--remote-components", "ejs:github",
         url,
     ], "android_vr"))
 
@@ -463,7 +458,6 @@ def _enrich_video_metadata_sync(video: dict) -> dict:
     attempts.append((base + [
         "-4", "--no-config", "--dump-json", "--no-download", "--quiet", "--no-warnings",
         "--extractor-args", "youtube:player_client=ios",
-        "--remote-components", "ejs:github",
         url,
     ], "ios"))
 
@@ -472,14 +466,13 @@ def _enrich_video_metadata_sync(video: dict) -> dict:
         attempts.append((base + [
             "-4", "--no-config", "--dump-json", "--no-download", "--quiet", "--no-warnings",
             "--cookies", cookies_path,
-            "--remote-components", "ejs:github",
             url,
         ], "cookies"))
 
     last_result = None
     for cmd, label in attempts:
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             last_result = result
             if result.returncode == 0 and result.stdout.strip():
                 info = json.loads(result.stdout)
@@ -544,14 +537,12 @@ def _fetch_channel_best_short_sync(
     ytdlp_cmd = shutil.which("yt-dlp")
     base_cmd = [ytdlp_cmd] if ytdlp_cmd else [sys.executable, "-m", "yt_dlp"]
 
-    env = _build_subprocess_env()
-
     # Шаг 1: flat-playlist — быстрый список
     cmd = base_cmd + [
         "-4", "--no-config", "--flat-playlist", "--dump-json", "--quiet", "--no-warnings", url
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=env)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     except subprocess.TimeoutExpired:
         logger.warning("YouTube/ytdlp: таймаут списка видео для %s", channel_id)
         return None
