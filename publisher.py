@@ -438,7 +438,11 @@ class Publisher:
                 except Exception as fallback_exc:
                     logger.error("Fallback (plain text) также не удалась: %s", fallback_exc)
                     return None
-            # Для других ошибок — пробуем без медиа
+            # Если были видео — НЕ делаем фоллбэк на голый текст
+            if local_videos:
+                logger.error("Видео не отправлено — фоллбэк на текст без видео ОТКЛЮЧЁН для video_paths=%s", local_videos)
+                return None
+            # Для других ошибок без видео — пробуем без медиа
             try:
                 msg = await self.bot.send_message(
                     chat_id=target_chat, text=text
@@ -566,8 +570,7 @@ class Publisher:
                 return messages[0].message_id
         except Exception as exc:
             logger.error("Ошибка отправки видео: %s", exc)
-            msg = await self.bot.send_message(chat_id=target_chat, text=text)
-            return msg.message_id
+            raise  # Пробрасываем — publish_message сам решит что делать
 
     async def _send_mixed_media(
         self, text: str, image_paths: list[str], video_paths: list[str], chat_id: str | None = None

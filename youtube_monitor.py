@@ -1077,9 +1077,31 @@ async def _process_approved_videos(config: dict, publisher=None) -> None:
             filepath = dl
             logger.info("YouTube: использую уже скачанный файл %s: %s", video_id, filepath)
         else:
-            logger.info("YouTube: обрабатываю одобрение для %s — скачиваю...", video_id)
+            if dl:
+                logger.warning("YouTube: файл %s не найден (был при модерации), перекачиваю %s...", dl, video_id)
+            else:
+                logger.info("YouTube: обрабатываю одобрение для %s — скачиваю...", video_id)
             downloads_dir = "downloads"
             filepath = await download_short(video_data, downloads_dir=downloads_dir)
+
+        # Проверяем что файл валидный и не превышает лимит Telegram (50 MB)
+        if filepath and os.path.isfile(filepath):
+            fsize = os.path.getsize(filepath)
+            if fsize == 0:
+                logger.error("YouTube: файл %s пустой (0 байт) — удаляю и помечаю как download_failed", filepath)
+                try:
+                    os.remove(filepath)
+                except OSError:
+                    pass
+                filepath = None
+            elif fsize > 50 * 1024 * 1024:
+                logger.error("YouTube: файл %s слишком большой (%.1f MB > 50 MB) для Telegram бота", filepath, fsize / 1024 / 1024)
+                filepath = None
+            else:
+                logger.info("YouTube: файл %s валиден (%.1f MB)", filepath, fsize / 1024 / 1024)
+        elif filepath:
+            logger.error("YouTube: filepath=%s но файл не существует!", filepath)
+            filepath = None
 
         if filepath and publisher and ai_post:
             # Публикация с видео
