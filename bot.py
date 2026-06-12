@@ -206,8 +206,9 @@ class DayZNewsMonitor:
             workshop_min_subs = cfg.get("workshop_min_subscriptions", 100)
             steam_api_key = cfg.get("steam_api_key", "") or None
 
-            self._workshop_task = asyncio.create_task(
-                run_workshop_monitor(
+            async def _delayed_workshop():
+                await asyncio.sleep(60)  # Ждём 1 минуту после старта бота
+                await run_workshop_monitor(
                     telegram_bot=self.publisher,
                     db=self.db,
                     ai_analyzer=self.ai_analyzer,
@@ -218,8 +219,9 @@ class DayZNewsMonitor:
                     min_subscriptions=workshop_min_subs,
                     ai_analyze=bool(self.ai_analyzer),
                 )
-            )
-            logger.info("Steam Workshop монитор запущен (интервал: %d мин)", cfg.get("workshop_interval_minutes", 60))
+
+            self._workshop_task = asyncio.create_task(_delayed_workshop())
+            logger.info("Steam Workshop монитор запущен (задержка 60 сек, интервал: %d мин)", cfg.get("workshop_interval_minutes", 60))
         else:
             logger.info("Steam Workshop монитор отключён")
 
