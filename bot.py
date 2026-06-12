@@ -208,8 +208,17 @@ class DayZNewsMonitor:
             workshop_min_subs = cfg.get("workshop_min_subscriptions", 100)
             steam_api_key = cfg.get("steam_api_key", "") or None
 
+            # Список chat_id для уведомлений о модерации
+            _ws_notify_ids = None
+            if self.moderation_notifications and self.notify_chat_id:
+                try:
+                    _ws_notify_ids = [int(self.notify_chat_id)]
+                except (ValueError, TypeError):
+                    pass
+            _ws_bot_token = cfg.get("telegram_bot_token", "")
+
             async def _delayed_workshop():
-                await asyncio.sleep(60)  # Ждём 1 минуту после старта бота
+                await asyncio.sleep(60)
                 await run_workshop_monitor(
                     telegram_bot=self.publisher,
                     db=self.db,
@@ -220,6 +229,8 @@ class DayZNewsMonitor:
                     check_interval=workshop_interval,
                     min_subscriptions=workshop_min_subs,
                     ai_analyze=bool(self.ai_analyzer),
+                    notify_chat_ids=_ws_notify_ids,
+                    telegram_bot_token=_ws_bot_token,
                 )
 
             self._workshop_task = asyncio.create_task(_delayed_workshop())
@@ -233,6 +244,14 @@ class DayZNewsMonitor:
         if cfg.get("patchnotes_enabled", False):
             patch_interval = cfg.get("patchnotes_interval_minutes", 30) * 60
 
+            _pn_notify_ids = None
+            if self.moderation_notifications and self.notify_chat_id:
+                try:
+                    _pn_notify_ids = [int(self.notify_chat_id)]
+                except (ValueError, TypeError):
+                    pass
+            _pn_bot_token = cfg.get("telegram_bot_token", "")
+
             async def _delayed_patch():
                 await asyncio.sleep(60)
                 await run_patch_monitor(
@@ -243,6 +262,8 @@ class DayZNewsMonitor:
                     web_panel_api_key=self.web_panel_api_key,
                     check_interval=patch_interval,
                     ai_analyze=bool(self.ai_analyzer),
+                    notify_chat_ids=_pn_notify_ids,
+                    telegram_bot_token=_pn_bot_token,
                 )
 
             self._patch_task = asyncio.create_task(_delayed_patch())

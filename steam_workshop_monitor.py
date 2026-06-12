@@ -655,6 +655,8 @@ async def run_workshop_monitor(
     check_interval: int = 3600,
     min_subscriptions: int = 100,
     ai_analyze: bool = True,
+    notify_chat_ids: list | None = None,
+    telegram_bot_token: str = "",
 ):
     """Основной цикл монитора Steam Workshop.
 
@@ -783,6 +785,21 @@ async def run_workshop_monitor(
                             )
                             if success:
                                 logger.info("Мод '%s' отправлен на веб-панель", mod["title"])
+                                # Уведомление в Telegram о модерации
+                                if notify_chat_ids and telegram_bot_token:
+                                    try:
+                                        from web_app_integration import notify_moderation
+                                        await notify_moderation(
+                                            title=ai_summary or mod.get("title", "")[:80],
+                                            news_type="mod_update",
+                                            priority="medium",
+                                            source="Steam Workshop",
+                                            notify_chat_ids=notify_chat_ids,
+                                            bot_token=telegram_bot_token,
+                                            web_panel_url=web_panel_url,
+                                        )
+                                    except Exception as notify_err:
+                                        logger.warning("Не удалось отправить уведомление о модерации: %s", notify_err)
                             else:
                                 logger.error("Веб-панель: не удалось отправить мод '%s'", mod["title"])
                         except ImportError:

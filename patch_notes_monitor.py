@@ -430,6 +430,8 @@ async def run_patch_monitor(
     web_panel_api_key: str = "",
     check_interval: int = 1800,
     ai_analyze: bool = True,
+    notify_chat_ids: list | None = None,
+    telegram_bot_token: str = "",
 ):
     """Основной цикл монитора патчноутов.
 
@@ -543,6 +545,21 @@ async def run_patch_monitor(
                             )
                             if success:
                                 logger.info("Патч '%s' отправлен на веб-панель", item["title"])
+                                # Уведомление в Telegram о модерации
+                                if notify_chat_ids and telegram_bot_token:
+                                    try:
+                                        from web_app_integration import notify_moderation
+                                        await notify_moderation(
+                                            title=ai_summary or item.get("title", "")[:80],
+                                            news_type="update",
+                                            priority="high",
+                                            source=item.get("source", "Steam News"),
+                                            notify_chat_ids=notify_chat_ids,
+                                            bot_token=telegram_bot_token,
+                                            web_panel_url=web_panel_url,
+                                        )
+                                    except Exception as notify_err:
+                                        logger.warning("Не удалось отправить уведомление о модерации: %s", notify_err)
                             else:
                                 logger.error("Веб-панель: не удалось отправить патч '%s'", item["title"])
                         except ImportError:
