@@ -440,6 +440,23 @@ async def run_patch_monitor(
     """
     logger.info("Patch Notes Monitor запущен (интервал: %d сек)", check_interval)
 
+    # При старте — проверяем last_check, не парсим если рано
+    state = _load_state()
+    last_check = state.get("last_check")
+    if last_check:
+        try:
+            last_ts = datetime.fromisoformat(last_check).timestamp()
+            elapsed = time.time() - last_ts
+            if elapsed < check_interval:
+                remaining = check_interval - elapsed
+                logger.info(
+                    "Patch Notes: с последней проверки прошло %.0f мин, интервал %d мин — ждём %.0f мин",
+                    elapsed / 60, check_interval / 60, remaining / 60,
+                )
+                await asyncio.sleep(remaining)
+        except (ValueError, TypeError):
+            pass
+
     while True:
         try:
             logger.info("Проверяем патчноуты DayZ...")

@@ -1145,6 +1145,34 @@ async def run_youtube_monitor(
         check_interval_hours,
     )
 
+    # При старте проверяем — не слишком ли рано парсить?
+    # Если с последней проверки прошло меньше интервала — ждём остаток
+    state = _load_state()
+    last_check = state.get("last_check", 0)
+    if last_check and last_check > 0:
+        elapsed = time.time() - last_check
+        interval_sec = check_interval_hours * 3600
+        if elapsed < interval_sec:
+            remaining = interval_sec - elapsed
+            logger.info(
+                "YouTube: с последней проверки прошло %.0f мин, интервал %dч — ждём %.0f мин",
+                elapsed / 60, check_interval_hours, remaining / 60,
+            )
+            # Ждём остаток с проверкой shutdown
+            while remaining > 0:
+                if shutdown_event and shutdown_event.is_set():
+                    logger.info("YouTube монитор: остановлен")
+                    return
+                chunk = min(approval_check_seconds, remaining)
+                await asyncio.sleep(chunk)
+                remaining -= chunk
+                # Параллельно проверяем одобрения
+                if publisher:
+                    try:
+                        await _process_approved_videos(config or {}, publisher)
+                    except Exception:
+                        pass
+
     approval_check_seconds = 30
 
     while True:
