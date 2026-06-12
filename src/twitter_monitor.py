@@ -37,6 +37,8 @@ DAYZ_TWITTER_HANDLE = "DayZ"
 RSS_FEED_URLS = [
     f"https://nitter.privacydev.net/{DAYZ_TWITTER_HANDLE}/rss",
     f"https://nitter.poast.org/{DAYZ_TWITTER_HANDLE}/rss",
+    f"https://twiiit.com/{DAYZ_TWITTER_HANDLE}/rss",
+    f"https://nitter.cz/{DAYZ_TWITTER_HANDLE}/rss",
     f"https://xcancel.com/{DAYZ_TWITTER_HANDLE}/rss",
     f"https://nitter.net/{DAYZ_TWITTER_HANDLE}/rss",
 ]
@@ -403,15 +405,16 @@ async def run_twitter_monitor(
                 logger.info("RSS недоступен, пробуем syndication fallback...")
                 tweets = await _fetch_syndication_tweets(max_tweets=20)
 
+            # Обновляем posted_ids из состояния
+            posted_ids = set(state.get("posted_ids", []))
+            new_count = 0
+
             if not tweets:
                 logger.info("Twitter: не удалось получить твиты из любого источника")
             else:
                 # Фильтруем
                 tweets = [t for t in tweets if _is_relevant(t)]
                 logger.info("Twitter: получено %d твитов (после фильтрации)", len(tweets))
-
-                posted_ids = set(state.get("posted_ids", []))
-                new_count = 0
 
                 for tweet in tweets:
                     if tweet["id"] in posted_ids:
