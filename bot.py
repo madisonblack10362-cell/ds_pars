@@ -184,8 +184,9 @@ class DayZNewsMonitor:
         if cfg.get("youtube_enabled", True):
             youtube_interval = int(cfg.get("youtube_interval_hours", 2))
 
-            self.youtube_task = asyncio.create_task(
-                run_youtube_monitor(
+            async def _delayed_youtube():
+                await asyncio.sleep(60)
+                await run_youtube_monitor(
                     db=self.db,
                     ai_analyzer=self.ai_analyzer,
                     check_interval_hours=youtube_interval,
@@ -193,8 +194,9 @@ class DayZNewsMonitor:
                     publisher=self.publisher,
                     config=cfg,
                 )
-            )
-            logger.info("YouTube монитор v2 запущен (интервал: %dч, только ручные каналы, модерация)", youtube_interval)
+
+            self.youtube_task = asyncio.create_task(_delayed_youtube())
+            logger.info("YouTube монитор v2 запущен (задержка 60 сек, интервал: %dч)", youtube_interval)
         else:
             logger.info("YouTube монитор отключён")
 
@@ -231,8 +233,9 @@ class DayZNewsMonitor:
         if cfg.get("patchnotes_enabled", False):
             patch_interval = cfg.get("patchnotes_interval_minutes", 30) * 60
 
-            self._patch_task = asyncio.create_task(
-                run_patch_monitor(
+            async def _delayed_patch():
+                await asyncio.sleep(60)
+                await run_patch_monitor(
                     telegram_bot=self.publisher,
                     db=self.db,
                     ai_analyzer=self.ai_analyzer,
@@ -241,8 +244,9 @@ class DayZNewsMonitor:
                     check_interval=patch_interval,
                     ai_analyze=bool(self.ai_analyzer),
                 )
-            )
-            logger.info("Патчноуты монитор запущен (интервал: %d мин)", cfg.get("patchnotes_interval_minutes", 30))
+
+            self._patch_task = asyncio.create_task(_delayed_patch())
+            logger.info("Патчноуты монитор запущен (задержка 60 сек, интервал: %d мин)", cfg.get("patchnotes_interval_minutes", 30))
         else:
             logger.info("Патчноуты монитор отключён")
 
@@ -901,6 +905,8 @@ class DayZNewsMonitor:
         """Запускает Discord-монитор как отдельную корутину."""
         if not self._discord_enabled:
             return
+
+        await asyncio.sleep(60)  # Задержка после старта бота
 
         try:
             from discord_monitor import DiscordMonitor
