@@ -10,6 +10,16 @@ echo.
 
 cd /d "%~dp0"
 
+:: Проверяем config.json
+if not exist "config.json" (
+    echo [!] config.json не найден!
+    echo     Скопируй config.example.json в config.json
+    echo     и заполни свои токены.
+    echo.
+    pause
+    exit /b 1
+)
+
 :: Проверяем есть ли venv
 if not exist "venv\Scripts\activate.bat" (
     echo [!] Virtual environment not found!
@@ -20,6 +30,13 @@ if not exist "venv\Scripts\activate.bat" (
 ) else (
     call venv\Scripts\activate.bat
 )
+
+:: Создаём нужные папки
+if not exist "config" mkdir config
+if not exist "logs" mkdir logs
+if not exist "database" mkdir database
+if not exist "images" mkdir images
+if not exist "downloads" mkdir downloads
 
 echo.
 echo [*] Starting bot...
