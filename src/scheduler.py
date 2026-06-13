@@ -2,13 +2,20 @@
 Модуль планировщика задач проекта DayZ News Monitor.
 Настраивает APScheduler для периодического запуска задач мониторинга,
 анализа и публикации.
+
+Используется BackgroundScheduler (работает в отдельном потоке),
+а не AsyncIOScheduler, который блокирует asyncio event loop на Windows.
+Асинхронные задачи-корутины автоматически пробрасываются в event loop
+через asyncio.run_coroutine_threadsafe().
 """
 
 import asyncio
+import functools
+import inspect
 from datetime import datetime
 from typing import Callable, Awaitable, Optional
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
 
@@ -19,11 +26,15 @@ class Scheduler:
     """
     Планировщик периодических задач.
     Управляет расписанием мониторинга, анализа и публикации новостей.
+
+    Использует BackgroundScheduler — работает в собственном потоке,
+    не блокирует asyncio event loop (критично для Windows).
     """
 
     def __init__(self):
-        self._scheduler = AsyncIOScheduler(timezone="UTC")
+        self._scheduler = BackgroundScheduler(timezone="UTC")
         self._running = False
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._jobs: dict[str, str] = {}
 
     async def start(self) -> None:
@@ -32,10 +43,12 @@ class Scheduler:
             logger.warning("Планировщик уже запущен")
             return
 
+        # Сохраняем ссылку на текущий event loop для проброса корутин
+        self._loop = asyncio.get_running_loop()
         self._scheduler.start()
         self._running = True
         logger.info(
-            "Планировщик запущен. Зарегистрировано задач: %d",
+            "Планировщик запущен (BackgroundScheduler). Зарегистрировано задач: %d",
             len(self._scheduler.get_jobs()),
         )
 
@@ -46,11 +59,19 @@ class Scheduler:
 
         self._scheduler.shutdown(wait=True)
         self._running = False
+        self._loop = None
         logger.info("Планировщик остановлен")
+
+    def _run_async_job(self, coro_func: Callable, **kwargs) -> None:
+        """Пробрасывает асинхронную функцию из потока планировщика в event loop."""
+        if self._loop and self._loop.is_running():
+            asyncio.run_coroutine_threadsafe(coro_func(**kwargs), self._loop)
+        else:
+            logger.warning("Планировщик: event loop недоступен для задачи")
 
     def add_interval_job(
         self,
-        func: Callable[..., Awaitable],
+        func: Callable,
         job_id: str,
         minutes: int = 5,
         seconds: int = 0,
@@ -62,7 +83,7 @@ class Scheduler:
         Добавляет задачу с интервалом повторения.
 
         Args:
-            func: Асинхронная функция для выполнения.
+            func: Функция для выполнения (может быть async — будет проброшена в event loop).
             job_id: Уникальный идентификатор задачи.
             minutes: Интервал в минутах.
             seconds: Дополнительный интервал в секундах.
@@ -70,6 +91,12 @@ class Scheduler:
             replace_existing: Заменять существующую задачу с таким ID.
             **kwargs: Дополнительные аргументы, передаваемые в func.
         """
+        # Если функция асинхронная — оборачиваем для проброса в event loop
+        if inspect.iscoroutinefunction(func):
+            actual_func = functools.partial(self._run_async_job, func)
+        else:
+            actual_func = func
+
         trigger = IntervalTrigger(
             minutes=minutes,
             seconds=seconds,
@@ -77,7 +104,7 @@ class Scheduler:
         )
 
         self._scheduler.add_job(
-            func,
+            actual_func,
             trigger=trigger,
             id=job_id,
             replace_existing=replace_existing,
@@ -95,7 +122,7 @@ class Scheduler:
 
     def add_cron_job(
         self,
-        func: Callable[..., Awaitable],
+        func: Callable,
         job_id: str,
         hour: int = 10,
         minute: int = 0,
@@ -107,7 +134,7 @@ class Scheduler:
         Добавляет задачу по расписанию (cron).
 
         Args:
-            func: Асинхронная функция для выполнения.
+            func: Функция для выполнения (может быть async — будет проброшена в event loop).
             job_id: Уникальный идентификатор задачи.
             hour: Час запуска (UTC).
             minute: Минута запуска.
@@ -115,6 +142,12 @@ class Scheduler:
             replace_existing: Заменять существующую задачу.
             **kwargs: Аргументы для func.
         """
+        # Если функция асинхронная — оборачиваем для проброса в event loop
+        if inspect.iscoroutinefunction(func):
+            actual_func = functools.partial(self._run_async_job, func)
+        else:
+            actual_func = func
+
         trigger = CronTrigger(
             hour=hour,
             minute=minute,
@@ -122,7 +155,7 @@ class Scheduler:
         )
 
         self._scheduler.add_job(
-            func,
+            actual_func,
             trigger=trigger,
             id=job_id,
             replace_existing=replace_existing,
