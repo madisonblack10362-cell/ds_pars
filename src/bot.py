@@ -201,7 +201,8 @@ class DayZNewsMonitor:
                         config=cfg,
                     )
                 except asyncio.CancelledError:
-                    logger.info("YouTube монитор: задача отменена")
+                    logger.warning("YouTube монитор: ЗАДАЧА ОТМЕНЕНА")
+                    raise
                 except Exception as e:
                     logger.error("YouTube монитор: аварийная остановка — %s", e, exc_info=True)
 
@@ -246,7 +247,8 @@ class DayZNewsMonitor:
                         telegram_bot_token=_ws_bot_token,
                     )
                 except asyncio.CancelledError:
-                    logger.info("Steam Workshop: задача отменена")
+                    logger.warning("Steam Workshop: ЗАДАЧА ОТМЕНЕНА")
+                    raise
                 except Exception as e:
                     logger.error("Steam Workshop: аварийная остановка — %s", e, exc_info=True)
 
@@ -1026,6 +1028,26 @@ class DayZNewsMonitor:
                 pass
 
         logger.info("Bot is running. Нажмите Ctrl+C для остановки.")
+
+        # Диагностика: проверяем статус фоновых тасков через 70 сек
+        async def _diag_tasks():
+            await asyncio.sleep(70)
+            for name, task in [
+                ("YouTube", self.youtube_task),
+                ("Workshop", self._workshop_task),
+                ("PatchNotes", self._patch_task),
+            ]:
+                if task is None:
+                    logger.info("[DIAG] %s: таск НЕ создан (None)", name)
+                elif task.cancelled():
+                    logger.info("[DIAG] %s: таск ОТМЕНЁН", name)
+                elif task.done():
+                    exc = task.exception()
+                    logger.info("[DIAG] %s: таск ЗАВЕРШЁН, exception=%s", name, exc)
+                else:
+                    logger.info("[DIAG] %s: таск РАБОТАЕТ", name)
+
+        asyncio.create_task(_diag_tasks())
 
         await self._shutdown_event.wait()
         await self._cleanup()
