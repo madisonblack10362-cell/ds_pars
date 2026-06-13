@@ -1204,6 +1204,16 @@ def _run_bot_thread(monitor, gui=None):
 
             logger.info("Все фоновые задачи созданы, event loop активен")
 
+            # Хартбит — лог каждые 15 сек чтобы видеть жив ли event loop
+            async def _heartbeat():
+                tick = 0
+                while not monitor._shutdown_event.is_set():
+                    await asyncio.sleep(15)
+                    tick += 1
+                    tasks = [t.get_name() for t in asyncio.all_tasks() if not t.done()]
+                    logger.info("[HB] тик %d, активных тасков: %d — %s", tick, len(tasks), ", ".join(tasks[:5]))
+            asyncio.create_task(_heartbeat())
+
             gui_root_method = None
             try:
                 gui_root_method = monitor.run_no_wait
