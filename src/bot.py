@@ -465,6 +465,7 @@ class DayZNewsMonitor:
             # Берём максимум 3 за раз — чтобы не спамить пачками
             messages = await self.db.get_unprocessed_messages(limit=3)
             if not messages:
+                logger.info("AI-анализ: нет необработанных сообщений")
                 return
 
             processed_count = 0
@@ -652,6 +653,9 @@ class DayZNewsMonitor:
                 web_app_url=self.web_panel_url,
                 bot_api_key=self.web_panel_api_key,
             )
+            if not queue:
+                logger.info("Публикация с панели: очередь пуста")
+                return
             for item in queue:
                 news_id = item.get('id', '')
                 formatted_post = item.get('formattedPost', '') or item.get('formatted_post', '')
