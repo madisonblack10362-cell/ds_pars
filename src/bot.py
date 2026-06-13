@@ -941,11 +941,10 @@ class DayZNewsMonitor:
 
         try:
             from discord_monitor import DiscordMonitor
-        except ImportError as e:
-            logger.warning(
-                "Discord-монитор: модуль discord не установлен (%s). "
-                "Установите: pip install discord.py-self",
-                e,
+        except Exception as e:
+            logger.error(
+                "Discord-монитор: не удалось загрузить модуль: %s", e,
+                exc_info=True,
             )
             return
 
