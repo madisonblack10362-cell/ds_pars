@@ -191,6 +191,7 @@ class DayZNewsMonitor:
                 try:
                     logger.info("YouTube монитор: ожидание 60 сек перед запуском...")
                     await asyncio.sleep(60)
+                    print("[DEBUG-YT] YouTube: сон завершён, запускаем run_youtube_monitor")
                     logger.info("YouTube монитор: запуск run_youtube_monitor...")
                     await run_youtube_monitor(
                         db=self.db,
@@ -201,9 +202,11 @@ class DayZNewsMonitor:
                         config=cfg,
                     )
                 except asyncio.CancelledError:
+                    print("[DEBUG-YT] YouTube: ЗАДАЧА ОТМЕНЕНА")
                     logger.warning("YouTube монитор: ЗАДАЧА ОТМЕНЕНА")
                     raise
                 except Exception as e:
+                    print(f"[DEBUG-YT] YouTube АВАРИЯ: {e}")
                     logger.error("YouTube монитор: аварийная остановка — %s", e, exc_info=True)
 
             self.youtube_task = asyncio.create_task(_delayed_youtube())
@@ -232,6 +235,7 @@ class DayZNewsMonitor:
                 try:
                     logger.info("Steam Workshop: ожидание 60 сек перед запуском...")
                     await asyncio.sleep(60)
+                    print("[DEBUG-WS] Workshop: сон завершён, запускаем run_workshop_monitor")
                     logger.info("Steam Workshop: запуск run_workshop_monitor...")
                     await run_workshop_monitor(
                         telegram_bot=self.publisher,
@@ -247,9 +251,11 @@ class DayZNewsMonitor:
                         telegram_bot_token=_ws_bot_token,
                     )
                 except asyncio.CancelledError:
+                    print("[DEBUG-WS] Workshop: ЗАДАЧА ОТМЕНЕНА")
                     logger.warning("Steam Workshop: ЗАДАЧА ОТМЕНЕНА")
                     raise
                 except Exception as e:
+                    print(f"[DEBUG-WS] Workshop АВАРИЯ: {e}")
                     logger.error("Steam Workshop: аварийная остановка — %s", e, exc_info=True)
 
             self._workshop_task = asyncio.create_task(_delayed_workshop())
@@ -1241,6 +1247,25 @@ def _run_bot_thread(monitor, gui=None):
 
             if monitor._discord_enabled:
                 asyncio.create_task(monitor._run_discord_monitor())
+
+            # Диагностика тасков через 70 сек
+            async def _diag():
+                await asyncio.sleep(70)
+                for name, task in [
+                    ("YouTube", monitor.youtube_task),
+                    ("Workshop", monitor._workshop_task),
+                    ("PatchNotes", monitor._patch_task),
+                ]:
+                    if task is None:
+                        print(f"[DIAG] {name}: None")
+                    elif task.cancelled():
+                        print(f"[DIAG] {name}: ОТМЕНЁН")
+                    elif task.done():
+                        print(f"[DIAG] {name}: ЗАВЕРШЁН, exc={task.exception()}")
+                    else:
+                        print(f"[DIAG] {name}: РАБОТАЕТ")
+
+            asyncio.create_task(_diag())
 
             gui_root_method = None
             try:
