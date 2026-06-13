@@ -1240,10 +1240,14 @@ def _run_bot_thread(monitor, gui=None):
             monitor.gui = gui
 
             # Периодическое обновление счётчиков и статуса источников
-            if gui and monitor.db:
-                asyncio.create_task(_periodic_gui_update(monitor, gui))
+            # ВРЕМЕННО ОТКЛЮЧЕНО
+            print("[DEBUG] _periodic_gui_update ОТКЛЮЧЁН")
+            # if gui and monitor.db:
+            #     asyncio.create_task(_periodic_gui_update(monitor, gui))
 
-            await monitor.scheduler.start()
+            # ВРЕМЕННО ОТКЛЮЧЕНО
+            print("[DEBUG] scheduler.start() ОТКЛЮЧЁН")
+            # await monitor.scheduler.start()
 
             # Запускаем Telegram polling для команд юзеров
             # ВРЕМЕННО ОТКЛЮЧЕНО ДЛЯ ДИАГНОСТИКИ
