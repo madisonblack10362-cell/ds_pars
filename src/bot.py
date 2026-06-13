@@ -1263,15 +1263,23 @@ def _run_bot_thread(monitor, gui=None):
                     ("PatchNotes", monitor._patch_task),
                 ]:
                     if task is None:
-                        print(f"[DIAG] {name}: None")
+                        print(f"[DIAG] {name}: None", flush=True)
                     elif task.cancelled():
-                        print(f"[DIAG] {name}: ОТМЕНЁН")
+                        print(f"[DIAG] {name}: ОТМЕНЁН", flush=True)
                     elif task.done():
-                        print(f"[DIAG] {name}: ЗАВЕРШЁН, exc={task.exception()}")
+                        print(f"[DIAG] {name}: ЗАВЕРШЁН, exc={task.exception()}", flush=True)
                     else:
-                        print(f"[DIAG] {name}: РАБОТАЕТ")
+                        print(f"[DIAG] {name}: РАБОТАЕТ", flush=True)
 
             asyncio.create_task(_diag())
+
+            # ГОЛЫЙ ТЕСТ — без closures, без captures
+            async def _bare_test():
+                print("[BARE-TEST] создан", flush=True)
+                await asyncio.sleep(62)
+                print("[BARE-TEST] ПРОСНУЛСЯ!!!", flush=True)
+
+            asyncio.create_task(_bare_test())
 
             gui_root_method = None
             try:
