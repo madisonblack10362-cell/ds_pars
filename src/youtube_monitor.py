@@ -1325,7 +1325,7 @@ async def run_youtube_monitor(
 
 async def main():
     """Standalone запуск для тестирования."""
-    config_path = os.environ.get("CONFIG_PATH", "config.json")
+    config_path = os.environ.get("CONFIG_PATH", os.path.join(_PROJECT_ROOT, "config.json"))
     config = {}
     try:
         with open(config_path, "r", encoding="utf-8") as f:

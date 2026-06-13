@@ -59,7 +59,7 @@ a = Analysis(
         'aiogram.fsm', 'aiogram.fsm.strategy', 'aiogram.fsm.storage',
         'aiogram.fsm.storage.memory', 'aiogram.methods', 'aiogram.types',
         'telethon.sync', 'telethon.tl', 'telethon.tl.types',
-        'telethon.tl.functions', 'apscheduler.schedulers.asyncio',
+        'telethon.tl.functions', 'apscheduler.schedulers.background',
         'apscheduler.triggers.interval', 'apscheduler.triggers.cron',
         'apscheduler.triggers.date', 'apscheduler.executors.asyncio',
         'apscheduler.jobstores.memory', 'multidict', 'yarl', 'aiofiles',

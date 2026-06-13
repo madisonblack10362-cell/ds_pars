@@ -783,7 +783,8 @@ def _get_analyzer() -> AIAnalyzer:
     global _analyzer_instance
     if _analyzer_instance is None:
         import os
-        _config_path = os.environ.get("CONFIG_PATH", "config.json")
+        _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        _config_path = os.environ.get("CONFIG_PATH", os.path.join(_project_root, "config.json"))
         try:
             with open(_config_path, "r", encoding="utf-8") as _f:
                 _cfg = json.load(_f)

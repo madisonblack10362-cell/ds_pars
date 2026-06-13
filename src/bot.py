@@ -773,7 +773,8 @@ class DayZNewsMonitor:
             pass
 
         # 2) Ищем файл напрямую в downloads/
-        for downloads_dir in ['downloads', 'downloads/youtube']:
+        for downloads_sub in ['downloads', os.path.join('downloads', 'youtube')]:
+            downloads_dir = os.path.join(PROJECT_ROOT, downloads_sub)
             if not os.path.isdir(downloads_dir):
                 continue
             for ext in ('mp4', 'webm', 'mkv', '3gp'):

@@ -13,7 +13,8 @@ from typing import Optional
 from logger import logger
 
 
-DB_PATH_DEFAULT = "database/dayz_news.db"
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DB_PATH_DEFAULT = os.path.join(_PROJECT_ROOT, "database", "dayz_news.db")
 
 
 class Database:
