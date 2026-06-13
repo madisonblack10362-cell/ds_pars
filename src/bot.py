@@ -246,11 +246,13 @@ class DayZNewsMonitor:
             async def _delayed_workshop():
                 try:
                     logger.info("Steam Workshop: ожидание 60 сек перед запуском...")
-                    print("[DEBUG-WS] перед sleep")
+                    print("[DEBUG-WS] перед sleep", flush=True)
                     await asyncio.sleep(60)
                     print("[DEBUG-WS] ПОСЛЕ sleep!!!", flush=True)
                     logger.info("Steam Workshop: запуск run_workshop_monitor...")
-                    return  # ВРЕМЕННО не запускаем монитор
+                    # ВРЕМЕННО: не вызываем монитор, просто проверяем просыпание
+                    print("[DEBUG-WS] ВСЁ РАБОТАЕТ", flush=True)
+                    return
                     await run_workshop_monitor(
                         telegram_bot=self.publisher,
                         db=self.db,
@@ -296,6 +298,8 @@ class DayZNewsMonitor:
                     logger.info("Патчноуты: ожидание 60 сек перед запуском...")
                     await asyncio.sleep(60)
                     logger.info("Патчноуты: запуск run_patch_monitor...")
+                    print("[DEBUG-PN] ВРЕМЕННО ОТКЛЮЧЕН", flush=True)
+                    return  # ВРЕМЕННО НЕ ВЫЗЫВАЕМ
                     await run_patch_monitor(
                         telegram_bot=self.publisher,
                         db=self.db,
@@ -1265,8 +1269,10 @@ def _run_bot_thread(monitor, gui=None):
             # if monitor.publisher and hasattr(monitor, '_dp'):
             #     asyncio.create_task(monitor._run_bot_polling())
 
-            if monitor._discord_enabled:
-                asyncio.create_task(monitor._run_discord_monitor())
+            # ВРЕМЕННО ОТКЛЮЧЕН
+            print("[DEBUG] Discord монитор ОТКЛЮЧЁН для диагностики")
+            # if monitor._discord_enabled:
+            #     asyncio.create_task(monitor._run_discord_monitor())
 
             # Диагностика тасков через 70 сек
             async def _diag():
