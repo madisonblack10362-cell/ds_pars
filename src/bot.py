@@ -188,15 +188,22 @@ class DayZNewsMonitor:
             youtube_interval = int(cfg.get("youtube_interval_hours", 2))
 
             async def _delayed_youtube():
-                await asyncio.sleep(60)
-                await run_youtube_monitor(
-                    db=self.db,
-                    ai_analyzer=self.ai_analyzer,
-                    check_interval_hours=youtube_interval,
-                    shutdown_event=self._shutdown_event,
-                    publisher=self.publisher,
-                    config=cfg,
-                )
+                try:
+                    logger.info("YouTube монитор: ожидание 60 сек перед запуском...")
+                    await asyncio.sleep(60)
+                    logger.info("YouTube монитор: запуск run_youtube_monitor...")
+                    await run_youtube_monitor(
+                        db=self.db,
+                        ai_analyzer=self.ai_analyzer,
+                        check_interval_hours=youtube_interval,
+                        shutdown_event=self._shutdown_event,
+                        publisher=self.publisher,
+                        config=cfg,
+                    )
+                except asyncio.CancelledError:
+                    logger.info("YouTube монитор: задача отменена")
+                except Exception as e:
+                    logger.error("YouTube монитор: аварийная остановка — %s", e, exc_info=True)
 
             self.youtube_task = asyncio.create_task(_delayed_youtube())
             logger.info("YouTube монитор v2 запущен (задержка 60 сек, интервал: %dч)", youtube_interval)
@@ -221,20 +228,27 @@ class DayZNewsMonitor:
             _ws_bot_token = cfg.get("telegram_bot_token", "")
 
             async def _delayed_workshop():
-                await asyncio.sleep(60)
-                await run_workshop_monitor(
-                    telegram_bot=self.publisher,
-                    db=self.db,
-                    ai_analyzer=self.ai_analyzer,
-                    web_panel_url=self.web_panel_url,
-                    web_panel_api_key=self.web_panel_api_key,
-                    steam_api_key=steam_api_key,
-                    check_interval=workshop_interval,
-                    min_subscriptions=workshop_min_subs,
-                    ai_analyze=bool(self.ai_analyzer),
-                    notify_chat_ids=_ws_notify_ids,
-                    telegram_bot_token=_ws_bot_token,
-                )
+                try:
+                    logger.info("Steam Workshop: ожидание 60 сек перед запуском...")
+                    await asyncio.sleep(60)
+                    logger.info("Steam Workshop: запуск run_workshop_monitor...")
+                    await run_workshop_monitor(
+                        telegram_bot=self.publisher,
+                        db=self.db,
+                        ai_analyzer=self.ai_analyzer,
+                        web_panel_url=self.web_panel_url,
+                        web_panel_api_key=self.web_panel_api_key,
+                        steam_api_key=steam_api_key,
+                        check_interval=workshop_interval,
+                        min_subscriptions=workshop_min_subs,
+                        ai_analyze=bool(self.ai_analyzer),
+                        notify_chat_ids=_ws_notify_ids,
+                        telegram_bot_token=_ws_bot_token,
+                    )
+                except asyncio.CancelledError:
+                    logger.info("Steam Workshop: задача отменена")
+                except Exception as e:
+                    logger.error("Steam Workshop: аварийная остановка — %s", e, exc_info=True)
 
             self._workshop_task = asyncio.create_task(_delayed_workshop())
             logger.info("Steam Workshop монитор запущен (задержка 60 сек, интервал: %d ч)", cfg.get("workshop_interval_hours", 1))
@@ -256,18 +270,25 @@ class DayZNewsMonitor:
             _pn_bot_token = cfg.get("telegram_bot_token", "")
 
             async def _delayed_patch():
-                await asyncio.sleep(60)
-                await run_patch_monitor(
-                    telegram_bot=self.publisher,
-                    db=self.db,
-                    ai_analyzer=self.ai_analyzer,
-                    web_panel_url=self.web_panel_url,
-                    web_panel_api_key=self.web_panel_api_key,
-                    check_interval=patch_interval,
-                    ai_analyze=bool(self.ai_analyzer),
-                    notify_chat_ids=_pn_notify_ids,
-                    telegram_bot_token=_pn_bot_token,
-                )
+                try:
+                    logger.info("Патчноуты: ожидание 60 сек перед запуском...")
+                    await asyncio.sleep(60)
+                    logger.info("Патчноуты: запуск run_patch_monitor...")
+                    await run_patch_monitor(
+                        telegram_bot=self.publisher,
+                        db=self.db,
+                        ai_analyzer=self.ai_analyzer,
+                        web_panel_url=self.web_panel_url,
+                        web_panel_api_key=self.web_panel_api_key,
+                        check_interval=patch_interval,
+                        ai_analyze=bool(self.ai_analyzer),
+                        notify_chat_ids=_pn_notify_ids,
+                        telegram_bot_token=_pn_bot_token,
+                    )
+                except asyncio.CancelledError:
+                    logger.info("Патчноуты: задача отменена")
+                except Exception as e:
+                    logger.error("Патчноуты: аварийная остановка — %s", e, exc_info=True)
 
             self._patch_task = asyncio.create_task(_delayed_patch())
             logger.info("Патчноуты монитор запущен (задержка 60 сек, интервал: %d мин)", cfg.get("patchnotes_interval_minutes", 720))
