@@ -3,15 +3,12 @@
 Настраивает APScheduler для периодического запуска задач мониторинга,
 анализа и публикации.
 
-Используется BackgroundScheduler (работает в отдельном потоке),
-а не AsyncIOScheduler, который блокирует asyncio event loop на Windows.
-Асинхронные задачи-корутины автоматически пробрасываются в event loop
-через asyncio.run_coroutine_threadsafe().
+Используем BackgroundScheduler (работает в собственном потоке),
+а не AsyncIOScheduler (блокирует asyncio event loop на Windows).
+Асинхронные корутины-задачи вызываются через asyncio.run_coroutine_threadsafe().
 """
 
 import asyncio
-import functools
-import inspect
 from datetime import datetime
 from typing import Callable, Awaitable, Optional
 
@@ -27,8 +24,9 @@ class Scheduler:
     Планировщик периодических задач.
     Управляет расписанием мониторинга, анализа и публикации новостей.
 
-    Использует BackgroundScheduler — работает в собственном потоке,
-    не блокирует asyncio event loop (критично для Windows).
+    Использует BackgroundScheduler для избежания блокировки asyncio event loop.
+    Асинхронные задачи-корутины автоматически мостятся через
+    asyncio.run_coroutine_threadsafe() в event loop бота.
     """
 
     def __init__(self):
@@ -37,14 +35,23 @@ class Scheduler:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._jobs: dict[str, str] = {}
 
+    def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Сохраняет ссылку на event loop для мостинга корутин."""
+        self._loop = loop
+        logger.debug("Планировщик: привязан к event loop")
+
     async def start(self) -> None:
         """Запускает планировщик."""
         if self._running:
             logger.warning("Планировщик уже запущен")
             return
 
-        # Сохраняем ссылку на текущий event loop для проброса корутин
-        self._loop = asyncio.get_running_loop()
+        # Автоматически привязываемся к текущему event loop
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+
         self._scheduler.start()
         self._running = True
         logger.info(
@@ -59,11 +66,13 @@ class Scheduler:
 
         self._scheduler.shutdown(wait=True)
         self._running = False
-        self._loop = None
         logger.info("Планировщик остановлен")
 
     def _run_async_job(self, coro_func: Callable, **kwargs) -> None:
-        """Пробрасывает асинхронную функцию из потока планировщика в event loop."""
+        """
+        Мостит асинхронную корутину в event loop через run_coroutine_threadsafe.
+        Вызывается из потока BackgroundScheduler.
+        """
         if self._loop and self._loop.is_running():
             future = asyncio.run_coroutine_threadsafe(coro_func(**kwargs), self._loop)
             future.add_done_callback(self._on_job_done)
@@ -72,7 +81,7 @@ class Scheduler:
 
     @staticmethod
     def _on_job_done(future: asyncio.Future) -> None:
-        """Логирует ошибки из задач планировщика."""
+        """Коллбэк для логирования ошибок в задачах."""
         try:
             future.result()
         except asyncio.CancelledError:
@@ -82,7 +91,7 @@ class Scheduler:
 
     def add_interval_job(
         self,
-        func: Callable,
+        func: Callable[..., Awaitable],
         job_id: str,
         minutes: int = 5,
         seconds: int = 0,
@@ -94,7 +103,7 @@ class Scheduler:
         Добавляет задачу с интервалом повторения.
 
         Args:
-            func: Функция для выполнения (может быть async — будет проброшена в event loop).
+            func: Асинхронная функция для выполнения.
             job_id: Уникальный идентификатор задачи.
             minutes: Интервал в минутах.
             seconds: Дополнительный интервал в секундах.
@@ -102,24 +111,19 @@ class Scheduler:
             replace_existing: Заменять существующую задачу с таким ID.
             **kwargs: Дополнительные аргументы, передаваемые в func.
         """
-        # Если функция асинхронная — оборачиваем для проброса в event loop
-        if inspect.iscoroutinefunction(func):
-            actual_func = functools.partial(self._run_async_job, func)
-        else:
-            actual_func = func
-
         trigger = IntervalTrigger(
             minutes=minutes,
             seconds=seconds,
             start_date=start_date,
         )
 
+        # Оборачиваем асинхронную функцию для вызова из потока планировщика
         self._scheduler.add_job(
-            actual_func,
+            self._run_async_job,
             trigger=trigger,
             id=job_id,
             replace_existing=replace_existing,
-            kwargs=kwargs,
+            kwargs={"coro_func": func, **kwargs},
             misfire_grace_time=120,
             coalesce=True,
         )
@@ -133,7 +137,7 @@ class Scheduler:
 
     def add_cron_job(
         self,
-        func: Callable,
+        func: Callable[..., Awaitable],
         job_id: str,
         hour: int = 10,
         minute: int = 0,
@@ -145,7 +149,7 @@ class Scheduler:
         Добавляет задачу по расписанию (cron).
 
         Args:
-            func: Функция для выполнения (может быть async — будет проброшена в event loop).
+            func: Асинхронная функция для выполнения.
             job_id: Уникальный идентификатор задачи.
             hour: Час запуска (UTC).
             minute: Минута запуска.
@@ -153,24 +157,19 @@ class Scheduler:
             replace_existing: Заменять существующую задачу.
             **kwargs: Аргументы для func.
         """
-        # Если функция асинхронная — оборачиваем для проброса в event loop
-        if inspect.iscoroutinefunction(func):
-            actual_func = functools.partial(self._run_async_job, func)
-        else:
-            actual_func = func
-
         trigger = CronTrigger(
             hour=hour,
             minute=minute,
             day_of_week=day_of_week,
         )
 
+        # Оборачиваем асинхронную функцию для вызова из потока планировщика
         self._scheduler.add_job(
-            actual_func,
+            self._run_async_job,
             trigger=trigger,
             id=job_id,
             replace_existing=replace_existing,
-            kwargs=kwargs,
+            kwargs={"coro_func": func, **kwargs},
             misfire_grace_time=300,
             coalesce=True,
         )

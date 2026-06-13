@@ -61,7 +61,7 @@ a = Analysis(
         'telethon.sync', 'telethon.tl', 'telethon.tl.types',
         'telethon.tl.functions', 'apscheduler.schedulers.background',
         'apscheduler.triggers.interval', 'apscheduler.triggers.cron',
-        'apscheduler.triggers.date', 'apscheduler.executors.asyncio',
+        'apscheduler.triggers.date', 'apscheduler.executors.pool',
         'apscheduler.jobstores.memory', 'multidict', 'yarl', 'aiofiles',
         'uvloop',
         'playwright', 'playwright.async_api', 'playwright.sync_api',

@@ -14,8 +14,6 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
 from logger import logger, add_web_panel_handler
 from database import Database
 from aiogram import Router, F
@@ -39,7 +37,6 @@ from scheduler import Scheduler
 from steam_workshop_monitor import run_workshop_monitor, fetch_popular_mods
 from patch_notes_monitor import run_patch_monitor, fetch_steam_news
 from youtube_monitor import run_youtube_monitor
-
 
 
 class DayZNewsMonitor:
@@ -114,7 +111,7 @@ class DayZNewsMonitor:
         # -----------------------------------------------------------------
         # База данных
         # -----------------------------------------------------------------
-        db_path = cfg.get("database_path", os.path.join(PROJECT_ROOT, "database", "dayz_news.db"))
+        db_path = cfg.get("database_path", "database/dayz_news.db")
         self.db = Database(db_path)
         await self.db.connect()
         await self.db.init_tables()
@@ -160,7 +157,7 @@ class DayZNewsMonitor:
                 bot_token=bot_token,
                 channel_id=channel_id,
                 news_channel_id=news_channel_id,
-                images_dir=cfg.get("images_dir", os.path.join(PROJECT_ROOT, "images")),
+                images_dir=cfg.get("images_dir", "images"),
                 max_images_per_post=cfg.get("max_images_per_post", 10),
             )
             logger.info("Publisher инициализирован (сводки: %s, новости: %s)",
@@ -204,19 +201,10 @@ class DayZNewsMonitor:
         # -----------------------------------------------------------------
         # Steam Workshop монитор
         # -----------------------------------------------------------------
-        if cfg.get("workshop_enabled", True):
-            workshop_interval = cfg.get("workshop_interval_hours", 1) * 3600
+        if cfg.get("workshop_enabled", False):
+            workshop_interval = cfg.get("workshop_interval_minutes", 60) * 60
             workshop_min_subs = cfg.get("workshop_min_subscriptions", 100)
             steam_api_key = cfg.get("steam_api_key", "") or None
-
-            # Список chat_id для уведомлений о модерации
-            _ws_notify_ids = None
-            if self.moderation_notifications and self.notify_chat_id:
-                try:
-                    _ws_notify_ids = [int(self.notify_chat_id)]
-                except (ValueError, TypeError):
-                    pass
-            _ws_bot_token = cfg.get("telegram_bot_token", "")
 
             self._workshop_task = asyncio.create_task(
                 run_workshop_monitor(
@@ -229,11 +217,9 @@ class DayZNewsMonitor:
                     check_interval=workshop_interval,
                     min_subscriptions=workshop_min_subs,
                     ai_analyze=bool(self.ai_analyzer),
-                    notify_chat_ids=_ws_notify_ids,
-                    telegram_bot_token=_ws_bot_token,
                 )
             )
-            logger.info("Steam Workshop монитор запущен (интервал: %d ч)", cfg.get("workshop_interval_hours", 1))
+            logger.info("Steam Workshop монитор запущен (интервал: %d мин)", cfg.get("workshop_interval_minutes", 60))
         else:
             logger.info("Steam Workshop монитор отключён")
 
@@ -241,15 +227,7 @@ class DayZNewsMonitor:
         # Патчноуты монитор
         # -----------------------------------------------------------------
         if cfg.get("patchnotes_enabled", False):
-            patch_interval = cfg.get("patchnotes_interval_minutes", 720) * 60
-
-            _pn_notify_ids = None
-            if self.moderation_notifications and self.notify_chat_id:
-                try:
-                    _pn_notify_ids = [int(self.notify_chat_id)]
-                except (ValueError, TypeError):
-                    pass
-            _pn_bot_token = cfg.get("telegram_bot_token", "")
+            patch_interval = cfg.get("patchnotes_interval_minutes", 30) * 60
 
             self._patch_task = asyncio.create_task(
                 run_patch_monitor(
@@ -260,14 +238,14 @@ class DayZNewsMonitor:
                     web_panel_api_key=self.web_panel_api_key,
                     check_interval=patch_interval,
                     ai_analyze=bool(self.ai_analyzer),
-                    notify_chat_ids=_pn_notify_ids,
-                    telegram_bot_token=_pn_bot_token,
                 )
             )
-            logger.info("Патчноуты монитор запущен (интервал: %d мин)", cfg.get("patchnotes_interval_minutes", 720))
+            logger.info("Патчноуты монитор запущен (интервал: %d мин)", cfg.get("patchnotes_interval_minutes", 30))
         else:
             logger.info("Патчноуты монитор отключён")
 
+        # -----------------------------------------------------------------
+        # Discord мониторинг (запускается как отдельная фоновая задача)
         # -----------------------------------------------------------------
         discord_token = cfg.get("discord_token", "")
         discord_cfg = cfg.get("sources", {}).get("discord", {})
@@ -693,12 +671,10 @@ class DayZNewsMonitor:
 
                 # ── YouTube: ищем скачанный видео-файл вместо thumbnail ──
                 video_paths = None
-                is_youtube = False
                 source_type = item.get('sourceType', '') or item.get('source_type', '')
                 external_id = item.get('externalId', '') or item.get('external_id', '')
 
                 if source_type == 'youtube' and external_id and external_id.startswith('yt_'):
-                    is_youtube = True
                     yt_video_id = external_id[3:]  # убираем "yt_" префикс
                     video_file = self._find_youtube_downloaded_file(yt_video_id)
                     if video_file:
@@ -716,14 +692,9 @@ class DayZNewsMonitor:
                                 valid_images = []
                                 logger.info('YouTube публикация: скачан %s -> %s', yt_video_id, dl_path)
                             else:
-                                logger.error('YouTube публикация: НЕ удалось скачать видео %s — публикация ОТМЕНЕНА', yt_video_id)
+                                logger.warning('YouTube публикация: не удалось скачать %s, отправляю thumbnail', yt_video_id)
                         except Exception as dl_err:
-                            logger.error('YouTube публикация: ошибка скачивания %s: %s — публикация ОТМЕНЕНА', yt_video_id, dl_err)
-
-                # ── YouTube без видео — НЕ публикуем ──
-                if is_youtube and not video_paths:
-                    logger.error('ПРОПУСК YouTube новости %s: видео не найдено и не скачалось', news_id)
-                    continue
+                            logger.error('YouTube публикация: ошибка скачивания %s: %s', yt_video_id, dl_err)
 
                 if text:
                     logger.info('Публикация с панели: id=%s, video=%s, images=%d, text_len=%d',
@@ -759,7 +730,7 @@ class DayZNewsMonitor:
 
         # 1) Проверяем локальную очередь модерации
         try:
-            mod_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config', 'youtube_moderation.json')
+            mod_file = 'youtube_moderation.json'
             if os.path.exists(mod_file):
                 with open(mod_file, 'r', encoding='utf-8') as f:
                     queue = json.load(f)
@@ -773,8 +744,7 @@ class DayZNewsMonitor:
             pass
 
         # 2) Ищем файл напрямую в downloads/
-        for downloads_sub in ['downloads', os.path.join('downloads', 'youtube')]:
-            downloads_dir = os.path.join(PROJECT_ROOT, downloads_sub)
+        for downloads_dir in ['downloads', 'downloads/youtube']:
             if not os.path.isdir(downloads_dir):
                 continue
             for ext in ('mp4', 'webm', 'mkv', '3gp'):
@@ -928,24 +898,11 @@ class DayZNewsMonitor:
     async def _run_discord_monitor(self) -> None:
         """Запускает Discord-монитор как отдельную корутину."""
         if not self._discord_enabled:
-            logger.info("Discord-монитор: отключён в настройках, пропуск")
             return
-
-        logger.info("Discord-монитор: ожидание 60 сек перед запуском...")
-        await asyncio.sleep(60)  # Задержка после старта бота
 
         try:
             from discord_monitor import DiscordMonitor
-        except Exception as e:
-            logger.error(
-                "Discord-монитор: не удалось загрузить модуль: %s", e,
-                exc_info=True,
-            )
-            return
 
-        logger.info("Discord-монитор: модуль загружен, запуск...")
-
-        try:
             discord_cfg = self.config.get("sources", {}).get("discord", {})
 
             discord_monitor = DiscordMonitor(
@@ -958,7 +915,7 @@ class DayZNewsMonitor:
             )
             await discord_monitor.start_monitoring()
         except Exception as exc:
-            logger.error("Discord-монитор остановлен с ошибкой: %s", exc, exc_info=True)
+            logger.error("Discord-монитор остановлен с ошибкой: %s", exc)
 
     # =====================================================================
     # Жизненный цикл
@@ -1107,7 +1064,7 @@ async def _periodic_gui_update(monitor, gui, interval=30):
                 parts.append("YouTube: остановлен")
 
             # Cookies статус для YouTube
-            cookies_path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "cookies.txt")
+            cookies_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "cookies.txt")
             if _os.path.isfile(cookies_path):
                 parts.append("YouTube cookies: загружены")
             else:
@@ -1166,11 +1123,11 @@ def _run_bot_thread(monitor, gui=None):
                 else:
                     gui.update_status("youtube", False, "Отключён")
                 if monitor._workshop_task:
-                    gui.update_status("workshop", True, f"каждые {monitor.config.get('workshop_interval_hours', 1)} ч")
+                    gui.update_status("workshop", True, f"каждые {monitor.config.get('workshop_interval_minutes', 60)} мин")
                 else:
                     gui.update_status("workshop", False, "Отключён")
                 if monitor._patch_task:
-                    gui.update_status("patchnotes", True, f"каждые {monitor.config.get('patchnotes_interval_minutes', 720)} мин")
+                    gui.update_status("patchnotes", True, f"каждые {monitor.config.get('patchnotes_interval_minutes', 30)} мин")
                 else:
                     gui.update_status("patchnotes", False, "Отключён")
                 if monitor._discord_enabled:
@@ -1193,37 +1150,20 @@ def _run_bot_thread(monitor, gui=None):
                 logger.info("Запуск Telegram polling...")
                 asyncio.create_task(monitor._run_bot_polling())
             else:
-                logger.warning("Telegram polling НЕ запущен (publisher=%s, has_dp=%s)", 
-                             bool(monitor.publisher), hasattr(monitor, '_dp'))
+                logger.warning("Telegram polling НЕ запущен (publisher=%s, has_dp=%s)",
+                               monitor.publisher is not None, hasattr(monitor, '_dp'))
 
             if monitor._discord_enabled:
                 logger.info("Запуск Discord монитора (задержка 60 сек)...")
                 asyncio.create_task(monitor._run_discord_monitor())
             else:
-                logger.warning("Discord монитор отключён")
+                logger.info("Discord монитор отключён")
 
             logger.info("Все фоновые задачи созданы, event loop активен")
 
-            # Хартбит — лог каждые 15 сек чтобы видеть жив ли event loop
-            async def _heartbeat():
-                tick = 0
-                while not monitor._shutdown_event.is_set():
-                    await asyncio.sleep(15)
-                    tick += 1
-                    tasks = [t.get_name() for t in asyncio.all_tasks() if not t.done()]
-                    logger.info("[HB] тик %d, активных тасков: %d — %s", tick, len(tasks), ", ".join(tasks[:5]))
-            asyncio.create_task(_heartbeat())
-
-            gui_root_method = None
-            try:
-                gui_root_method = monitor.run_no_wait
-            except Exception:
-                pass
-
-            if gui_root_method:
-                await gui_root_method()
-            else:
-                await monitor._shutdown_event.wait()
+            # Ожидаем сигнала остановки — event loop остаётся активным,
+            # все asyncio.create_task() задачи продолжают работать
+            await monitor._shutdown_event.wait()
 
             await monitor._cleanup()
         except Exception as exc:
@@ -1243,7 +1183,7 @@ def main():
     """
     GUI в главном потоке, бот в фоновом.
     """
-    config_path = os.environ.get("DAYZ_CONFIG", os.path.join(PROJECT_ROOT, "config.json"))
+    config_path = os.environ.get("DAYZ_CONFIG", "config.json")
 
     monitor = DayZNewsMonitor(config_path=config_path)
     monitor.load_config()
