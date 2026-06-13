@@ -104,6 +104,16 @@ class DayZNewsMonitor:
         self.load_config()
         cfg = self.config
 
+        # === ТЕСТ: 4 идентичных таска в начале initialize ===
+        for idx in range(4):
+            async def _init_test(i=idx):
+                print(f"[INIT-TEST-{i}] перед sleep", flush=True)
+                await asyncio.sleep(60)
+                print(f"[INIT-TEST-{i}] ПОСЛЕ sleep!!!", flush=True)
+            asyncio.create_task(_init_test())
+        print("[INIT-TEST] 4 тестовых таска созданы", flush=True)
+        # === КОНЕЦ ТЕСТА ===
+
         # Add web panel log forwarding handler
         if self.web_panel_url:
             try:
