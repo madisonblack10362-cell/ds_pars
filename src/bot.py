@@ -275,8 +275,6 @@ class DayZNewsMonitor:
             logger.info("Патчноуты монитор отключён")
 
         # -----------------------------------------------------------------
-        discord_token
-        # -----------------------------------------------------------------
         discord_token = cfg.get("discord_token", "")
         discord_cfg = cfg.get("sources", {}).get("discord", {})
 
