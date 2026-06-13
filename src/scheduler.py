@@ -65,9 +65,20 @@ class Scheduler:
     def _run_async_job(self, coro_func: Callable, **kwargs) -> None:
         """Пробрасывает асинхронную функцию из потока планировщика в event loop."""
         if self._loop and self._loop.is_running():
-            asyncio.run_coroutine_threadsafe(coro_func(**kwargs), self._loop)
+            future = asyncio.run_coroutine_threadsafe(coro_func(**kwargs), self._loop)
+            future.add_done_callback(self._on_job_done)
         else:
             logger.warning("Планировщик: event loop недоступен для задачи")
+
+    @staticmethod
+    def _on_job_done(future: asyncio.Future) -> None:
+        """Логирует ошибки из задач планировщика."""
+        try:
+            future.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.error("Планировщик: ошибка в задаче: %s", exc, exc_info=True)
 
     def add_interval_job(
         self,

@@ -1147,7 +1147,6 @@ def _run_bot_thread(monitor, gui=None):
             if gui:
                 gui.set_status_starting()
             await monitor.initialize()
-            print("[BOT] initialize() завершена", flush=True)
             # Обновляем GUI статусы после инициализации
             if gui:
                 gui.set_status_running()
@@ -1185,17 +1184,13 @@ def _run_bot_thread(monitor, gui=None):
             if gui and monitor.db:
                 asyncio.create_task(_periodic_gui_update(monitor, gui))
 
-            print("[BOT] перед scheduler.start()", flush=True)
             await monitor.scheduler.start()
-            print("[BOT] после scheduler.start()", flush=True)
 
             # Запускаем Telegram polling для команд юзеров
             if monitor.publisher and hasattr(monitor, '_dp'):
-                print("[BOT] запуск Telegram polling", flush=True)
                 asyncio.create_task(monitor._run_bot_polling())
 
             if monitor._discord_enabled:
-                print("[BOT] запуск Discord монитора", flush=True)
                 asyncio.create_task(monitor._run_discord_monitor())
 
             gui_root_method = None
