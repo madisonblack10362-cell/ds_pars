@@ -1184,7 +1184,9 @@ def _run_bot_thread(monitor, gui=None):
             if gui and monitor.db:
                 asyncio.create_task(_periodic_gui_update(monitor, gui))
 
+            logger.info(">>> перед scheduler.start()")
             await monitor.scheduler.start()
+            logger.info(">>> после scheduler.start()")
 
             # Запускаем Telegram polling для команд юзеров
             if monitor.publisher and hasattr(monitor, '_dp'):
