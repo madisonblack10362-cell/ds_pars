@@ -190,9 +190,11 @@ class DayZNewsMonitor:
             async def _delayed_youtube():
                 try:
                     logger.info("YouTube монитор: ожидание 60 сек перед запуском...")
+                    print("[DEBUG-YT] перед sleep")
                     await asyncio.sleep(60)
-                    print("[DEBUG-YT] YouTube: сон завершён, запускаем run_youtube_monitor")
+                    print("[DEBUG-YT] ПОСЛЕ sleep!!!", flush=True)
                     logger.info("YouTube монитор: запуск run_youtube_monitor...")
+                    return  # ВРЕМЕННО не запускаем монитор
                     await run_youtube_monitor(
                         db=self.db,
                         ai_analyzer=self.ai_analyzer,
@@ -202,11 +204,11 @@ class DayZNewsMonitor:
                         config=cfg,
                     )
                 except asyncio.CancelledError:
-                    print("[DEBUG-YT] YouTube: ЗАДАЧА ОТМЕНЕНА")
+                    print("[DEBUG-YT] YouTube: ЗАДАЧА ОТМЕНЕНА", flush=True)
                     logger.warning("YouTube монитор: ЗАДАЧА ОТМЕНЕНА")
                     raise
                 except Exception as e:
-                    print(f"[DEBUG-YT] YouTube АВАРИЯ: {e}")
+                    print(f"[DEBUG-YT] YouTube АВАРИЯ: {e}", flush=True)
                     logger.error("YouTube монитор: аварийная остановка — %s", e, exc_info=True)
 
             self.youtube_task = asyncio.create_task(_delayed_youtube())
@@ -234,9 +236,11 @@ class DayZNewsMonitor:
             async def _delayed_workshop():
                 try:
                     logger.info("Steam Workshop: ожидание 60 сек перед запуском...")
+                    print("[DEBUG-WS] перед sleep")
                     await asyncio.sleep(60)
-                    print("[DEBUG-WS] Workshop: сон завершён, запускаем run_workshop_monitor")
+                    print("[DEBUG-WS] ПОСЛЕ sleep!!!", flush=True)
                     logger.info("Steam Workshop: запуск run_workshop_monitor...")
+                    return  # ВРЕМЕННО не запускаем монитор
                     await run_workshop_monitor(
                         telegram_bot=self.publisher,
                         db=self.db,
@@ -251,11 +255,11 @@ class DayZNewsMonitor:
                         telegram_bot_token=_ws_bot_token,
                     )
                 except asyncio.CancelledError:
-                    print("[DEBUG-WS] Workshop: ЗАДАЧА ОТМЕНЕНА")
+                    print("[DEBUG-WS] Workshop: ЗАДАЧА ОТМЕНЕНА", flush=True)
                     logger.warning("Steam Workshop: ЗАДАЧА ОТМЕНЕНА")
                     raise
                 except Exception as e:
-                    print(f"[DEBUG-WS] Workshop АВАРИЯ: {e}")
+                    print(f"[DEBUG-WS] Workshop АВАРИЯ: {e}", flush=True)
                     logger.error("Steam Workshop: аварийная остановка — %s", e, exc_info=True)
 
             self._workshop_task = asyncio.create_task(_delayed_workshop())
