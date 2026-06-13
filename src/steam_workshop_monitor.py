@@ -14,7 +14,6 @@ Steam Workshop Monitor для DayZ (appid=221100)
 
 import asyncio
 import json
-import logging
 import os
 import re
 import time
@@ -23,7 +22,8 @@ from typing import Optional
 
 import aiohttp
 
-logger = logging.getLogger("steam_workshop_monitor")
+from logger import logger
+from monitor_stats import stats
 
 # ─── Конфиг ────────────────────────────────────────────────────────────────────
 DAYZ_APPID = 221100
@@ -246,7 +246,7 @@ async def _fetch_workshop_page_html(session: aiohttp.ClientSession, url: str | N
 
     try:
         async with session.get(
-            STEAM_WORKSHOP_URL,
+            url,
             headers=headers,
             timeout=aiohttp.ClientTimeout(total=30),
         ) as resp:
@@ -275,14 +275,25 @@ async def fetch_popular_mods(
       1) Если есть steam_api_key — использует IPublishedFileService/QueryFiles
       2) Иначе — scrapes страницу Workshop + GetPublishedFileDetails (бесплатный API)
     """
+    has_key = bool(steam_api_key)
+    logger.info("[WS] Запрос популярных модов (метод: %s, лимит: %d)",
+                "Steam Web API" if has_key else "scraping", max_mods)
+    stats.set_status("workshop", "checking", f"запрос модов ({'API' if has_key else 'scraping'})")
+
     mods = []
 
-    if steam_api_key:
+    if has_key:
+        logger.info("[WS] Пробуем Steam Web API (IPublishedFileService/QueryFiles)...")
         mods = await _fetch_via_steam_api(steam_api_key, max_mods)
+        if mods:
+            logger.info("[WS] Steam Web API: получено %d модов", len(mods))
+        else:
+            logger.warning("[WS] Steam Web API вернул пустой результат — падаем на scraping")
 
     if not mods:
         mods = await _fetch_via_scraping(max_mods)
 
+    logger.info("[WS] Итого получено %d модов из Steam Workshop", len(mods))
     return mods
 
 
@@ -338,23 +349,40 @@ async def _fetch_via_scraping(max_mods: int) -> list:
     """
     id_pattern = re.compile(r"filedetails/\?id=(\d+)")
     all_ids = set()
+    pages_ok = 0
+    pages_fail = 0
+
+    logger.info("[WS-SCAN] Скрапинг Workshop: %d страниц (метод: scraping + GetPublishedFileDetails)",
+                len(WORKSHOP_SCRAPE_URLS))
+    stats.set_status("workshop", "checking", "скрапинг страниц Workshop")
 
     async with aiohttp.ClientSession() as session:
-        for url in WORKSHOP_SCRAPE_URLS:
+        for i, url in enumerate(WORKSHOP_SCRAPE_URLS, 1):
+            sort_info = url.split("&")[3] if "&" in url else "?"
+            logger.info("[WS-SCAN] Страница %d/%d: %s", i, len(WORKSHOP_SCRAPE_URLS), sort_info)
             html = await _fetch_workshop_page_html(session, url)
             if html:
                 found = set(id_pattern.findall(html))
                 all_ids |= found
-                logger.debug("Страница %s: %d ID модов", url.split("&")[3], len(found))
+                pages_ok += 1
+                logger.info("[WS-SCAN] Страница %d: OK — найдено %d ID модов", i, len(found))
+            else:
+                pages_fail += 1
+                logger.warning("[WS-SCAN] Страница %d: не удалось загрузить", i)
             await asyncio.sleep(0.5)
 
-    logger.info("Найдено %d уникальных ID модов со всех страниц Workshop", len(all_ids))
+    logger.info("[WS-SCAN] Итого: %d уникальных ID модов (страниц OK: %d, FAIL: %d)",
+                len(all_ids), pages_ok, pages_fail)
+    stats.increment("workshop", "errors", pages_fail)
 
     if not all_ids:
+        logger.warning("[WS-SCAN] Ни одного ID мода не найдено — проверьте доступность Steam")
         return []
 
     mod_ids = list(all_ids)[:max_mods]
+    logger.info("[WS-SCAN] Запрос деталей для %d модов через GetPublishedFileDetails API...", len(mod_ids))
     mods = await _fetch_mod_details_via_web(mod_ids)
+    logger.info("[WS-SCAN] Получено деталей: %d из %d запросов", len(mods), len(mod_ids))
 
     return mods
 
@@ -383,82 +411,104 @@ async def check_for_new_mods(
     posted_ids = set(state.get("posted_ids", []))
     is_first_run = not state.get("last_check")
 
+    logger.info("[WS-FILTER] Начало фильтрации (known: %d, posted: %d, первый запуск: %s, мин. подписчиков: %d, дней: %d)",
+                len(known_ids), len(posted_ids), is_first_run, min_subscriptions, days_old)
+
     mods = await fetch_popular_mods(steam_api_key=steam_api_key, max_mods=80)
+    stats.increment("workshop", "found", len(mods))
 
     now = time.time()
 
     if is_first_run:
         # === ПЕРВЫЙ ЗАПУСК: не спамим старьём ===
-        logger.info("Первый запуск workshop-монитора: фильтруем старые моды")
+        logger.info("[WS-FILTER] ПЕРВЫЙ ЗАПУСК: фильтруем старые моды (cutoff: 3 дня)")
         cutoff_3d = now - (3 * 24 * 3600)
 
         fresh = []
+        skipped_old = 0
+        skipped_posted = 0
         for mod in mods:
             mod_id = mod["id"]
             if mod_id not in known_ids:
                 known_ids.add(mod_id)
             if mod_id in posted_ids:
+                skipped_posted += 1
                 continue
             if mod.get("timestamp", 0) and mod["timestamp"] < cutoff_3d:
-                # Старые моды помечаем как известные (НЕ в posted_ids!)
                 known_ids.add(mod_id)
+                skipped_old += 1
                 continue
             fresh.append(mod)
 
         state["known_ids"] = list(known_ids)
         state["last_check"] = datetime.now(timezone.utc).isoformat()
         _save_state(state)
-        logger.info(
-            "Первый запуск: свежих модов=%d, старых пропущено=%d, берём топ-%d",
-            len(fresh), len(mods) - len(fresh), max_per_check,
-        )
 
-        # Фильтруем по подпискам и берём топ по популярности
+        before_subs = len(fresh)
         fresh = [m for m in fresh if m.get("subscriptions", 0) >= min_subscriptions]
+        filtered_by_subs = before_subs - len(fresh)
         fresh.sort(key=lambda x: x.get("subscriptions", 0), reverse=True)
-        return fresh[:max_per_check]
+        result = fresh[:max_per_check]
+
+        logger.info(
+            "[WS-FILTER] Первый запуск: всего=%d, старых=%d, уже отправленных=%d, после фильтра подписок=%d, итог=%d",
+            len(mods), skipped_old, skipped_posted, len(fresh), len(result),
+        )
+        stats.increment("workshop", "skipped", skipped_old + skipped_posted + filtered_by_subs)
+        return result
 
     # === ОБЫЧНАЯ ПРОВЕРКА ===
     cutoff = now - (days_old * 24 * 3600)
 
     new_mods = []
+    skipped_known = 0
+    skipped_posted = 0
+    skipped_date = 0
+    skipped_subs = 0
+
     for mod in mods:
         mod_id = mod["id"]
         if mod_id not in known_ids:
             known_ids.add(mod_id)
+        else:
+            skipped_known += 1
+
         if mod_id in posted_ids:
+            skipped_posted += 1
             continue
         if mod.get("timestamp", 0) < cutoff:
+            skipped_date += 1
             continue
         if mod.get("subscriptions", 0) < min_subscriptions:
+            skipped_subs += 1
             continue
         new_mods.append(mod)
 
-    # Очистка known_ids от старых записей (старше days_old и не отправленные)
-    # Чтобы state файл не раздувался бесконечно
-    stale_ids = [
-        mid for mid in known_ids
-        if mid not in posted_ids
-    ]
-    if len(known_ids) > 500:  # Чистим только когда накопилось много
-        # Загружаем детали чтобы проверить возраст — но это дорого,
-        # поэтому просто ограничиваем размер, оставляя последние
-        keep = set(list(known_ids)[-300:])  # Оставляем последние 300
-        known_ids = keep | posted_ids  # posted_ids всегда сохраняем
-        logger.info("Очистка known_ids: %d → %d записей", len(state.get("known_ids", [])), len(known_ids))
+    # Очистка known_ids от старых записей
+    if len(known_ids) > 500:
+        keep = set(list(known_ids)[-300:])
+        known_ids = keep | posted_ids
+        logger.info("[WS-FILTER] Очистка known_ids: %d → %d записей", len(state.get("known_ids", [])), len(known_ids))
 
     state["known_ids"] = list(known_ids)
     state["last_check"] = datetime.now(timezone.utc).isoformat()
     _save_state(state)
 
-    # Сортировка по популярности — лучшие первые
+    # Сортировка по популярности
     new_mods.sort(key=lambda x: x.get("subscriptions", 0), reverse=True)
     result = new_mods[:max_per_check]
 
+    total_skipped = skipped_known + skipped_posted + skipped_date + skipped_subs
+    logger.info(
+        "[WS-FILTER] Фильтрация: всего=%d → известных=%d, отправленных=%d, старых=%d, малоподписных=%d → новых=%d → итог=%d",
+        len(mods), skipped_known, skipped_posted, skipped_date, skipped_subs,
+        len(new_mods), len(result),
+    )
+    stats.increment("workshop", "skipped", total_skipped)
+
     if result:
-        logger.info("Найдено %d новых популярных модов (отфильтровано из %d)", len(result), len(new_mods))
-    else:
-        logger.info("Новых популярных модов не найдено")
+        for m in result[:5]:
+            logger.info("[WS-FILTER]   → '%s' (подписчиков: %d)", m.get('title', '?')[:50], m.get('subscriptions', 0))
 
     return result
 
@@ -676,10 +726,12 @@ async def run_workshop_monitor(
       3. Публикуется в Telegram ТОЛЬКО после одобрения на панели
     """
     logger.info(
-        "Steam Workshop Monitor запущен (интервал: %d сек, мин. подписчиков: %d)",
-        check_interval,
-        min_subscriptions,
+        "[WS] Steam Workshop Monitor запущен (интервал: %d сек / %.1f ч, мин. подписчиков: %d, AI: %s)",
+        check_interval, check_interval / 3600, min_subscriptions,
+        "вкл" if (ai_analyze and ai_analyzer) else "выкл",
     )
+    stats.ensure_monitor("workshop", "Steam Workshop", "\U0001F527")
+    stats.set_status("workshop", "active", "монитор запущен")
 
     # При старте — проверяем last_check, не парсим если рано
     state = _load_state()
@@ -691,47 +743,71 @@ async def run_workshop_monitor(
             if elapsed < check_interval:
                 remaining = check_interval - elapsed
                 logger.info(
-                    "Workshop: с последней проверки прошло %.0f мин, интервал %d мин — ждём %.0f мин",
+                    "[WS] С последней проверки прошло %.0f мин (интервал: %.0f мин) — ждём %.0f мин",
                     elapsed / 60, check_interval / 60, remaining / 60,
                 )
+                stats.set_status("workshop", "idle", f"следующая проверка через {remaining/60:.0f} мин")
                 await asyncio.sleep(remaining)
         except (ValueError, TypeError):
             pass
 
     while True:
+        cycle_start = time.time()
+        mods_found = 0
+        mods_processed = 0
+        mods_published = 0
+        cycle_errors = 0
+
         try:
-            logger.info("Проверяем Steam Workshop на новые моды...")
+            check_num = stats.get("workshop").get("checks", 0) + 1
+            logger.info("[WS] ═══ Начало цикла проверки #%d ═══", check_num)
+            stats.set_status("workshop", "checking", "поиск новых модов...")
+
             new_mods = await check_for_new_mods(
                 steam_api_key=steam_api_key,
                 min_subscriptions=min_subscriptions,
                 days_old=30,
             )
+            mods_found = len(new_mods)
+            logger.info("[WS] Найдено новых модов: %d", mods_found)
 
-            # Резолвим имена авторов (бесплатно, через scraping)
+            # Резолвим имена авторов
             if new_mods:
+                logger.info("[WS] Резолвинг имён авторов для %d модов...", len(new_mods))
                 await _resolve_author_names(new_mods)
+                resolved = sum(1 for m in new_mods if m.get("author_name"))
+                logger.info("[WS] Имена авторов: резолвено %d из %d", resolved, len(new_mods))
 
-            for mod in new_mods:
+            for i, mod in enumerate(new_mods, 1):
                 try:
+                    subs = mod.get("subscriptions", 0)
+                    favs = mod.get("favorited", 0)
+                    views = mod.get("views", 0)
                     logger.info(
-                        "Обрабатываем мод: %s (ID: %s)", mod["title"], mod["id"]
+                        "[WS] Мод %d/%d: '%s' (ID: %s) | подписчиков: %d | избрано: %d | просмотров: %d",
+                        i, len(new_mods), mod.get("title", "?")[:60], mod["id"], subs, favs, views,
                     )
 
                     ai_summary = None
                     if ai_analyze and ai_analyzer:
+                        logger.info("[WS]   → AI анализ мода '%s'...", mod.get("title", "?")[:40])
                         try:
                             ai_summary = await ai_analyzer.analyze_workshop_mod(mod)
+                            logger.info("[WS]   → AI анализ: успешно (%d символов)", len(ai_summary) if ai_summary else 0)
                         except Exception as e:
-                            logger.error("AI анализ мода %s не удался: %s", mod["id"], e)
+                            cycle_errors += 1
+                            logger.error("[WS]   → AI анализ мода %s не удался: %s", mod["id"], e)
                     elif ai_analyze:
-                        # Fallback: standalone-анализ без экземпляра анализатора
                         try:
                             from ai_analyzer import analyze_workshop_mod
                             ai_summary = await analyze_workshop_mod(mod)
+                            logger.info("[WS]   → AI анализ (fallback): успешно")
                         except Exception as e:
-                            logger.error("AI анализ мода %s не удался: %s", mod["id"], e)
+                            cycle_errors += 1
+                            logger.error("[WS]   → AI анализ (fallback) мода %s не удался: %s", mod["id"], e)
 
                     msg = format_mod_message(mod, ai_summary)
+                    mods_processed += 1
 
                     # --- Модерация: сохраняем в БД + отправляем на веб-панель ---
                     saved_to_db = False
@@ -751,7 +827,6 @@ async def run_workshop_monitor(
                                 links=links,
                             )
                             if msg_id:
-                                # Сохраняем результат AI-анализа
                                 news_type = "mod_update"
                                 priority = "medium"
                                 summary = ai_summary or ""
@@ -768,11 +843,12 @@ async def run_workshop_monitor(
                                 )
                                 saved_to_db = True
                                 logger.info(
-                                    "Мод '%s' #%d отправлен на модерацию (type=%s, priority=%s)",
-                                    mod["title"], msg_id, news_type, priority,
+                                    "[WS]   → БД: мод '%s' #%d сохранён (type=%s, priority=%s)",
+                                    mod["title"][:40], msg_id, news_type, priority,
                                 )
                         except Exception as e:
-                            logger.error("Ошибка сохранения мода %s в БД: %s", mod["id"], e)
+                            cycle_errors += 1
+                            logger.error("[WS]   → БД: ошибка сохранения мода %s: %s", mod["id"], e)
 
                     # Отправляем на веб-панель для модерации
                     if web_panel_url:
@@ -794,8 +870,8 @@ async def run_workshop_monitor(
                                 bot_api_key=web_panel_api_key or None,
                             )
                             if success:
-                                logger.info("Мод '%s' отправлен на веб-панель", mod["title"])
-                                # Уведомление в Telegram о модерации
+                                mods_published += 1
+                                logger.info("[WS]   → Панель: мод '%s' отправлен на модерацию", mod["title"][:40])
                                 if notify_chat_ids and telegram_bot_token:
                                     try:
                                         from web_app_integration import notify_moderation
@@ -809,18 +885,20 @@ async def run_workshop_monitor(
                                             web_panel_url=web_panel_url,
                                         )
                                     except Exception as notify_err:
-                                        logger.warning("Не удалось отправить уведомление о модерации: %s", notify_err)
+                                        logger.warning("[WS]   → Уведомление о модерации: %s", notify_err)
                             else:
-                                logger.error("Веб-панель: не удалось отправить мод '%s'", mod["title"])
+                                cycle_errors += 1
+                                logger.error("[WS]   → Панель: ошибка отправки мода '%s'", mod["title"][:40])
                         except ImportError:
-                            logger.warning("web_app_integration не найден — модерация через панель недоступна")
+                            logger.warning("[WS]   → web_app_integration не найден — модерация через панель недоступна")
                         except Exception as e:
-                            logger.error("Ошибка отправки мода на веб-панель: %s", e)
+                            cycle_errors += 1
+                            logger.error("[WS]   → Панель: исключение при отправке: %s", e)
                     elif not saved_to_db:
-                        # Нет БД и нет веб-панели — fallback: прямой отправ (старое поведение)
                         if telegram_bot:
                             await telegram_bot.send_workshop_post(msg)
-                            logger.info("Мод '%s' опубликован в Telegram (без модерации — нет БД/панели)", mod["title"])
+                            mods_published += 1
+                            logger.info("[WS]   → Telegram: мод '%s' опубликован напрямую (без модерации)", mod["title"][:40])
 
                     # Отмечаем как отправленный в state
                     state = _load_state()
@@ -829,15 +907,38 @@ async def run_workshop_monitor(
                         _save_state(state)
 
                 except Exception as e:
-                    logger.error("Ошибка обработки мода %s: %s", mod.get("id", "unknown"), e)
+                    cycle_errors += 1
+                    logger.error("[WS]   → Ошибка обработки мода %s: %s", mod.get("id", "unknown"), e)
 
-                # Задержка между модами — не пачкой
                 await asyncio.sleep(5)
 
         except Exception as e:
-            logger.error("Ошибка в основном цикле Workshop монитора: %s", e)
+            cycle_errors += 1
+            logger.error("[WS] Ошибка в цикле проверки: %s", e)
 
-        logger.info("Следующая проверка через %d секунд...", check_interval)
+        # Записываем статистику цикла
+        cycle_time = time.time() - cycle_start
+        stats.record_check(
+            "workshop",
+            found=mods_found,
+            processed=mods_processed,
+            published=mods_published,
+            errors=cycle_errors,
+        )
+
+        logger.info(
+            "[WS] ═══ Конец цикла #%d: найдено=%d, обработано=%d, на модерации=%d, ошибки=%d, время=%.1fс ═══",
+            check_num, mods_found, mods_processed, mods_published, cycle_errors, cycle_time,
+        )
+
+        if cycle_errors > 0:
+            stats.set_status("workshop", "error", f"{cycle_errors} ошибок в последнем цикле")
+        elif mods_published > 0:
+            stats.set_status("workshop", "active", f"отправлено {mods_published} модов на модерацию")
+        else:
+            stats.set_status("workshop", "idle", f"следующая проверка через {check_interval/60:.0f} мин")
+
+        logger.info("[WS] Следующая проверка через %d секунд (%.1f мин)...", check_interval, check_interval / 60)
         await asyncio.sleep(check_interval)
 
 

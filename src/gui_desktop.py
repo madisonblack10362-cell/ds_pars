@@ -14,6 +14,7 @@ from pathlib import Path
 import customtkinter as ctk
 
 from logger import logger
+from monitor_stats import stats
 
 
 class LogCapture(Handler):
@@ -196,6 +197,7 @@ class DesktopGUI:
         self.notebook.pack(fill="both", expand=True, padx=8, pady=(6, 8))
 
         self._build_dashboard(self.notebook.add("Дашборд"))
+        self._build_stats(self.notebook.add("Статистика"))
         self._build_settings(self.notebook.add("Настройки"))
         self._build_logs(self.notebook.add("Логи"))
 
@@ -312,6 +314,256 @@ class DesktopGUI:
             font=("Segoe UI", 10), text_color=self.TEXT3, anchor="w",
             wraplength=880, justify="left")
         self._source_detail.pack(fill="x", padx=12, pady=(4, 12))
+
+    # ================================================================
+    # Statistics Tab
+    # ================================================================
+
+    def _build_stats(self, parent):
+        scroll = ctk.CTkScrollableFrame(parent, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=4, pady=4)
+
+        # Header
+        hdr = ctk.CTkFrame(scroll, fg_color="transparent")
+        hdr.pack(fill="x", padx=4, pady=(0, 8))
+        ctk.CTkLabel(hdr, text="\U0001F4CA  Статистика мониторов",
+                      font=("Segoe UI", 13, "bold"),
+                      text_color=self.TEXT).pack(side="left")
+        ctk.CTkButton(hdr, text="\u21bb  Обновить",
+                       font=("Segoe UI", 10), width=100, height=28, corner_radius=6,
+                       fg_color=self.BG_ELEVATED, hover_color=self.BORDER,
+                       text_color=self.TEXT2,
+                       command=self._refresh_stats).pack(side="right", padx=4)
+
+        # Container for monitor cards
+        self._stats_cards = {}
+        self._stats_canvases = {}
+        self._stats_detail_labels = {}
+
+        monitor_configs = [
+            ("discord",    "\U0001F4AC  Discord",      self.ACCENT),
+            ("youtube",    "\u25B6  YouTube",           "#FF0000"),
+            ("workshop",   "\U0001F527  Steam Workshop", self.ORANGE),
+            ("patchnotes", "\U0001F4DD  Патчноуты",      self.GREEN),
+        ]
+
+        for monitor_id, title, accent in monitor_configs:
+            card = self._build_monitor_card(scroll, monitor_id, title, accent)
+            self._stats_cards[monitor_id] = card
+
+        # Start periodic refresh
+        self._refresh_stats()
+        threading.Thread(target=self._stats_refresh_loop, daemon=True).start()
+
+    def _build_monitor_card(self, parent, monitor_id, title, accent):
+        """Build one monitor stats card with bar chart."""
+        outer = ctk.CTkFrame(parent, fg_color=self.BG_CARD, corner_radius=10)
+        outer.pack(fill="x", padx=4, pady=4)
+
+        inner = ctk.CTkFrame(outer, fg_color="transparent")
+        inner.pack(fill="x", padx=12, pady=10)
+
+        # Row 1: Title + Status
+        row1 = ctk.CTkFrame(inner, fg_color="transparent")
+        row1.pack(fill="x")
+
+        ctk.CTkLabel(row1, text=title,
+                      font=("Segoe UI", 12, "bold"),
+                      text_color=self.TEXT).pack(side="left")
+
+        status_lbl = ctk.CTkLabel(row1, text="\u25cf  Ожидание",
+                                   font=("Segoe UI", 10),
+                                   text_color=self.TEXT3)
+        status_lbl.pack(side="right")
+
+        detail_lbl = ctk.CTkLabel(row1, text="",
+                                   font=("Segoe UI", 9),
+                                   text_color=self.TEXT3)
+        detail_lbl.pack(side="right", padx=(0, 12))
+
+        # Separator
+        sep = ctk.CTkFrame(inner, fg_color=self.BORDER, height=1)
+        sep.pack(fill="x", pady=(6, 8))
+
+        # Row 2: Metrics grid (5 columns)
+        metrics_frame = ctk.CTkFrame(inner, fg_color="transparent")
+        metrics_frame.pack(fill="x", pady=(0, 8))
+
+        metric_defs = [
+            ("checks",     "Проверок",   self.ACCENT),
+            ("found",      "Найдено",    self.GREEN),
+            ("processed",  "Обработано", self.PURPLE),
+            ("published",  "На модер.",  self.YELLOW),
+            ("errors",     "Ошибки",     self.RED),
+        ]
+
+        metric_labels = {}
+        for i, (key, label, color) in enumerate(metric_defs):
+            cell = ctk.CTkFrame(metrics_frame, fg_color=self.BG_ELEVATED, corner_radius=6)
+            cell.grid(row=0, column=i, padx=3, pady=2, sticky="nsew")
+            metrics_frame.grid_columnconfigure(i, weight=1)
+
+            ctk.CTkLabel(cell, text=label, font=("Segoe UI", 9),
+                          text_color=self.TEXT3).pack(pady=(6, 0))
+            val = ctk.CTkLabel(cell, text="0", font=("Segoe UI", 16, "bold"),
+                                text_color=color)
+            val.pack(pady=(0, 6))
+            metric_labels[key] = val
+
+        # Row 3: Bar chart
+        chart_label = ctk.CTkLabel(inner, text="Активность по проверкам",
+                                    font=("Segoe UI", 9),
+                                    text_color=self.TEXT3)
+        chart_label.pack(anchor="w", pady=(0, 2))
+
+        canvas_frame = ctk.CTkFrame(inner, fg_color=self.BG_ELEVATED, corner_radius=6)
+        canvas_frame.pack(fill="x", pady=(0, 4))
+
+        chart = tk.Canvas(canvas_frame, height=80, bg=self.BG_SURFACE,
+                          highlightthickness=0, bd=0)
+        chart.pack(fill="x", padx=4, pady=4)
+
+        # Last check time
+        last_lbl = ctk.CTkLabel(inner, text="Последняя проверка: —",
+                                 font=("Segoe UI", 9),
+                                 text_color=self.TEXT3)
+        last_lbl.pack(anchor="w")
+
+        # Store references
+        self._stats_canvases[monitor_id] = {
+            "canvas": chart,
+            "metrics": metric_labels,
+            "status": status_lbl,
+            "detail": detail_lbl,
+            "last": last_lbl,
+            "accent": accent,
+        }
+
+        return outer
+
+    def _draw_bar_chart(self, canvas, history, accent_color):
+        """Draw a mini bar chart on the canvas showing last N checks."""
+        canvas.delete("all")
+        canvas.update_idletasks()
+
+        w = canvas.winfo_width()
+        h = canvas.winfo_height()
+        if w < 50 or h < 30:
+            w, h = 600, 80
+
+        if not history:
+            canvas.create_text(w // 2, h // 2, text="Нет данных",
+                               fill=self.TEXT3, font=("Segoe UI", 9))
+            return
+
+        n = len(history)
+        max_val = max((entry.get("found", 0) for entry in history), default=1)
+        if max_val <= 0:
+            max_val = 1
+
+        margin_left = 8
+        margin_right = 8
+        margin_top = 8
+        margin_bottom = 20
+
+        chart_w = w - margin_left - margin_right
+        chart_h = h - margin_top - margin_bottom
+
+        bar_w = max(2, chart_w / n - 2)
+        gap = 2
+
+        for i, entry in enumerate(history):
+            found = entry.get("found", 0)
+            errors = entry.get("errors", 0)
+            bar_h = max(2, (found / max_val) * chart_h)
+
+            x = margin_left + i * (bar_w + gap)
+            y = margin_top + chart_h - bar_h
+
+            # Bar color
+            if errors > 0:
+                color = self.RED
+            elif found == 0:
+                color = self.BORDER
+            elif found >= max_val * 0.7:
+                color = self.GREEN
+            elif found >= max_val * 0.3:
+                color = accent_color
+            else:
+                color = self.YELLOW
+
+            # Draw bar with rounded top
+            canvas.create_rectangle(x, y, x + bar_w, margin_top + chart_h,
+                                    fill=color, outline="")
+
+            # Draw value on top if bar is tall enough
+            if bar_h > 15 and found > 0:
+                canvas.create_text(x + bar_w / 2, y - 2, text=str(found),
+                                   fill=self.TEXT2, font=("Consolas", 7), anchor="s")
+
+        # X axis line
+        canvas.create_line(margin_left, margin_top + chart_h,
+                           w - margin_right, margin_top + chart_h,
+                           fill=self.BORDER, width=1)
+
+        # Axis labels
+        canvas.create_text(margin_left, h - 4, text="раньше",
+                           fill=self.TEXT3, font=("Segoe UI", 7), anchor="sw")
+        canvas.create_text(w - margin_right, h - 4, text="сейчас",
+                           fill=self.TEXT3, font=("Segoe UI", 7), anchor="se")
+
+    def _refresh_stats(self):
+        """Read stats from MonitorStats and update all cards."""
+        all_stats = stats.get_all()
+
+        for monitor_id, widgets in self._stats_canvases.items():
+            data = all_stats.get(monitor_id, {})
+            metrics = widgets["metrics"]
+
+            try:
+                metrics["checks"].configure(text=str(data.get("checks", 0)))
+                metrics["found"].configure(text=str(data.get("found", 0)))
+                metrics["processed"].configure(text=str(data.get("processed", 0)))
+                metrics["published"].configure(text=str(data.get("published", 0)))
+                metrics["errors"].configure(text=str(data.get("errors", 0)))
+
+                # Status
+                status = data.get("status", "idle")
+                detail = data.get("detail", "")
+                status_map = {
+                    "active": (self.GREEN, "\u25cf  Активен"),
+                    "checking": (self.ACCENT, "\u25cf  Проверяет"),
+                    "idle": (self.TEXT3, "\u25cf  Ожидание"),
+                    "error": (self.RED, "\u25cf  Ошибка"),
+                }
+                color, text = status_map.get(status, (self.TEXT3, "\u25cf  " + status))
+                widgets["status"].configure(text=text, text_color=color)
+                widgets["detail"].configure(text=detail)
+
+                # Last check
+                last = data.get("last_check", "")
+                if last:
+                    try:
+                        dt = datetime.fromisoformat(last)
+                        widgets["last"].configure(text=f"Последняя проверка: {dt.strftime('%H:%M:%S')}")
+                    except Exception:
+                        widgets["last"].configure(text=f"Последняя проверка: {last[:19]}")
+
+                # Draw chart
+                history = data.get("history", [])
+                self._draw_bar_chart(widgets["canvas"], history, widgets["accent"])
+
+            except Exception:
+                pass
+
+    def _stats_refresh_loop(self):
+        """Periodically refresh stats every 5 seconds."""
+        while self._running:
+            try:
+                self.root.after(0, self._refresh_stats)
+            except Exception:
+                break
+            threading.Event().wait(5)
 
     # ================================================================
     # Settings

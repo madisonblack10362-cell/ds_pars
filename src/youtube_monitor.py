@@ -28,6 +28,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from logger import logger
+from monitor_stats import stats
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _DOWNLOADS_DIR = os.path.join(_PROJECT_ROOT, "downloads")
@@ -1241,9 +1242,11 @@ async def run_youtube_monitor(
         check_interval_hours = 1
 
     logger.info(
-        "YouTube монитор v3: запущен (yt-dlp, интервал=%dч, модерация)",
+        "[YT] YouTube монитор v3: запущен (yt-dlp, интервал=%dч, модерация)",
         check_interval_hours,
     )
+    stats.ensure_monitor("youtube", "YouTube", "\u25B6")
+    stats.set_status("youtube", "active", "монитор запущен")
 
     approval_check_seconds = 30
 
@@ -1281,8 +1284,11 @@ async def run_youtube_monitor(
             break
 
         try:
+            stats.set_status("youtube", "checking", "поиск популярных шортсов...")
             # Основная проверка: ищем популярные шортсы
-            await check_for_popular_shorts(config=config, ai_analyzer=ai_analyzer)
+            yt_found = await check_for_popular_shorts(config=config, ai_analyzer=ai_analyzer)
+            stats.record_check("youtube", found=len(yt_found) if yt_found else 0)
+            stats.set_status("youtube", "idle", f"следующая проверка через {check_interval_hours}ч")
 
             # Проверяем одобренные (скачивание + публикация)
             if publisher:

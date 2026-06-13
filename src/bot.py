@@ -206,7 +206,7 @@ class DayZNewsMonitor:
         # -----------------------------------------------------------------
         # Steam Workshop монитор
         # -----------------------------------------------------------------
-        if cfg.get("workshop_enabled", False):
+        if cfg.get("workshop_enabled", True):
             workshop_interval = cfg.get("workshop_interval_hours", 1) * 3600
             workshop_min_subs = cfg.get("workshop_min_subscriptions", 100)
             steam_api_key = cfg.get("steam_api_key", "") or None

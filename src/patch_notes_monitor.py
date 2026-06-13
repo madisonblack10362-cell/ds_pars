@@ -11,7 +11,6 @@ Patch Notes Monitor для DayZ
 
 import asyncio
 import json
-import logging
 import os
 import re
 import time
@@ -21,7 +20,8 @@ from typing import Optional
 import aiohttp
 import feedparser
 
-logger = logging.getLogger("patch_notes_monitor")
+from logger import logger
+from monitor_stats import stats
 
 # ─── Конфиг ────────────────────────────────────────────────────────────────────
 DAYZ_APPID = 221100
@@ -440,7 +440,9 @@ async def run_patch_monitor(
       2. Отправляется на веб-панель для модерации
       3. Публикуется в Telegram ТОЛЬКО после одобрения на панели
     """
-    logger.info("Patch Notes Monitor запущен (интервал: %d сек)", check_interval)
+    logger.info("[PN] Patch Notes Monitor запущен (интервал: %d сек / %.1f ч)", check_interval, check_interval / 3600)
+    stats.ensure_monitor("patchnotes", "Патчноуты", "\U0001F4DD")
+    stats.set_status("patchnotes", "active", "монитор запущен")
 
     # При старте — проверяем last_check, не парсим если рано
     state = _load_state()
@@ -460,9 +462,16 @@ async def run_patch_monitor(
             pass
 
     while True:
+        pn_found = 0
+        pn_processed = 0
+        pn_published = 0
+        pn_errors = 0
         try:
-            logger.info("Проверяем патчноуты DayZ...")
+            logger.info("[PN] ═══ Проверка патчноутов DayZ ═══")
+            stats.set_status("patchnotes", "checking", "поиск новых патчей...")
             new_patches = await check_for_new_patches(include_non_patch=False)
+            pn_found = len(new_patches)
+            logger.info("[PN] Найдено новых патчей: %d", pn_found)
 
             for item in new_patches:
                 try:
@@ -579,15 +588,22 @@ async def run_patch_monitor(
                         _save_state(state)
 
                 except Exception as e:
-                    logger.error("Ошибка обработки патча %s: %s", item.get("id", "unknown"), e)
+                    pn_errors += 1
+                    logger.error("[PN] Ошибка обработки патча %s: %s", item.get("id", "unknown"), e)
 
                 # Задержка между патчами — не пачкой
                 await asyncio.sleep(5)
 
         except Exception as e:
-            logger.error("Ошибка в основном цикле Patch Notes монитора: %s", e)
+            pn_errors += 1
+            logger.error("[PN] Ошибка в цикле: %s", e)
 
-        logger.info("Следующая проверка через %d секунд...", check_interval)
+        stats.record_check("patchnotes", found=pn_found, processed=pn_processed,
+                            published=pn_published, errors=pn_errors)
+        logger.info("[PN] ═══ Конец цикла: найдено=%d, обработано=%d, на модерации=%d, ошибки=%d ═══",
+                    pn_found, pn_processed, pn_published, pn_errors)
+
+        logger.info("[PN] Следующая проверка через %d секунд (%.1f ч)...", check_interval, check_interval / 3600)
         await asyncio.sleep(check_interval)
 
 
