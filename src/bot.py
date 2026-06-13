@@ -1242,8 +1242,10 @@ def _run_bot_thread(monitor, gui=None):
             await monitor.scheduler.start()
 
             # Запускаем Telegram polling для команд юзеров
-            if monitor.publisher and hasattr(monitor, '_dp'):
-                asyncio.create_task(monitor._run_bot_polling())
+            # ВРЕМЕННО ОТКЛЮЧЕНО ДЛЯ ДИАГНОСТИКИ
+            print("[DEBUG] Telegram polling ОТКЛЮЧЁН для диагностики")
+            # if monitor.publisher and hasattr(monitor, '_dp'):
+            #     asyncio.create_task(monitor._run_bot_polling())
 
             if monitor._discord_enabled:
                 asyncio.create_task(monitor._run_discord_monitor())
