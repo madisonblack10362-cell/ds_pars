@@ -39,7 +39,7 @@ from scheduler import Scheduler
 from steam_workshop_monitor import run_workshop_monitor, fetch_popular_mods
 from patch_notes_monitor import run_patch_monitor, fetch_steam_news
 from youtube_monitor import run_youtube_monitor
-from twitter_monitor import run_twitter_monitor
+
 
 
 class DayZNewsMonitor:
@@ -63,7 +63,6 @@ class DayZNewsMonitor:
         self.youtube_task: Optional[asyncio.Task] = None
         self._workshop_task: Optional[asyncio.Task] = None
         self._patch_task: Optional[asyncio.Task] = None
-        self._twitter_task: Optional[asyncio.Task] = None
         self.web_panel_url: str = ""
         self.web_panel_api_key: str = ""
         self.notify_chat_id: str = ""
@@ -276,45 +275,7 @@ class DayZNewsMonitor:
             logger.info("Патчноуты монитор отключён")
 
         # -----------------------------------------------------------------
-        # Twitter/X монитор (@DayZ)
-        # -----------------------------------------------------------------
-        if cfg.get("twitter_enabled", False):
-            twitter_interval = cfg.get("twitter_interval_hours", 1) * 3600
-            twitter_bearer = cfg.get("twitter_bearer_token", "")
-
-            if not twitter_bearer or twitter_bearer == "YOUR_TWITTER_BEARER_TOKEN_HERE":
-                logger.warning("Twitter/X монитор: не указан twitter_bearer_token в config.json — отключён")
-            else:
-                _tw_notify_ids = None
-                if self.moderation_notifications and self.notify_chat_id:
-                    try:
-                        _tw_notify_ids = [int(self.notify_chat_id)]
-                    except (ValueError, TypeError):
-                        pass
-                _tw_bot_token = cfg.get("telegram_bot_token", "")
-
-                async def _delayed_twitter():
-                    await asyncio.sleep(90)
-                    await run_twitter_monitor(
-                        telegram_bot=self.publisher,
-                        db=self.db,
-                        ai_analyzer=self.ai_analyzer,
-                        web_panel_url=self.web_panel_url,
-                        web_panel_api_key=self.web_panel_api_key,
-                        check_interval=twitter_interval,
-                        ai_analyze=bool(self.ai_analyzer),
-                        notify_chat_ids=_tw_notify_ids,
-                        telegram_bot_token=_tw_bot_token,
-                        bearer_token=twitter_bearer,
-                    )
-
-                self._twitter_task = asyncio.create_task(_delayed_twitter())
-                logger.info("Twitter/X монитор запущен (API v2, задержка 90 сек, интервал: %d ч)", cfg.get("twitter_interval_hours", 1))
-        else:
-            logger.info("Twitter/X монитор отключён")
-
-        # -----------------------------------------------------------------
-        # Discord мониторинг (запускается как отдельная фоновая задача)
+        discord_token
         # -----------------------------------------------------------------
         discord_token = cfg.get("discord_token", "")
         discord_cfg = cfg.get("sources", {}).get("discord", {})
@@ -1208,10 +1169,6 @@ def _run_bot_thread(monitor, gui=None):
                     gui.update_status("patchnotes", True, f"каждые {monitor.config.get('patchnotes_interval_minutes', 720)} мин")
                 else:
                     gui.update_status("patchnotes", False, "Отключён")
-                if monitor._twitter_task:
-                    gui.update_status("twitter", True, f"каждые {monitor.config.get('twitter_interval_hours', 1)} ч")
-                else:
-                    gui.update_status("twitter", False, "Отключён")
                 if monitor._discord_enabled:
                     gui.update_status("discord", False, "Подключение...")
                 else:

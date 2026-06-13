@@ -1,12 +1,7 @@
 @echo off
 chcp 65001 >nul
-title DayZ News Monitor
+title DayZ Monitor - Launcher
 color 0A
-
-echo ============================================
-echo   DayZ News Monitor - Starting...
-echo ============================================
-echo.
 
 cd /d "%~dp0"
 
@@ -38,15 +33,11 @@ if not exist "database" mkdir database
 if not exist "images" mkdir images
 if not exist "downloads" mkdir downloads
 
-echo.
+:: Запускаем бота в ОТДЕЛЬНОМ окне с уникальным заголовком
 echo [*] Starting bot...
-echo [*] Press Ctrl+C to stop
-echo.
+start "DayZMonitorBot" cmd /k "cd /d "%~dp0" && call venv\Scripts\activate.bat && python src\bot.py"
 
-python src\bot.py
-
-echo.
-echo ============================================
-echo   Bot stopped. Press any key to close...
-echo ============================================
-pause >nul
+echo [*] Bot started in separate window.
+echo [*] Use stop.bat to close it.
+timeout /t 2 >nul
+exit
