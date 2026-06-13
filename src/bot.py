@@ -933,18 +933,23 @@ class DayZNewsMonitor:
     async def _run_discord_monitor(self) -> None:
         """Запускает Discord-монитор как отдельную корутину."""
         if not self._discord_enabled:
+            logger.info("Discord-монитор: отключён в настройках, пропуск")
             return
 
+        logger.info("Discord-монитор: ожидание 60 сек перед запуском...")
         await asyncio.sleep(60)  # Задержка после старта бота
 
         try:
             from discord_monitor import DiscordMonitor
-        except ImportError:
+        except ImportError as e:
             logger.warning(
-                "Discord-монитор: модуль discord не установлен. "
-                "Установите: pip install discord.py-self"
+                "Discord-монитор: модуль discord не установлен (%s). "
+                "Установите: pip install discord.py-self",
+                e,
             )
             return
+
+        logger.info("Discord-монитор: модуль загружен, запуск...")
 
         try:
             discord_cfg = self.config.get("sources", {}).get("discord", {})
@@ -959,7 +964,7 @@ class DayZNewsMonitor:
             )
             await discord_monitor.start_monitoring()
         except Exception as exc:
-            logger.error("Discord-монитор остановлен с ошибкой: %s", exc)
+            logger.error("Discord-монитор остановлен с ошибкой: %s", exc, exc_info=True)
 
     # =====================================================================
     # Жизненный цикл
