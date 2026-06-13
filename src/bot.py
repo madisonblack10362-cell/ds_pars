@@ -104,16 +104,6 @@ class DayZNewsMonitor:
         self.load_config()
         cfg = self.config
 
-        # === ТЕСТ: 4 идентичных таска в начале initialize ===
-        for idx in range(4):
-            async def _init_test(i=idx):
-                print(f"[INIT-TEST-{i}] перед sleep", flush=True)
-                await asyncio.sleep(60)
-                print(f"[INIT-TEST-{i}] ПОСЛЕ sleep!!!", flush=True)
-            asyncio.create_task(_init_test())
-        print("[INIT-TEST] 4 тестовых таска созданы", flush=True)
-        # === КОНЕЦ ТЕСТА ===
-
         # Add web panel log forwarding handler
         if self.web_panel_url:
             try:
@@ -197,32 +187,17 @@ class DayZNewsMonitor:
         if cfg.get("youtube_enabled", True):
             youtube_interval = int(cfg.get("youtube_interval_hours", 2))
 
-            async def _delayed_youtube():
-                try:
-                    logger.info("YouTube монитор: ожидание 60 сек перед запуском...")
-                    print("[DEBUG-YT] перед sleep")
-                    await asyncio.sleep(60)
-                    print("[DEBUG-YT] ПОСЛЕ sleep!!!", flush=True)
-                    logger.info("YouTube монитор: запуск run_youtube_monitor...")
-                    return  # ВРЕМЕННО не запускаем монитор
-                    await run_youtube_monitor(
-                        db=self.db,
-                        ai_analyzer=self.ai_analyzer,
-                        check_interval_hours=youtube_interval,
-                        shutdown_event=self._shutdown_event,
-                        publisher=self.publisher,
-                        config=cfg,
-                    )
-                except asyncio.CancelledError:
-                    print("[DEBUG-YT] YouTube: ЗАДАЧА ОТМЕНЕНА", flush=True)
-                    logger.warning("YouTube монитор: ЗАДАЧА ОТМЕНЕНА")
-                    raise
-                except Exception as e:
-                    print(f"[DEBUG-YT] YouTube АВАРИЯ: {e}", flush=True)
-                    logger.error("YouTube монитор: аварийная остановка — %s", e, exc_info=True)
-
-            self.youtube_task = asyncio.create_task(_delayed_youtube())
-            logger.info("YouTube монитор v2 запущен (задержка 60 сек, интервал: %dч)", youtube_interval)
+            self.youtube_task = asyncio.create_task(
+                run_youtube_monitor(
+                    db=self.db,
+                    ai_analyzer=self.ai_analyzer,
+                    check_interval_hours=youtube_interval,
+                    shutdown_event=self._shutdown_event,
+                    publisher=self.publisher,
+                    config=cfg,
+                )
+            )
+            logger.info("YouTube монитор v2 запущен (интервал: %dч, только ручные каналы, модерация)", youtube_interval)
         else:
             logger.info("YouTube монитор отключён")
 
@@ -243,39 +218,22 @@ class DayZNewsMonitor:
                     pass
             _ws_bot_token = cfg.get("telegram_bot_token", "")
 
-            async def _delayed_workshop():
-                try:
-                    logger.info("Steam Workshop: ожидание 60 сек перед запуском...")
-                    print("[DEBUG-WS] перед sleep", flush=True)
-                    await asyncio.sleep(60)
-                    print("[DEBUG-WS] ПОСЛЕ sleep!!!", flush=True)
-                    logger.info("Steam Workshop: запуск run_workshop_monitor...")
-                    # ВРЕМЕННО: не вызываем монитор, просто проверяем просыпание
-                    print("[DEBUG-WS] ВСЁ РАБОТАЕТ", flush=True)
-                    return
-                    await run_workshop_monitor(
-                        telegram_bot=self.publisher,
-                        db=self.db,
-                        ai_analyzer=self.ai_analyzer,
-                        web_panel_url=self.web_panel_url,
-                        web_panel_api_key=self.web_panel_api_key,
-                        steam_api_key=steam_api_key,
-                        check_interval=workshop_interval,
-                        min_subscriptions=workshop_min_subs,
-                        ai_analyze=bool(self.ai_analyzer),
-                        notify_chat_ids=_ws_notify_ids,
-                        telegram_bot_token=_ws_bot_token,
-                    )
-                except asyncio.CancelledError:
-                    print("[DEBUG-WS] Workshop: ЗАДАЧА ОТМЕНЕНА", flush=True)
-                    logger.warning("Steam Workshop: ЗАДАЧА ОТМЕНЕНА")
-                    raise
-                except Exception as e:
-                    print(f"[DEBUG-WS] Workshop АВАРИЯ: {e}", flush=True)
-                    logger.error("Steam Workshop: аварийная остановка — %s", e, exc_info=True)
-
-            self._workshop_task = asyncio.create_task(_delayed_workshop())
-            logger.info("Steam Workshop монитор запущен (задержка 60 сек, интервал: %d ч)", cfg.get("workshop_interval_hours", 1))
+            self._workshop_task = asyncio.create_task(
+                run_workshop_monitor(
+                    telegram_bot=self.publisher,
+                    db=self.db,
+                    ai_analyzer=self.ai_analyzer,
+                    web_panel_url=self.web_panel_url,
+                    web_panel_api_key=self.web_panel_api_key,
+                    steam_api_key=steam_api_key,
+                    check_interval=workshop_interval,
+                    min_subscriptions=workshop_min_subs,
+                    ai_analyze=bool(self.ai_analyzer),
+                    notify_chat_ids=_ws_notify_ids,
+                    telegram_bot_token=_ws_bot_token,
+                )
+            )
+            logger.info("Steam Workshop монитор запущен (интервал: %d ч)", cfg.get("workshop_interval_hours", 1))
         else:
             logger.info("Steam Workshop монитор отключён")
 
@@ -293,31 +251,20 @@ class DayZNewsMonitor:
                     pass
             _pn_bot_token = cfg.get("telegram_bot_token", "")
 
-            async def _delayed_patch():
-                try:
-                    logger.info("Патчноуты: ожидание 60 сек перед запуском...")
-                    await asyncio.sleep(60)
-                    logger.info("Патчноуты: запуск run_patch_monitor...")
-                    print("[DEBUG-PN] ВРЕМЕННО ОТКЛЮЧЕН", flush=True)
-                    return  # ВРЕМЕННО НЕ ВЫЗЫВАЕМ
-                    await run_patch_monitor(
-                        telegram_bot=self.publisher,
-                        db=self.db,
-                        ai_analyzer=self.ai_analyzer,
-                        web_panel_url=self.web_panel_url,
-                        web_panel_api_key=self.web_panel_api_key,
-                        check_interval=patch_interval,
-                        ai_analyze=bool(self.ai_analyzer),
-                        notify_chat_ids=_pn_notify_ids,
-                        telegram_bot_token=_pn_bot_token,
-                    )
-                except asyncio.CancelledError:
-                    logger.info("Патчноуты: задача отменена")
-                except Exception as e:
-                    logger.error("Патчноуты: аварийная остановка — %s", e, exc_info=True)
-
-            self._patch_task = asyncio.create_task(_delayed_patch())
-            logger.info("Патчноуты монитор запущен (задержка 60 сек, интервал: %d мин)", cfg.get("patchnotes_interval_minutes", 720))
+            self._patch_task = asyncio.create_task(
+                run_patch_monitor(
+                    telegram_bot=self.publisher,
+                    db=self.db,
+                    ai_analyzer=self.ai_analyzer,
+                    web_panel_url=self.web_panel_url,
+                    web_panel_api_key=self.web_panel_api_key,
+                    check_interval=patch_interval,
+                    ai_analyze=bool(self.ai_analyzer),
+                    notify_chat_ids=_pn_notify_ids,
+                    telegram_bot_token=_pn_bot_token,
+                )
+            )
+            logger.info("Патчноуты монитор запущен (интервал: %d мин)", cfg.get("patchnotes_interval_minutes", 720))
         else:
             logger.info("Патчноуты монитор отключён")
 
@@ -1053,26 +1000,6 @@ class DayZNewsMonitor:
 
         logger.info("Bot is running. Нажмите Ctrl+C для остановки.")
 
-        # Диагностика: проверяем статус фоновых тасков через 70 сек
-        async def _diag_tasks():
-            await asyncio.sleep(70)
-            for name, task in [
-                ("YouTube", self.youtube_task),
-                ("Workshop", self._workshop_task),
-                ("PatchNotes", self._patch_task),
-            ]:
-                if task is None:
-                    logger.info("[DIAG] %s: таск НЕ создан (None)", name)
-                elif task.cancelled():
-                    logger.info("[DIAG] %s: таск ОТМЕНЁН", name)
-                elif task.done():
-                    exc = task.exception()
-                    logger.info("[DIAG] %s: таск ЗАВЕРШЁН, exception=%s", name, exc)
-                else:
-                    logger.info("[DIAG] %s: таск РАБОТАЕТ", name)
-
-        asyncio.create_task(_diag_tasks())
-
         await self._shutdown_event.wait()
         await self._cleanup()
 
@@ -1254,52 +1181,17 @@ def _run_bot_thread(monitor, gui=None):
             monitor.gui = gui
 
             # Периодическое обновление счётчиков и статуса источников
-            # ВРЕМЕННО ОТКЛЮЧЕНО
-            print("[DEBUG] _periodic_gui_update ОТКЛЮЧЁН")
-            # if gui and monitor.db:
-            #     asyncio.create_task(_periodic_gui_update(monitor, gui))
+            if gui and monitor.db:
+                asyncio.create_task(_periodic_gui_update(monitor, gui))
 
-            # ВРЕМЕННО ОТКЛЮЧЕНО
-            print("[DEBUG] scheduler.start() ОТКЛЮЧЁН")
-            # await monitor.scheduler.start()
+            await monitor.scheduler.start()
 
             # Запускаем Telegram polling для команд юзеров
-            # ВРЕМЕННО ОТКЛЮЧЕНО ДЛЯ ДИАГНОСТИКИ
-            print("[DEBUG] Telegram polling ОТКЛЮЧЁН для диагностики")
-            # if monitor.publisher and hasattr(monitor, '_dp'):
-            #     asyncio.create_task(monitor._run_bot_polling())
+            if monitor.publisher and hasattr(monitor, '_dp'):
+                asyncio.create_task(monitor._run_bot_polling())
 
-            # ВРЕМЕННО ОТКЛЮЧЕН
-            print("[DEBUG] Discord монитор ОТКЛЮЧЁН для диагностики")
-            # if monitor._discord_enabled:
-            #     asyncio.create_task(monitor._run_discord_monitor())
-
-            # Диагностика тасков через 70 сек
-            async def _diag():
-                await asyncio.sleep(70)
-                for name, task in [
-                    ("YouTube", monitor.youtube_task),
-                    ("Workshop", monitor._workshop_task),
-                    ("PatchNotes", monitor._patch_task),
-                ]:
-                    if task is None:
-                        print(f"[DIAG] {name}: None", flush=True)
-                    elif task.cancelled():
-                        print(f"[DIAG] {name}: ОТМЕНЁН", flush=True)
-                    elif task.done():
-                        print(f"[DIAG] {name}: ЗАВЕРШЁН, exc={task.exception()}", flush=True)
-                    else:
-                        print(f"[DIAG] {name}: РАБОТАЕТ", flush=True)
-
-            asyncio.create_task(_diag())
-
-            # ГОЛЫЙ ТЕСТ — без closures, без captures
-            async def _bare_test():
-                print("[BARE-TEST] создан", flush=True)
-                await asyncio.sleep(62)
-                print("[BARE-TEST] ПРОСНУЛСЯ!!!", flush=True)
-
-            asyncio.create_task(_bare_test())
+            if monitor._discord_enabled:
+                asyncio.create_task(monitor._run_discord_monitor())
 
             gui_root_method = None
             try:
