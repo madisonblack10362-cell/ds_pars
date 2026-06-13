@@ -939,7 +939,14 @@ class DayZNewsMonitor:
 
         try:
             from discord_monitor import DiscordMonitor
+        except ImportError:
+            logger.warning(
+                "Discord-монитор: модуль discord не установлен. "
+                "Установите: pip install discord.py-self"
+            )
+            return
 
+        try:
             discord_cfg = self.config.get("sources", {}).get("discord", {})
 
             discord_monitor = DiscordMonitor(

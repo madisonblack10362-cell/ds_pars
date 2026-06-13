@@ -444,12 +444,13 @@ class DesktopGUI:
     def _draw_bar_chart(self, canvas, history, accent_color):
         """Draw a mini bar chart on the canvas showing last N checks."""
         canvas.delete("all")
-        canvas.update_idletasks()
 
         w = canvas.winfo_width()
         h = canvas.winfo_height()
         if w < 50 or h < 30:
-            w, h = 600, 80
+            # Canvas ещё не отрисован — отложим рисование
+            self.root.after(50, lambda: self._draw_bar_chart(canvas, history, accent_color))
+            return
 
         if not history:
             canvas.create_text(w // 2, h // 2, text="Нет данных",

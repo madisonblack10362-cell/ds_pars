@@ -9,7 +9,10 @@ import json
 import re
 from typing import Optional
 
-from discord import Client, Message, Guild, TextChannel
+try:
+    from discord import Client, Message, Guild, TextChannel
+except ImportError:
+    Client = None  # discord.py-self не установлен
 
 from database import Database
 from logger import logger
