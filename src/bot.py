@@ -1186,13 +1186,23 @@ def _run_bot_thread(monitor, gui=None):
                 asyncio.create_task(_periodic_gui_update(monitor, gui))
 
             await monitor.scheduler.start()
+            logger.info("Планировщик запущен, задачи: %s", list(monitor.scheduler.get_jobs_info().keys()))
 
             # Запускаем Telegram polling для команд юзеров
             if monitor.publisher and hasattr(monitor, '_dp'):
+                logger.info("Запуск Telegram polling...")
                 asyncio.create_task(monitor._run_bot_polling())
+            else:
+                logger.warning("Telegram polling НЕ запущен (publisher=%s, has_dp=%s)", 
+                             bool(monitor.publisher), hasattr(monitor, '_dp'))
 
             if monitor._discord_enabled:
+                logger.info("Запуск Discord монитора (задержка 60 сек)...")
                 asyncio.create_task(monitor._run_discord_monitor())
+            else:
+                logger.warning("Discord монитор отключён")
+
+            logger.info("Все фоновые задачи созданы, event loop активен")
 
             gui_root_method = None
             try:

@@ -83,15 +83,8 @@ class ColoredFormatter(logging.Formatter):
         if record.name != "dayz_monitor":
             module = f"{_C.DIM}{record.name}{_C.RESET} │ "
 
-        # Сообщение
+        # Сообщение (getMessage() уже форматирует msg % args)
         msg = record.getMessage()
-
-        # Если есть аргументы, форматируем
-        if record.args:
-            try:
-                msg = msg % record.args
-            except (TypeError, ValueError):
-                msg = str(record.args[0]) if record.args else msg
 
         # Формируем строку
         line = (
@@ -117,12 +110,8 @@ class _FileFormatter(logging.Formatter):
         prefix = f"{time_str} | {record.levelname:8s}"
         if module:
             prefix += f" | {module}"
+        # getMessage() уже форматирует msg % args
         msg = record.getMessage()
-        if record.args:
-            try:
-                msg = msg % record.args
-            except (TypeError, ValueError):
-                msg = str(record.args[0]) if record.args else msg
         line = f"{prefix} | {msg}"
         if record.exc_info and record.exc_info[0] is not None:
             line += "\n" + self.formatException(record.exc_info)
